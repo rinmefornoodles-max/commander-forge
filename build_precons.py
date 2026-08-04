@@ -109,6 +109,48 @@ def card_names(board: Any) -> list[str]:
     return names
 
 
+def compact_card_entry(card: dict[str, Any]) -> dict[str, Any] | None:
+    name = str(card.get("name") or "").strip()
+    if not name:
+        return None
+    identifiers = card.get("identifiers") if isinstance(card.get("identifiers"), dict) else {}
+    entry: dict[str, Any] = {
+        "name": name,
+        "count": count_value(card),
+    }
+    scryfall_id = str(identifiers.get("scryfallId") or "").strip()
+    oracle_id = str(identifiers.get("scryfallOracleId") or "").strip()
+    face_name = str(card.get("faceName") or "").strip()
+    if scryfall_id:
+        entry["scryfallId"] = scryfall_id
+    if oracle_id:
+        entry["scryfallOracleId"] = oracle_id
+    if face_name:
+        entry["faceName"] = face_name
+    return entry
+
+
+def merge_card_entries(board: Any) -> dict[str, dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    if not isinstance(board, list):
+        return merged
+    for card in board:
+        if not isinstance(card, dict):
+            continue
+        entry = compact_card_entry(card)
+        if not entry:
+            continue
+        key = entry["name"].casefold()
+        if key not in merged:
+            merged[key] = entry
+        else:
+            merged[key]["count"] += entry["count"]
+            for identifier_key in ("scryfallId", "scryfallOracleId", "faceName"):
+                if not merged[key].get(identifier_key) and entry.get(identifier_key):
+                    merged[key][identifier_key] = entry[identifier_key]
+    return merged
+
+
 def normalize_deck(payload: Any, meta: dict[str, Any], source_file: str) -> dict[str, Any] | None:
     deck = unwrap(payload)
     if not isinstance(deck, dict):
@@ -120,8 +162,6 @@ def normalize_deck(payload: Any, meta: dict[str, Any], source_file: str) -> dict
 
     commander_names = card_names(commander_board)
     deck_type = str(deck.get("type") or meta.get("type") or "")
-    # Include official Commander-style products. Commander arrays are the most
-    # reliable signal; the type check catches occasional schema gaps.
     commander_like = bool(commander_names) or any(
         token in deck_type.lower() for token in ("commander", "brawl", "oathbreaker")
     )
@@ -129,22 +169,23 @@ def normalize_deck(payload: Any, meta: dict[str, Any], source_file: str) -> dict
         return None
 
     board = main_board if isinstance(main_board, list) and main_board else side_board
-    counts: dict[str, int] = {}
-    if isinstance(board, list):
-        for card in board:
-            if not isinstance(card, dict):
-                continue
-            name = str(card.get("name") or "").strip()
-            if not name:
-                continue
-            counts[name] = counts.get(name, 0) + count_value(card)
+    entries_by_name = merge_card_entries(board)
 
-    for commander in commander_names:
-        counts.setdefault(commander, 1)
+    # Preserve Scryfall identifiers from the commander section too. These IDs
+    # are more reliable than names for split, transform, meld, and adventure cards.
+    commander_entries = merge_card_entries(commander_board)
+    for key, commander_entry in commander_entries.items():
+        if key not in entries_by_name:
+            commander_entry["count"] = 1
+            entries_by_name[key] = commander_entry
+        else:
+            for identifier_key in ("scryfallId", "scryfallOracleId", "faceName"):
+                if not entries_by_name[key].get(identifier_key) and commander_entry.get(identifier_key):
+                    entries_by_name[key][identifier_key] = commander_entry[identifier_key]
 
-    total = sum(counts.values())
-    # Ignore malformed fragments while retaining Duel Commander/Brawl products.
-    if total < 40 or not counts:
+    entries = sorted(entries_by_name.values(), key=lambda item: item["name"].casefold())
+    total = sum(int(entry.get("count") or 0) for entry in entries)
+    if total < 40 or not entries:
         return None
 
     name = str(deck.get("name") or meta.get("name") or Path(source_file).stem).strip()
@@ -153,7 +194,7 @@ def normalize_deck(payload: Any, meta: dict[str, Any], source_file: str) -> dict
 
     return {
         "name": name,
-        "entries": [{"name": card_name, "count": count} for card_name, count in sorted(counts.items())],
+        "entries": entries,
         "commanderNames": list(dict.fromkeys(commander_names)),
         "releaseDate": release_date,
         "type": deck_type,
@@ -161,7 +202,6 @@ def normalize_deck(payload: Any, meta: dict[str, Any], source_file: str) -> dict
         "sourceFile": source_file,
         "cardCount": total,
     }
-
 
 def safe_file_name(source_file: str, deck_name: str) -> str:
     stem = Path(source_file).stem or deck_name

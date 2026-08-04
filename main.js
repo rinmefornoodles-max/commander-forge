@@ -544,7 +544,7 @@ async function searchPrecons(playerId) {
   draft.preconResults = (ui.preconIndex || [])
     .filter((deck) => !query || `${deck.name} ${deck.code} ${deck.type}`.toLocaleLowerCase().includes(query))
     .sort((a, b) => (b.releaseDate || '').localeCompare(a.releaseDate || ''))
-    .slice(0, 30);
+    .slice(0, 100);
   render();
 }
 
@@ -562,7 +562,7 @@ async function prepareCustomDeck(playerId) {
     return;
   }
   showLoading(`Loading ${draft.name}'s deck`, 'Looking up card names and images with Scryfall…');
-  const result = await fetchCardsByNames(parsed.entries.map((entry) => entry.name), ({ message }) => updateLoading(message));
+  const result = await fetchCardsByNames(parsed.entries, ({ message }) => updateLoading(message));
   draft.entries = parsed.entries;
   draft.byName = result.byName;
   draft.cards = result.cards;
@@ -582,7 +582,7 @@ async function loadPrecon(playerId, fileName) {
   showLoading(`Loading ${entry.name}`, 'Downloading the official deck list…');
   const precon = await fetchPreconDeck(entry);
   updateLoading('Loading card images and Oracle text…');
-  const result = await fetchCardsByNames(precon.entries.map((item) => item.name), ({ message }) => updateLoading(message));
+  const result = await fetchCardsByNames(precon.entries, ({ message }) => updateLoading(message));
   draft.entries = precon.entries;
   draft.byName = result.byName;
   draft.cards = result.cards;

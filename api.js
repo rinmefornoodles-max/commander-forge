@@ -72,11 +72,83 @@ async function fetchJsonFromCandidates(urls, { attempts = 2 } = {}) {
   throw new Error(`The precon service could not return readable deck data. ${errors.slice(-3).join(' | ')}`);
 }
 
-export async function fetchCardsByNames(names, onProgress = () => {}) {
-  const uniqueNames = [...new Set(names.map(normalizeName).filter(Boolean))];
+function normalizeCardRequest(item) {
+  const source = typeof item === 'string' ? { name: item } : (item || {});
+  return {
+    name: normalizeName(source.name || ''),
+    scryfallId: String(source.scryfallId || source.scryfall_id || source.identifiers?.scryfallId || '').trim(),
+    oracleId: String(source.scryfallOracleId || source.oracleId || source.oracle_id || source.identifiers?.scryfallOracleId || '').trim(),
+  };
+}
+
+function canonicalCardName(name = '') {
+  return normalizeName(name).replace(/\s*\/\/\s*/g, ' // ').toLocaleLowerCase();
+}
+
+function cardAliases(raw) {
+  const aliases = new Set();
+  if (raw?.name) aliases.add(canonicalCardName(raw.name));
+  for (const face of raw?.card_faces || []) {
+    if (face?.name) aliases.add(canonicalCardName(face.name));
+  }
+  return aliases;
+}
+
+function requestMatchesRaw(request, raw) {
+  if (request.scryfallId && request.scryfallId === raw?.id) return true;
+  if (request.oracleId && request.oracleId === raw?.oracle_id) return true;
+  return cardAliases(raw).has(canonicalCardName(request.name));
+}
+
+function cacheRawCard(cache, raw, compact, request = null) {
+  if (compact?.name) cache[canonicalCardName(compact.name)] = compact;
+  for (const face of raw?.card_faces || []) {
+    if (face?.name) cache[canonicalCardName(face.name)] = compact;
+  }
+  if (request?.name) cache[canonicalCardName(request.name)] = compact;
+}
+
+async function fetchNamedFallback(request) {
+  const normalized = normalizeName(request.name).replace(/\s*\/\/\s*/g, ' // ');
+  const queries = [
+    ['exact', normalized],
+    ['fuzzy', normalized.replace(/\s*\/\/\s*/g, ' ')],
+  ];
+  if (normalized.includes(' // ')) {
+    queries.push(['fuzzy', normalized.split(' // ')[0]]);
+  }
+
+  for (const [mode, value] of queries) {
+    if (!value) continue;
+    const url = `https://api.scryfall.com/cards/named?${mode}=${encodeURIComponent(value)}`;
+    try {
+      const response = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 12_000);
+      if (response.ok) return response.json();
+      if (response.status !== 404) throw new Error(`Scryfall returned ${response.status}.`);
+    } catch (error) {
+      if (error?.name === 'AbortError') continue;
+    }
+    await delay(90);
+  }
+  return null;
+}
+
+export async function fetchCardsByNames(items, onProgress = () => {}) {
+  const requests = (items || [])
+    .map(normalizeCardRequest)
+    .filter((request) => request.name);
+  const uniqueRequests = [];
+  const seen = new Set();
+  for (const request of requests) {
+    const key = request.scryfallId || request.oracleId || canonicalCardName(request.name);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniqueRequests.push(request);
+  }
+
   const cache = readCache(CARD_CACHE_KEY);
-  const missing = uniqueNames.filter((name) => !cache[name.toLocaleLowerCase()]);
-  const notFound = [];
+  const missing = uniqueRequests.filter((request) => !cache[canonicalCardName(request.name)]);
+  const unresolved = [];
 
   for (let start = 0; start < missing.length; start += 75) {
     const batch = missing.slice(start, start + 75);
@@ -84,27 +156,54 @@ export async function fetchCardsByNames(names, onProgress = () => {}) {
     const response = await fetch(SCRYFALL_COLLECTION_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ identifiers: batch.map((name) => ({ name })) }),
+      body: JSON.stringify({
+        identifiers: batch.map((request) => {
+          if (request.scryfallId) return { id: request.scryfallId };
+          if (request.oracleId) return { oracle_id: request.oracleId };
+          return { name: request.name };
+        }),
+      }),
     });
     if (!response.ok) throw new Error(`Scryfall returned ${response.status}. Try again in a moment.`);
     const payload = await response.json();
-    for (const raw of payload.data || []) {
+    const raws = payload.data || [];
+
+    for (const raw of raws) {
       const compact = compactScryfallCard(raw);
-      cache[compact.name.toLocaleLowerCase()] = compact;
-      for (const requested of batch) {
-        const key = requested.toLocaleLowerCase();
-        const faceMatch = raw.card_faces?.some((face) => face.name?.toLocaleLowerCase() === key);
-        if (compact.name.toLocaleLowerCase() === key || faceMatch) cache[key] = compact;
+      cacheRawCard(cache, raw, compact);
+    }
+
+    for (const request of batch) {
+      const raw = raws.find((candidate) => requestMatchesRaw(request, candidate));
+      if (raw) {
+        const compact = compactScryfallCard(raw);
+        cacheRawCard(cache, raw, compact, request);
+      } else {
+        unresolved.push(request);
       }
     }
-    for (const item of payload.not_found || []) notFound.push(item.name || item);
     await delay(90);
   }
+
+  const notFound = [];
+  for (let index = 0; index < unresolved.length; index += 1) {
+    const request = unresolved[index];
+    onProgress({ loaded: missing.length + index, total: missing.length + unresolved.length, message: `Resolving ${request.name}…` });
+    const raw = await fetchNamedFallback(request);
+    if (raw?.object === 'card') {
+      const compact = compactScryfallCard(raw);
+      cacheRawCard(cache, raw, compact, request);
+    } else {
+      notFound.push(request.name);
+    }
+    await delay(90);
+  }
+
   writeCache(CARD_CACHE_KEY, cache);
-  onProgress({ loaded: missing.length, total: missing.length, message: 'Cards loaded.' });
+  onProgress({ loaded: missing.length + unresolved.length, total: missing.length + unresolved.length, message: 'Cards loaded.' });
   return {
-    cards: uniqueNames.map((name) => cache[name.toLocaleLowerCase()]).filter(Boolean),
-    byName: Object.fromEntries(uniqueNames.map((name) => [name.toLocaleLowerCase(), cache[name.toLocaleLowerCase()]])),
+    cards: uniqueRequests.map((request) => cache[canonicalCardName(request.name)]).filter(Boolean),
+    byName: Object.fromEntries(uniqueRequests.map((request) => [canonicalCardName(request.name), cache[canonicalCardName(request.name)]])),
     notFound,
   };
 }
@@ -156,7 +255,7 @@ export async function fetchPreconIndex(force = false) {
   // Preferred path: GitHub Actions bundles MTGJSON deck data into this site.
   // This avoids browser CORS failures and makes the catalog same-origin.
   try {
-    const payload = await fetchLocalJson(`${LOCAL_PRECON_INDEX_URL}?v=4`);
+    const payload = await fetchLocalJson(`${LOCAL_PRECON_INDEX_URL}?v=5`);
     const index = normalizeDeckIndex(payload);
     if (!index.length) throw new Error('The bundled precon index was empty.');
     writeCache(DECK_CACHE_KEY, { index, updatedAt: Date.now(), source: 'local' });
@@ -197,7 +296,13 @@ function normalizeDeckPayload(payload, entry) {
       name: deck.name || entry.name,
       entries: deck.entries
         .filter((card) => card?.name)
-        .map((card) => ({ name: card.name, count: Math.max(1, Number(card.count || 1)) })),
+        .map((card) => ({
+          name: card.name,
+          count: Math.max(1, Number(card.count || 1)),
+          ...(card.scryfallId ? { scryfallId: card.scryfallId } : {}),
+          ...(card.scryfallOracleId ? { scryfallOracleId: card.scryfallOracleId } : {}),
+          ...(card.faceName ? { faceName: card.faceName } : {}),
+        })),
       commanderNames: Array.isArray(deck.commanderNames) ? deck.commanderNames.filter(Boolean) : [],
       releaseDate: deck.releaseDate || entry.releaseDate || '',
       type: deck.type || entry.type || '',
@@ -211,23 +316,43 @@ function normalizeDeckPayload(payload, entry) {
     .filter((card) => card?.name)
     .flatMap((card) => Array(Math.max(1, Number(card.count ?? card.quantity ?? card.qty ?? 1))).fill(card.name));
 
-  const counts = new Map();
+  const cardsByName = new Map();
   // Some MTGJSON products place relevant cards in sideBoard, so use it only if
   // the main board is unexpectedly empty.
   const board = mainBoard.length ? mainBoard : sideBoard;
   for (const card of board) {
     if (!card?.name) continue;
     const count = Math.max(1, Number(card.count ?? card.quantity ?? card.qty ?? 1));
-    counts.set(card.name, (counts.get(card.name) || 0) + count);
+    const key = canonicalCardName(card.name);
+    const identifiers = card.identifiers || {};
+    const prior = cardsByName.get(key) || {
+      name: card.name,
+      count: 0,
+      scryfallId: identifiers.scryfallId || '',
+      scryfallOracleId: identifiers.scryfallOracleId || '',
+      faceName: card.faceName || '',
+    };
+    prior.count += count;
+    prior.scryfallId ||= identifiers.scryfallId || '';
+    prior.scryfallOracleId ||= identifiers.scryfallOracleId || '';
+    prior.faceName ||= card.faceName || '';
+    cardsByName.set(key, prior);
   }
   for (const commander of commanderNames) {
-    if (!counts.has(commander)) counts.set(commander, 1);
+    const key = canonicalCardName(commander);
+    if (!cardsByName.has(key)) cardsByName.set(key, { name: commander, count: 1 });
   }
-  if (!counts.size) throw new Error('The deck file contained no readable cards.');
+  if (!cardsByName.size) throw new Error('The deck file contained no readable cards.');
 
   return {
     name: deck.name || entry.name,
-    entries: [...counts.entries()].map(([name, count]) => ({ name, count })),
+    entries: [...cardsByName.values()].map((card) => ({
+      name: card.name,
+      count: card.count,
+      ...(card.scryfallId ? { scryfallId: card.scryfallId } : {}),
+      ...(card.scryfallOracleId ? { scryfallOracleId: card.scryfallOracleId } : {}),
+      ...(card.faceName ? { faceName: card.faceName } : {}),
+    })),
     commanderNames,
     releaseDate: deck.releaseDate || entry.releaseDate || '',
     type: deck.type || entry.type || '',
@@ -248,7 +373,7 @@ export async function fetchPreconDeck(entry) {
 
   if (entry.localFile) {
     try {
-      const payload = await fetchLocalJson(`${LOCAL_PRECON_BASE_URL}/${encodeURIComponent(entry.localFile)}?v=4`);
+      const payload = await fetchLocalJson(`${LOCAL_PRECON_BASE_URL}/${encodeURIComponent(entry.localFile)}?v=5`);
       const normalized = normalizeDeckPayload(payload, entry);
       payloadCache[cacheKey] = { deck: normalized, updatedAt: Date.now(), fileName: entry.fileName, source: 'local' };
       writeCache(DECK_PAYLOAD_CACHE_KEY, payloadCache);

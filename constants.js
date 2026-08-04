@@ -36,9 +36,9 @@ export const MTGJSON_DECK_BASE_URLS = [
 ];
 
 export const STORAGE_KEY = 'commander-forge-state-v2';
-export const DECK_CACHE_KEY = 'commander-forge-deck-cache-v4-same-origin';
-export const DECK_PAYLOAD_CACHE_KEY = 'commander-forge-precon-payload-cache-v2';
-export const CARD_CACHE_KEY = 'commander-forge-card-cache-v2';
+export const DECK_CACHE_KEY = 'commander-forge-deck-cache-v5-card-ids';
+export const DECK_PAYLOAD_CACHE_KEY = 'commander-forge-precon-payload-cache-v3-card-ids';
+export const CARD_CACHE_KEY = 'commander-forge-card-cache-v3-split-fix';
 
 export const DEFAULT_SETTINGS = {
   rulesMode: 'learning',
