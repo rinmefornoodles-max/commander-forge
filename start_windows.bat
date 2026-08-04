@@ -1,0 +1,10 @@
+{
+  "name": "The Commander Forge",
+  "short_name": "Commander Forge",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0d100d",
+  "theme_color": "#10120f",
+  "description": "A digital Commander practice table.",
+  "icons": [{ "src": "./assets/forge-mark.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

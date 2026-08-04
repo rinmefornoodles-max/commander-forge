@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 700">
+ <rect width="500" height="700" rx="38" fill="#101510"/>
+ <rect x="15" y="15" width="470" height="670" rx="28" fill="#253025" stroke="#78c58a" stroke-width="8"/>
+ <circle cx="250" cy="300" r="150" fill="#151d15" stroke="#78c58a" stroke-width="9"/>
+ <path d="M170 345c28-72 53-108 80-108 28 0 55 36 80 108-25 46-52 69-80 69-29 0-55-23-80-69z" fill="#78c58a" opacity=".8"/>
+ <text x="250" y="555" text-anchor="middle" fill="#e7f3e5" font-family="Georgia" font-size="44">TOKEN</text>
+</svg>
