@@ -36,4 +36,6 @@ export const DEFAULT_SETTINGS = {
   coachRollouts: 450,
   confirmCommanderMoves: true,
   showCardNames: true,
+  manaMode: 'auto',
+  manaAutomationV3: true,
 };

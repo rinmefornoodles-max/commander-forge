@@ -1,4 +1,4 @@
-const CACHE = 'commander-forge-shell-v2';
+const CACHE = 'commander-forge-shell-v3-auto-mana';
 const ASSETS = ['./', './index.html', './styles.css', './main.js', './constants.js', './utils.js', './api.js', './state.js', './rules.js', './game.js', './coach.js', './forge-mark.svg', './card-back.svg', './demo-card.svg', './token.svg'];
 self.addEventListener('install', (event) => event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS))));
 self.addEventListener('activate', (event) => event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))))));

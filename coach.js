@@ -1,6 +1,6 @@
 import { PHASES } from './constants.js';
-import { attackLegality, canPayMana } from './rules.js';
-import { deepClone, isCreature, isLand, isPermanent, numericStat, totalMana } from './utils.js';
+import { attackLegality, planManaPayment } from './rules.js';
+import { deepClone, isCreature, isLand, isPermanent, manaProductionChoices, numericStat, totalMana } from './utils.js';
 
 export function possibleMoves(state, playerId = state.activePlayerId) {
   const player = state.players[playerId];
@@ -8,19 +8,28 @@ export function possibleMoves(state, playerId = state.activePlayerId) {
   const moves = [];
   const phase = PHASES[state.phaseIndex].id;
 
+  if (['untap', 'upkeep', 'draw'].includes(phase) && player.landPlaysThisTurn < 1) {
+    const openingLand = player.zones.hand.find((card) => isLand(card));
+    if (openingLand) {
+      moves.push({ type: 'advance-land', cardId: openingLand.instanceId, label: `Advance to Main 1 → play ${openingLand.name}` });
+    } else {
+      moves.push({ type: 'advance-phase', label: 'Advance toward Main 1' });
+    }
+  }
+
   for (const card of player.zones.hand) {
     if (isLand(card)) {
       if (['main1', 'main2'].includes(phase) && player.landPlaysThisTurn < 1) moves.push({ type: 'play-land', cardId: card.instanceId, label: `Play ${card.name}` });
     } else {
       const instantSpeed = card.typeLine.includes('Instant') || (card.keywords || []).includes('Flash');
-      if ((['main1', 'main2'].includes(phase) || instantSpeed) && canPayMana(player.mana, card.manaCost, 0).ok) {
+      if ((['main1', 'main2'].includes(phase) || instantSpeed) && planManaPayment(player, card.manaCost, 0).ok) {
         moves.push({ type: isPermanent(card) ? 'cast-permanent' : 'cast-spell', cardId: card.instanceId, label: `Cast ${card.name}` });
       }
     }
   }
   for (const card of player.zones.command) {
     const tax = 2 * (player.commanderCastCount[card.instanceId] || 0);
-    if ((['main1', 'main2'].includes(phase) || (card.keywords || []).includes('Flash')) && canPayMana(player.mana, card.manaCost, tax).ok) {
+    if ((['main1', 'main2'].includes(phase) || (card.keywords || []).includes('Flash')) && planManaPayment(player, card.manaCost, tax).ok) {
       moves.push({ type: 'cast-commander', cardId: card.instanceId, label: `Cast ${card.name}${tax ? ` (+${tax} tax)` : ''}` });
     }
   }
@@ -30,10 +39,29 @@ export function possibleMoves(state, playerId = state.activePlayerId) {
     for (let j = i + 1; j < castMoves.length; j += 1) {
       const first = player.zones.hand.find((card) => card.instanceId === castMoves[i].cardId);
       const second = player.zones.hand.find((card) => card.instanceId === castMoves[j].cardId);
-      if (first && second && Number(first.manaValue || 0) + Number(second.manaValue || 0) <= totalMana(player.mana)) {
+      if (first && second && Number(first.manaValue || 0) + Number(second.manaValue || 0) <= estimatedManaCapacity(player)) {
         moves.push({ type: 'sequence', steps: [castMoves[i], castMoves[j]], label: `${castMoves[i].label} → ${castMoves[j].label.replace(/^Cast /, '')}` });
       }
       if (moves.filter((move) => move.type === 'sequence').length >= 8) break;
+    }
+  }
+
+  // Playing a land before casting is one of the most common and important early-game sequences.
+  const landMoves = moves.filter((move) => move.type === 'play-land').slice(0, 4);
+  for (const landMove of landMoves) {
+    const afterLand = applyApproximateMove(state, playerId, landMove);
+    const afterPlayer = afterLand.players[playerId];
+    for (const card of afterPlayer.zones.hand.filter((item) => !isLand(item)).slice(0, 10)) {
+      const instantSpeed = card.typeLine.includes('Instant') || (card.keywords || []).includes('Flash');
+      if (!['main1', 'main2'].includes(phase) && !instantSpeed) continue;
+      if (!planManaPayment(afterPlayer, card.manaCost, 0).ok) continue;
+      const castType = isPermanent(card) ? 'cast-permanent' : 'cast-spell';
+      moves.push({
+        type: 'sequence',
+        steps: [landMove, { type: castType, cardId: card.instanceId, label: `Cast ${card.name}` }],
+        label: `${landMove.label} → Cast ${card.name}`,
+      });
+      if (moves.filter((move) => move.type === 'sequence').length >= 12) break;
     }
   }
 
@@ -60,7 +88,7 @@ function evaluateMove(state, playerId, move, rollouts) {
   for (let i = 0; i < rollouts; i += 1) {
     const simulated = applyApproximateMove(state, playerId, move);
     const uncertainty = hiddenInformationNoise(simulated, playerId, move);
-    const score = boardScore(simulated, playerId) + uncertainty;
+    const score = boardScore(simulated, playerId) + strategicAdjustment(state, playerId, move) + uncertainty;
     total += score;
     high = Math.max(high, score);
     low = Math.min(low, score);
@@ -85,6 +113,16 @@ function applyApproximateMove(state, playerId, move) {
     let sequenceState = draft;
     for (const step of move.steps || []) sequenceState = applyApproximateMove(sequenceState, playerId, step);
     return sequenceState;
+  }
+  if (move.type === 'advance-phase') draft.phaseIndex = 3;
+  if (move.type === 'advance-land') {
+    draft.phaseIndex = 3;
+    const card = findIn('hand', move.cardId);
+    if (card) {
+      player.zones.hand = player.zones.hand.filter((c) => c.instanceId !== card.instanceId);
+      player.zones.battlefield.push(card);
+      player.landPlaysThisTurn += 1;
+    }
   }
   if (move.type === 'play-land') {
     const card = findIn('hand', move.cardId);
@@ -131,6 +169,9 @@ function playerScore(player) {
   let score = player.life * 0.35 - player.poison * 3.5 + player.zones.hand.length * 2.3 + player.zones.library.length * 0.015;
   for (const card of player.zones.battlefield) {
     score += (card.manaValue || 0) * 1.2;
+    const manaChoices = manaProductionChoices(card);
+    if (isLand(card)) score += 2.7 + (card.tapped ? 0 : 0.35);
+    else if (manaChoices.length) score += 1.5 + (card.tapped ? 0 : 0.25);
     if (isCreature(card)) score += numericStat(card.power, 1) * 0.85 + numericStat(card.toughness, 1) * 0.55;
     const keywordWeight = { Flying: 1.1, Trample: 0.8, Deathtouch: 1.1, 'Double strike': 1.8, 'First strike': 0.7, Haste: 0.5, Hexproof: 1.4, Indestructible: 1.6, Lifelink: 0.8, Vigilance: 0.5 };
     for (const keyword of card.keywords || []) score += keywordWeight[keyword] || 0.15;
@@ -145,13 +186,53 @@ function playerScore(player) {
   return score;
 }
 
+function estimatedManaCapacity(player) {
+  const floating = totalMana(player.mana || {});
+  const untappedSources = (player.zones.battlefield || [])
+    .filter((card) => !card.tapped)
+    .reduce((sum, card) => {
+      const best = manaProductionChoices(card)
+        .map((choice) => Object.values(choice.mana).reduce((total, amount) => total + Number(amount || 0), 0))
+        .sort((a, b) => b - a)[0] || 0;
+      return sum + best;
+    }, 0);
+  return floating + untappedSources;
+}
+
+function hasAvailableLandDrop(state, playerId) {
+  const player = state.players[playerId];
+  const phase = PHASES[state.phaseIndex].id;
+  return ['main1', 'main2'].includes(phase)
+    && Number(player.landPlaysThisTurn || 0) < 1
+    && player.zones.hand.some((card) => isLand(card));
+}
+
+function strategicAdjustment(state, playerId, move) {
+  const earlyTurn = Number(state.turnNumber || 1) <= 5;
+  const availableLand = hasAvailableLandDrop(state, playerId);
+  const includesLand = ['play-land', 'advance-land'].includes(move.type)
+    || (move.type === 'sequence' && (move.steps || []).some((step) => step.type === 'play-land'));
+
+  if (includesLand) {
+    // A normal land drop develops permanent mana and costs no mana. It should almost
+    // always outrank passing in an opening hand unless a known effect says otherwise.
+    return earlyTurn ? 11 : 7;
+  }
+  const beginningWithLand = ['untap', 'upkeep', 'draw'].includes(PHASES[state.phaseIndex].id)
+    && state.players[playerId].zones.hand.some((card) => isLand(card));
+  if (move.type === 'hold' && (availableLand || beginningWithLand)) return earlyTurn ? -14 : -9;
+  if (move.type === 'advance-phase') return 2;
+  if (move.type === 'hold' && state.turnNumber <= 3) return -2.5;
+  return 0;
+}
+
 function hiddenInformationNoise(state, playerId, move) {
   const opponentId = Object.keys(state.players).find((id) => id !== playerId);
   const opponent = state.players[opponentId];
   const handRisk = opponent.zones.hand.length * 0.16;
   let noise = (Math.random() - 0.5) * (3 + handRisk);
   if (move.type === 'attack') noise -= Math.random() * handRisk;
-  if (move.type === 'hold') noise += Math.random() * Math.min(3, Object.values(state.players[playerId].mana).reduce((a, b) => a + b, 0) * 0.35);
+  if (move.type === 'hold' && !hasAvailableLandDrop(state, playerId)) noise += Math.random() * Math.min(2, Object.values(state.players[playerId].mana).reduce((a, b) => a + b, 0) * 0.25);
   if (['cast-permanent', 'cast-commander'].includes(move.type) && opponent.zones.hand.length >= 4 && Math.random() < 0.12) noise -= 4.5;
   return noise;
 }
@@ -159,11 +240,14 @@ function hiddenInformationNoise(state, playerId, move) {
 function explainMove(state, playerId, move, score) {
   const card = Object.values(state.players[playerId].zones).flat().find((item) => item.instanceId === move.cardId);
   if (move.type === 'sequence') return 'Compares a two-spell sequence against single plays. The order is valued by board development and estimated interaction risk.';
-  if (move.type === 'play-land') return 'Uses the normal land drop and improves future mana without spending a card from the battlefield.';
+  if (move.type === 'advance-land') return 'Moves through the beginning phase and plans the normal land drop in Main 1. Early land development receives a strong tempo bonus.';
+  if (move.type === 'advance-phase') return 'Moves the turn toward Main 1, where normal land and sorcery-speed plays become available.';
+  if (move.type === 'play-land') return 'Uses the normal land drop and improves future mana without spending mana.';
   if (move.type === 'cast-commander') return `Develops the commander engine${card?.manaValue ? ` with a ${card.manaValue}-mana permanent` : ''}. The score includes removal risk from unknown cards.`;
   if (move.type === 'cast-permanent') return `Adds ${card?.name || 'a permanent'} to the board. The coach values mana value, creature stats, keywords, cards in hand, and removal risk.`;
   if (move.type === 'cast-spell') return 'Uses a nonpermanent spell. Because Oracle text is not fully simulated, the estimate is conservative.';
   if (move.type === 'attack') return 'Estimates blockers, evasion, trample, likely damage, and the value of keeping attackers untapped.';
+  if (hasAvailableLandDrop(state, playerId)) return 'Passing leaves an unused normal land drop, so the coach applies a major tempo penalty unless a card effect gives a specific reason not to play it.';
   return score > 0 ? 'Holding resources preserves flexibility and may protect an existing advantage.' : 'Passing avoids committing into a potentially unfavorable board, but may lose tempo.';
 }
 

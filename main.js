@@ -38,6 +38,7 @@ import {
   switchActivePlayer,
   toggleAttack,
   toggleTap,
+  tapForMana,
   updateCardNote,
 } from './game.js';
 import {
@@ -49,6 +50,8 @@ import {
   escapeHtml,
   isCreature,
   isLand,
+  manaProductionChoices,
+  manaSourceLabel,
   parseDecklist,
   shuffle,
   uid,
@@ -191,6 +194,21 @@ function renderPlayerMat(state, playerId, opponent) {
 function renderPlayerStatus(state, playerId) {
   const player = state.players[playerId];
   const active = state.activePlayerId === playerId;
+  const floating = COLORS.filter((color) => Number(player.mana[color] || 0) > 0)
+    .map((color) => `<span class="mana-chip">${color}<b>${player.mana[color]}</b></span>`)
+    .join('');
+  const sourceGroups = new Map();
+  for (const card of player.zones.battlefield.filter((item) => !item.tapped)) {
+    const label = manaSourceLabel(card);
+    if (!label) continue;
+    sourceGroups.set(label, (sourceGroups.get(label) || 0) + 1);
+  }
+  const available = [...sourceGroups.entries()]
+    .map(([label, count]) => `<span class="source-chip">${escapeHtml(label)}${count > 1 ? ` ×${count}` : ''}</span>`)
+    .join('');
+  const manaPanel = state.settings.manaMode === 'manual'
+    ? `<div class="mana-row" style="margin-top:8px">${COLORS.map((color) => `<button class="btn small-btn" data-action="mana" data-player-id="${playerId}" data-color="${color}" data-delta="1" title="Add ${color} mana">${color}<b>${player.mana[color]}</b></button>`).join('')}<button class="btn small-btn ghost" data-action="clear-mana" data-player-id="${playerId}" title="Clear mana">×</button></div>`
+    : `<div class="automatic-mana"><div><span class="mana-caption">Untapped sources</span><div class="mana-chip-row">${available || '<span class="muted small">None</span>'}</div></div><div><span class="mana-caption">Floating pool</span><div class="mana-chip-row">${floating || '<span class="muted small">Empty</span>'}${floating ? `<button class="icon-btn tiny" data-action="clear-mana" data-player-id="${playerId}" title="Clear floating mana">×</button>` : ''}</div></div></div>`;
   return `
     <div class="player-status ${active ? 'active' : ''}">
       <div class="player-name-row"><span class="player-name">${escapeHtml(player.name)}</span>${active ? '<span class="active-dot" title="Active player"></span>' : ''}</div>
@@ -198,10 +216,7 @@ function renderPlayerStatus(state, playerId) {
         ${renderTracker(playerId, 'life', 'Life', player.life, [-5, -1, 1, 5])}
         ${renderTracker(playerId, 'poison', 'Poison', player.poison, [-1, 1])}
       </div>
-      <div class="mana-row" style="margin-top:8px">
-        ${COLORS.map((color) => `<button class="btn small-btn" data-action="mana" data-player-id="${playerId}" data-color="${color}" data-delta="1" title="Add ${color} mana">${color}<b>${player.mana[color]}</b></button>`).join('')}
-        <button class="btn small-btn ghost" data-action="clear-mana" data-player-id="${playerId}" title="Clear mana">×</button>
-      </div>
+      ${manaPanel}
     </div>`;
 }
 
@@ -223,6 +238,8 @@ function renderCard(card, state, { compact = false } = {}) {
   if (card.commander) badges.push('<span class="card-badge">CMD</span>');
   if (card.summoningSick) badges.push('<span class="card-badge blue">NEW</span>');
   if (card.attacking) badges.push('<span class="card-badge red">ATK</span>');
+  const manaLabel = manaSourceLabel(card);
+  if (manaLabel) badges.push(`<span class="card-badge mana" title="Mana choices">${escapeHtml(manaLabel)}</span>`);
   const counterTotal = Object.values(card.counters || {}).reduce((sum, value) => sum + Number(value || 0), 0);
   if (counterTotal) badges.push(`<span class="card-badge purple">${counterTotal}</span>`);
   const image = card.faceDown ? './card-back.svg' : cardSmallImage(card);
@@ -249,7 +266,7 @@ function renderInspector(state) {
       ${card.power ? `<div class="small">${escapeHtml(card.power)}/${escapeHtml(card.toughness)}</div>` : ''}${card.commander ? `<div class="small" style="margin-top:5px;color:var(--gold-2)">Cast ${getState().players[card.owner].commanderCastCount[card.instanceId] || 0} time(s) · current tax +${2 * (getState().players[card.owner].commanderCastCount[card.instanceId] || 0)}</div>` : ''}
     </div>
     <div class="inspector-section"><h3>Quick actions</h3><div class="action-grid">
-      ${selected.zone === 'battlefield' ? `<button class="btn" data-action="toggle-tap" data-card-id="${card.instanceId}">${card.tapped ? '↺ Untap' : '↻ Tap'}</button><button class="btn" data-action="toggle-attack" data-card-id="${card.instanceId}">${card.attacking ? 'Stop attack' : '⚔ Attack'}</button>` : ''}
+      ${selected.zone === 'battlefield' ? `${renderManaTapActions(card, state)}<button class="btn" data-action="toggle-attack" data-card-id="${card.instanceId}">${card.attacking ? 'Stop attack' : '⚔ Attack'}</button>` : ''}
       ${zoneMoveButton(card, 'battlefield', 'Battlefield')}
       ${zoneMoveButton(card, 'hand', 'Hand')}
       ${zoneMoveButton(card, 'graveyard', 'Graveyard')}
@@ -264,6 +281,17 @@ function renderInspector(state) {
     <div class="inspector-section"><h3>Counters</h3><div class="counter-row">${counterButtons.map((counter) => `<button class="btn small-btn" data-action="counter" data-card-id="${card.instanceId}" data-counter="${counter}" data-delta="1">+ ${counter}</button>`).join('')}</div>${Object.entries(card.counters || {}).map(([counter, count]) => `<div class="counter-row" style="margin-top:6px"><span>${escapeHtml(counter)}: ${count}</span><button class="btn small-btn" data-action="counter" data-card-id="${card.instanceId}" data-counter="${escapeHtml(counter)}" data-delta="-1">−</button><button class="btn small-btn" data-action="counter" data-card-id="${card.instanceId}" data-counter="${escapeHtml(counter)}" data-delta="1">+</button></div>`).join('')}</div>
     <div class="inspector-section"><h3>Oracle text</h3><div class="oracle">${escapeHtml(card.oracleText || 'No Oracle text.')}</div>${effects.length ? `<p class="small muted">Recognized: ${effects.map(escapeHtml).join(' · ')}</p>` : ''}</div>
     <div class="inspector-section"><h3>Notes</h3><textarea class="card-note" data-card-id="${card.instanceId}" style="min-height:70px">${escapeHtml(card.notes || '')}</textarea></div>`;
+}
+
+
+function renderManaTapActions(card, state) {
+  if (card.tapped) return `<button class="btn" data-action="toggle-tap" data-card-id="${card.instanceId}">↺ Untap</button>`;
+  const choices = manaProductionChoices(card);
+  if (state.settings.manaMode === 'manual' || !choices.length) {
+    return `<button class="btn" data-action="toggle-tap" data-card-id="${card.instanceId}">↻ Tap</button>`;
+  }
+  const manaButtons = choices.map((choice, index) => `<button class="btn mana-choice" data-action="tap-mana" data-card-id="${card.instanceId}" data-choice-index="${index}">↻ Tap → ${escapeHtml(choice.label)}</button>`).join('');
+  return `<div class="mana-choice-group"><div class="small muted wide">Choose what this source produces</div>${manaButtons}<button class="btn ghost" data-action="toggle-tap-only" data-card-id="${card.instanceId}">Tap without adding mana</button></div>`;
 }
 
 function zoneMoveButton(card, zone, label) {
@@ -330,7 +358,7 @@ function renderValidation(validation) {
 }
 
 function renderSettingsModal(state) {
-  return `<div class="modal-backdrop"><section class="modal small-modal"><header class="modal-header"><h2>Table tools</h2><button class="icon-btn" data-action="close-settings">×</button></header><div class="modal-body"><div class="field"><label>Rules enforcement</label><select id="rules-mode"><option value="free" ${state.settings.rulesMode === 'free' ? 'selected' : ''}>Free table: never block moves</option><option value="learning" ${state.settings.rulesMode === 'learning' ? 'selected' : ''}>Learning: explain and allow override</option><option value="strict" ${state.settings.rulesMode === 'strict' ? 'selected' : ''}>Strict basics: block known illegal moves</option></select></div><label><input type="checkbox" id="hide-opponent" ${state.settings.hideOpponentHand ? 'checked' : ''}/> Hide Player 2 hand</label><br /><label><input type="checkbox" id="auto-draw" ${state.settings.autoDraw ? 'checked' : ''}/> Auto draw during draw step</label><br /><label><input type="checkbox" id="show-names" ${state.settings.showCardNames ? 'checked' : ''}/> Show card-name strips</label><div class="field" style="margin-top:10px"><label>Monte Carlo rollouts per move</label><input id="coach-rollouts" type="number" min="50" max="2500" step="50" value="${state.settings.coachRollouts}" /></div><div class="action-grid"><button class="btn" data-action="switch-player">Switch active player</button><button class="btn" data-action="open-token">Create token</button><button class="btn" data-action="mulligan" data-player-id="p1">Mulligan Player 1</button><button class="btn" data-action="mulligan" data-player-id="p2">Mulligan Player 2</button><button class="btn" data-action="random-tool" data-kind="d6">Roll D6</button><button class="btn" data-action="random-tool" data-kind="d20">Roll D20</button><button class="btn" data-action="random-tool" data-kind="coin">Flip coin</button><button class="btn" data-action="export-save">Export save</button><button class="btn" data-action="import-save">Import save</button><button class="btn danger" data-action="concede" data-player-id="p1">P1 concede</button><button class="btn danger" data-action="concede" data-player-id="p2">P2 concede</button><button class="btn danger wide" data-action="reset-game">Reset entire table</button></div><input id="settings-file-input" class="hidden" type="file" accept="application/json" /></div></section></div>`;
+  return `<div class="modal-backdrop"><section class="modal small-modal"><header class="modal-header"><h2>Table tools</h2><button class="icon-btn" data-action="close-settings">×</button></header><div class="modal-body"><div class="field"><label>Rules enforcement</label><select id="rules-mode"><option value="free" ${state.settings.rulesMode === 'free' ? 'selected' : ''}>Free table: never block moves</option><option value="learning" ${state.settings.rulesMode === 'learning' ? 'selected' : ''}>Learning: explain and allow override</option><option value="strict" ${state.settings.rulesMode === 'strict' ? 'selected' : ''}>Strict basics: block known illegal moves</option></select></div><div class="field"><label>Mana handling</label><select id="mana-mode"><option value="manual" ${state.settings.manaMode === 'manual' ? 'selected' : ''}>Manual: tap and edit counters yourself</option><option value="assisted" ${state.settings.manaMode === 'assisted' ? 'selected' : ''}>Assisted: tapping a source adds its mana</option><option value="auto" ${state.settings.manaMode === 'auto' || !state.settings.manaMode ? 'selected' : ''}>Auto-pay: casting taps suggested sources</option></select><div class="small muted" style="margin-top:5px">Dual and hybrid-looking sources appear as choices such as U / B. The floating pool still stores the actual color chosen.</div></div><label><input type="checkbox" id="hide-opponent" ${state.settings.hideOpponentHand ? 'checked' : ''}/> Hide Player 2 hand</label><br /><label><input type="checkbox" id="auto-draw" ${state.settings.autoDraw ? 'checked' : ''}/> Auto draw during draw step</label><br /><label><input type="checkbox" id="show-names" ${state.settings.showCardNames ? 'checked' : ''}/> Show card-name strips</label><div class="field" style="margin-top:10px"><label>Monte Carlo rollouts per move</label><input id="coach-rollouts" type="number" min="50" max="2500" step="50" value="${state.settings.coachRollouts}" /></div><div class="action-grid"><button class="btn" data-action="switch-player">Switch active player</button><button class="btn" data-action="open-token">Create token</button><button class="btn" data-action="mulligan" data-player-id="p1">Mulligan Player 1</button><button class="btn" data-action="mulligan" data-player-id="p2">Mulligan Player 2</button><button class="btn" data-action="random-tool" data-kind="d6">Roll D6</button><button class="btn" data-action="random-tool" data-kind="d20">Roll D20</button><button class="btn" data-action="random-tool" data-kind="coin">Flip coin</button><button class="btn" data-action="export-save">Export save</button><button class="btn" data-action="import-save">Import save</button><button class="btn danger" data-action="concede" data-player-id="p1">P1 concede</button><button class="btn danger" data-action="concede" data-player-id="p2">P2 concede</button><button class="btn danger wide" data-action="reset-game">Reset entire table</button></div><input id="settings-file-input" class="hidden" type="file" accept="application/json" /></div></section></div>`;
 }
 
 function renderTokenModal() {
@@ -408,6 +436,8 @@ app.addEventListener('click', async (event) => {
     if (action === 'draw') draw(button.dataset.playerId, Number(button.dataset.amount || 1));
     if (action === 'mill') mill(button.dataset.playerId, Number(button.dataset.amount || 1));
     if (action === 'toggle-tap') handleResult(toggleTap(button.dataset.cardId));
+    if (action === 'toggle-tap-only') handleResult(toggleTap(button.dataset.cardId, { mana: false }));
+    if (action === 'tap-mana') handleResult(tapForMana(button.dataset.cardId, Number(button.dataset.choiceIndex || 0)));
     if (action === 'toggle-attack') handleResult(toggleAttack(button.dataset.cardId));
     if (action === 'move-card') moveSelectedTo(button.dataset.cardId, button.dataset.zone);
     if (action === 'move-library') moveSelectedTo(button.dataset.cardId, 'library', button.dataset.position);
@@ -469,6 +499,7 @@ function saveSettingsFromModal() {
   if (!mode) return;
   updateState((draft) => {
     draft.settings.rulesMode = mode.value;
+    draft.settings.manaMode = document.querySelector('#mana-mode')?.value || 'auto';
     draft.settings.hideOpponentHand = document.querySelector('#hide-opponent')?.checked ?? true;
     draft.settings.autoDraw = document.querySelector('#auto-draw')?.checked ?? true;
     draft.settings.showCardNames = document.querySelector('#show-names')?.checked ?? true;
@@ -618,12 +649,30 @@ function demoCard(name, owner, index) {
     instanceId: uid('demo'), scryfallId: null, name,
     manaCost: land ? '' : creature ? '{2}{U}{B}' : '{1}', manaValue: land ? 0 : creature ? 4 : 1,
     typeLine: land ? 'Basic Land' : creature ? 'Creature — Practice' : /Murder/.test(name) ? 'Instant' : 'Artifact',
-    oracleText: land ? 'Tap: Add one mana.' : `Demo Oracle text for ${name}. Resolve card-specific effects manually.`,
+    oracleText: demoOracleText(name, land),
+    producedMana: demoProducedMana(name, land),
     power: creature ? String((index % 5) + 1) : '', toughness: creature ? String((index % 4) + 2) : '',
     keywords: name.includes('Changeling') ? ['Unblockable'] : [], colors: [], colorIdentity: [], legalities: { commander: 'legal' },
     image: './demo-card.svg', imageSmall: './demo-card.svg', owner, controller: owner,
     tapped: false, summoningSick: false, attacking: false, faceDown: false, token: false, commander: false, counters: {}, notes: '',
   };
+}
+
+
+function demoProducedMana(name, land) {
+  if (name === 'Island') return ['U'];
+  if (name === 'Swamp') return ['B'];
+  if (name === 'Sol Ring') return ['C'];
+  if (land) return ['C'];
+  return [];
+}
+
+function demoOracleText(name, land) {
+  if (name === 'Island') return '{T}: Add {U}.';
+  if (name === 'Swamp') return '{T}: Add {B}.';
+  if (name === 'Sol Ring') return '{T}: Add {C}{C}.';
+  if (land) return '{T}: Add {C}.';
+  return `Demo Oracle text for ${name}. Resolve card-specific effects manually.`;
 }
 
 function triggerFilePicker() {

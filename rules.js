@@ -1,5 +1,5 @@
 import { PHASES } from './constants.js';
-import { hasFlash, isCreature, isLand, isPermanent, manaRequirement, totalMana } from './utils.js';
+import { hasFlash, isCreature, isLand, isPermanent, manaRequirement, totalMana, untappedManaSources } from './utils.js';
 
 export function validateDeck(entries, byName, commanderNames = []) {
   const errors = [];
@@ -107,7 +107,9 @@ export function spendMana(pool, manaCost, tax = 0) {
   const next = { ...pool };
   for (const color of ['W', 'U', 'B', 'R', 'G', 'C']) next[color] = Math.max(0, next[color] - req[color]);
   for (const choices of req.flexible) {
-    const available = choices.find((color) => next[color] > 0);
+    const available = choices
+      .filter((color) => next[color] > 0)
+      .sort((a, b) => Number(next[b] || 0) - Number(next[a] || 0))[0];
     if (available) next[available] -= 1;
   }
   let generic = req.generic;
@@ -117,6 +119,107 @@ export function spendMana(pool, manaCost, tax = 0) {
     generic -= amount;
   }
   return next;
+}
+
+
+export function planManaPayment(player, manaCost, tax = 0) {
+  const requirement = manaRequirement(manaCost, tax);
+  const pool = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0, ...(player?.mana || {}) };
+  if (canPayMana(pool, manaCost, tax).ok) return { ok: true, sources: [], projectedPool: pool };
+
+  const sources = untappedManaSources(player).map((source) => ({ ...source, used: false }));
+  const selected = [];
+  const working = { ...pool };
+
+  const addBundle = (mana) => {
+    for (const color of ['W', 'U', 'B', 'R', 'G', 'C']) {
+      working[color] = Number(working[color] || 0) + Number(mana?.[color] || 0);
+    }
+  };
+
+  const chooseSource = (allowedColors, preference = null) => {
+    const candidates = [];
+    for (const source of sources) {
+      if (source.used) continue;
+      for (let choiceIndex = 0; choiceIndex < source.choices.length; choiceIndex += 1) {
+        const choice = source.choices[choiceIndex];
+        const relevant = allowedColors.reduce((sum, color) => sum + Number(choice.mana?.[color] || 0), 0);
+        if (!relevant) continue;
+        const needScore = allowedColors.reduce((sum, color) => {
+          const unmet = Math.max(0, Number(preference?.[color] || 0) - Number(working[color] || 0));
+          return sum + Math.min(unmet, Number(choice.mana?.[color] || 0)) * 8;
+        }, 0);
+        const total = Object.values(choice.mana || {}).reduce((sum, amount) => sum + Number(amount || 0), 0);
+        const flexibilityPenalty = source.choices.length * 0.18;
+        candidates.push({ source, choice, choiceIndex, rank: needScore + relevant * 2 + total - flexibilityPenalty });
+      }
+    }
+    candidates.sort((a, b) => b.rank - a.rank);
+    const pick = candidates[0];
+    if (!pick) return false;
+    pick.source.used = true;
+    addBundle(pick.choice.mana);
+    selected.push({
+      instanceId: pick.source.card.instanceId,
+      name: pick.source.card.name,
+      choiceIndex: pick.choiceIndex,
+      mana: { ...pick.choice.mana },
+      label: pick.choice.label,
+    });
+    return true;
+  };
+
+  for (const color of ['W', 'U', 'B', 'R', 'G', 'C']) {
+    while (Number(working[color] || 0) < Number(requirement[color] || 0)) {
+      if (!chooseSource([color], requirement)) {
+        return { ok: false, sources: [], projectedPool: pool, reason: `No untapped source can produce enough ${color} mana.` };
+      }
+    }
+  }
+
+  const spendableAfterFixed = () => {
+    const spendable = { ...working };
+    for (const color of ['W', 'U', 'B', 'R', 'G', 'C']) spendable[color] -= Number(requirement[color] || 0);
+    return spendable;
+  };
+
+  const flexibleSpent = [];
+  for (const choices of requirement.flexible) {
+    let spendable = spendableAfterFixed();
+    for (const prior of flexibleSpent) spendable[prior] -= 1;
+    let chosen = choices
+      .filter((color) => Number(spendable[color] || 0) > 0)
+      .sort((a, b) => Number(spendable[b] || 0) - Number(spendable[a] || 0))[0];
+    if (!chosen) {
+      if (!chooseSource(choices, requirement)) {
+        return { ok: false, sources: [], projectedPool: pool, reason: `No untapped source can satisfy ${choices.join('/')} mana.` };
+      }
+      spendable = spendableAfterFixed();
+      for (const prior of flexibleSpent) spendable[prior] -= 1;
+      chosen = choices
+        .filter((color) => Number(spendable[color] || 0) > 0)
+        .sort((a, b) => Number(spendable[b] || 0) - Number(spendable[a] || 0))[0];
+    }
+    if (!chosen) return { ok: false, sources: [], projectedPool: pool, reason: 'Could not satisfy a hybrid mana symbol.' };
+    flexibleSpent.push(chosen);
+  }
+
+  const genericAvailable = () => {
+    const spendable = spendableAfterFixed();
+    for (const color of flexibleSpent) spendable[color] -= 1;
+    return totalMana(spendable);
+  };
+
+  while (genericAvailable() < requirement.generic) {
+    if (!chooseSource(['C', 'W', 'U', 'B', 'R', 'G'])) {
+      return { ok: false, sources: [], projectedPool: pool, reason: 'Not enough untapped mana sources for the generic cost.' };
+    }
+  }
+
+  const finalCheck = canPayMana(working, manaCost, tax);
+  return finalCheck.ok
+    ? { ok: true, sources: selected, projectedPool: working }
+    : { ok: false, sources: [], projectedPool: pool, reason: finalCheck.reason };
 }
 
 export function attackLegality(state, card) {

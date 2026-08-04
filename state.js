@@ -19,7 +19,7 @@ export function createPlayer(id, name) {
 
 export function createInitialState() {
   return {
-    version: 2,
+    version: 3,
     players: { p1: createPlayer('p1', 'Player 1'), p2: createPlayer('p2', 'Player 2') },
     activePlayerId: 'p1',
     turnNumber: 1,
@@ -88,7 +88,12 @@ export function restore() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return false;
     const parsed = JSON.parse(raw);
-    if (parsed.version !== 2) return false;
+    if (![2, 3].includes(parsed.version)) return false;
+    const previousSettings = parsed.settings || {};
+    parsed.settings = { ...DEFAULT_SETTINGS, ...previousSettings };
+    if (!previousSettings.manaAutomationV3) parsed.settings.manaMode = 'auto';
+    parsed.settings.manaAutomationV3 = true;
+    parsed.version = 3;
     state = parsed;
     notify();
     return true;
@@ -96,8 +101,10 @@ export function restore() {
 }
 
 export function importState(imported) {
-  if (!imported || imported.version !== 2 || !imported.players) throw new Error('This is not a Commander Forge v2 save file.');
+  if (!imported || ![2, 3].includes(imported.version) || !imported.players) throw new Error('This is not a compatible Commander Forge save file.');
   history = [];
+  imported.settings = { ...DEFAULT_SETTINGS, ...(imported.settings || {}), manaAutomationV3: true };
+  imported.version = 3;
   state = imported;
   persist();
   notify();

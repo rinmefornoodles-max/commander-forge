@@ -1,7 +1,7 @@
 import { PHASES, ZONE_LABELS } from './constants.js';
 import { drawCards, findCard, updateState } from './state.js';
-import { attackLegality, moveLegality, spendMana, stackDestination } from './rules.js';
-import { deepClone, isCreature, isLand, shuffle, uid } from './utils.js';
+import { attackLegality, moveLegality, planManaPayment, spendMana, stackDestination } from './rules.js';
+import { deepClone, formatManaBundle, isCreature, isLand, manaProductionChoices, shuffle, uid } from './utils.js';
 
 function otherPlayerId(state, playerId) {
   return Object.keys(state.players).find((id) => id !== playerId);
@@ -11,7 +11,31 @@ export function moveCard(instanceId, targetPlayerId, targetZone, { force = false
   const currentState = window.CommanderForge.getState();
   const source = findCard(instanceId, currentState);
   if (!source) return { ok: false, message: 'Card not found.' };
-  const legality = moveLegality(currentState, source.card, source, targetPlayerId, targetZone);
+
+  const targetPlayer = currentState.players[targetPlayerId];
+  const castAttempt = ['hand', 'command'].includes(source.zone)
+    && (targetZone === 'stack' || (targetZone === 'battlefield' && !isLand(source.card)));
+  const tax = source.zone === 'command' ? 2 * (targetPlayer.commanderCastCount[source.card.instanceId] || 0) : 0;
+  let autoPlan = null;
+  let legalityState = currentState;
+
+  if (castAttempt && currentState.settings.manaMode === 'auto') {
+    autoPlan = planManaPayment(targetPlayer, source.card.manaCost, tax);
+    if (autoPlan.ok && autoPlan.sources.length) {
+      legalityState = deepClone(currentState);
+      const projected = legalityState.players[targetPlayerId];
+      for (const item of autoPlan.sources) {
+        const manaSource = findCard(item.instanceId, legalityState);
+        if (!manaSource || manaSource.zone !== 'battlefield' || manaSource.card.tapped) continue;
+        manaSource.card.tapped = true;
+        for (const color of ['W', 'U', 'B', 'R', 'G', 'C']) {
+          projected.mana[color] = Number(projected.mana[color] || 0) + Number(item.mana?.[color] || 0);
+        }
+      }
+    }
+  }
+
+  const legality = moveLegality(legalityState, source.card, source, targetPlayerId, targetZone);
   if (!legality.legal && !force) {
     if (currentState.settings.rulesMode === 'strict') return { ok: false, message: legality.reasons.join(' ') };
     const override = confirm(`${legality.reasons.join('\n')}\n\nUse a manual rules override for this move?`);
@@ -23,31 +47,46 @@ export function moveCard(instanceId, targetPlayerId, targetZone, { force = false
     if (toCommand) targetZone = 'command';
   }
 
+  const autoManaText = autoPlan?.sources?.length
+    ? ` Auto-paid by tapping ${autoPlan.sources.map((item) => `${item.name} for ${item.label || formatManaBundle(item.mana)}`).join(', ')}.`
+    : '';
+
   updateState((draft) => {
     const located = findCard(instanceId, draft);
     if (!located) return;
     const card = located.container.splice(located.index, 1)[0];
-    const targetPlayer = draft.players[targetPlayerId];
+    const destinationPlayer = draft.players[targetPlayerId];
     const originalZone = located.zone;
+
+    if (castAttempt && autoPlan?.ok) {
+      for (const item of autoPlan.sources) {
+        const manaSource = findCard(item.instanceId, draft);
+        if (!manaSource || manaSource.zone !== 'battlefield' || manaSource.card.tapped) continue;
+        manaSource.card.tapped = true;
+        for (const color of ['W', 'U', 'B', 'R', 'G', 'C']) {
+          destinationPlayer.mana[color] = Number(destinationPlayer.mana[color] || 0) + Number(item.mana?.[color] || 0);
+        }
+      }
+    }
 
     if (targetZone === 'stack') {
       card.controller = targetPlayerId;
       card.attacking = false;
       if (['hand', 'command'].includes(originalZone)) {
-        const tax = originalZone === 'command' ? 2 * (targetPlayer.commanderCastCount[card.instanceId] || 0) : 0;
-        targetPlayer.mana = spendMana(targetPlayer.mana, card.manaCost, tax);
-        if (originalZone === 'command') targetPlayer.commanderCastCount[card.instanceId] = (targetPlayer.commanderCastCount[card.instanceId] || 0) + 1;
+        const commanderTax = originalZone === 'command' ? 2 * (destinationPlayer.commanderCastCount[card.instanceId] || 0) : 0;
+        destinationPlayer.mana = spendMana(destinationPlayer.mana, card.manaCost, commanderTax);
+        if (originalZone === 'command') destinationPlayer.commanderCastCount[card.instanceId] = (destinationPlayer.commanderCastCount[card.instanceId] || 0) + 1;
       }
       draft.stack.push(card);
     } else {
       card.controller = targetPlayerId;
       card.attacking = false;
       if (targetZone === 'battlefield') {
-        if (isLand(card) && originalZone === 'hand') targetPlayer.landPlaysThisTurn += 1;
+        if (isLand(card) && originalZone === 'hand') destinationPlayer.landPlaysThisTurn += 1;
         if (!isLand(card) && ['hand', 'command'].includes(originalZone)) {
-          const tax = originalZone === 'command' ? 2 * (targetPlayer.commanderCastCount[card.instanceId] || 0) : 0;
-          targetPlayer.mana = spendMana(targetPlayer.mana, card.manaCost, tax);
-          if (originalZone === 'command') targetPlayer.commanderCastCount[card.instanceId] = (targetPlayer.commanderCastCount[card.instanceId] || 0) + 1;
+          const commanderTax = originalZone === 'command' ? 2 * (destinationPlayer.commanderCastCount[card.instanceId] || 0) : 0;
+          destinationPlayer.mana = spendMana(destinationPlayer.mana, card.manaCost, commanderTax);
+          if (originalZone === 'command') destinationPlayer.commanderCastCount[card.instanceId] = (destinationPlayer.commanderCastCount[card.instanceId] || 0) + 1;
         }
         card.summoningSick = isCreature(card);
         card.tapped = false;
@@ -56,19 +95,43 @@ export function moveCard(instanceId, targetPlayerId, targetZone, { force = false
         card.tapped = false;
       }
       if (targetZone === 'library') {
-        if (libraryPosition === 'bottom') targetPlayer.zones.library.push(card);
-        else targetPlayer.zones.library.unshift(card);
-      } else targetPlayer.zones[targetZone].push(card);
+        if (libraryPosition === 'bottom') destinationPlayer.zones.library.push(card);
+        else destinationPlayer.zones.library.unshift(card);
+      } else destinationPlayer.zones[targetZone].push(card);
     }
     draft.selected = { instanceId: card.instanceId };
-  }, { log: `${source.card.name}: ${ZONE_LABELS[source.zone]} → ${ZONE_LABELS[targetZone]}.` });
-  return { ok: true, message: 'Card moved.' };
+  }, { log: `${source.card.name}: ${ZONE_LABELS[source.zone]} → ${ZONE_LABELS[targetZone]}.${autoManaText}` });
+  return { ok: true, message: autoManaText ? autoManaText.trim() : 'Card moved.' };
 }
 
-export function toggleTap(instanceId) {
+export function tapForMana(instanceId, choiceIndex = 0) {
+  const current = window.CommanderForge.getState();
+  const found = findCard(instanceId, current);
+  if (!found || found.zone !== 'battlefield') return { ok: false, message: 'Only battlefield permanents can produce mana here.' };
+  if (found.card.tapped) return { ok: false, message: `${found.card.name} is already tapped.` };
+  const choices = manaProductionChoices(found.card);
+  const choice = choices[Number(choiceIndex)];
+  if (!choice) return { ok: false, message: `${found.card.name} does not have that listed mana choice.` };
+  updateState((draft) => {
+    const located = findCard(instanceId, draft);
+    located.card.tapped = true;
+    const player = draft.players[located.card.controller];
+    for (const color of ['W', 'U', 'B', 'R', 'G', 'C']) {
+      player.mana[color] = Number(player.mana[color] || 0) + Number(choice.mana?.[color] || 0);
+    }
+  }, { log: `${found.card.name} tapped for ${choice.label || formatManaBundle(choice.mana)}.` });
+  return { ok: true, message: `Added ${choice.label || formatManaBundle(choice.mana)} mana.` };
+}
+
+export function toggleTap(instanceId, { mana = true } = {}) {
   const current = window.CommanderForge.getState();
   const found = findCard(instanceId, current);
   if (!found || found.zone !== 'battlefield') return { ok: false, message: 'Only battlefield permanents can be tapped here.' };
+  if (!found.card.tapped && mana && ['assisted', 'auto'].includes(current.settings.manaMode)) {
+    const choices = manaProductionChoices(found.card);
+    if (choices.length === 1) return tapForMana(instanceId, 0);
+    if (choices.length > 1) return { ok: false, message: `Choose ${choices.map((choice) => choice.label).join(' or ')} from the card menu.` };
+  }
   updateState((draft) => {
     const located = findCard(instanceId, draft);
     located.card.tapped = !located.card.tapped;

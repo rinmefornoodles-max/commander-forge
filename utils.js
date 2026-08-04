@@ -87,6 +87,144 @@ export function manaRequirement(cost = '', tax = 0) {
   return requirement;
 }
 const COLORS_SET = new Set(['W', 'U', 'B', 'R', 'G', 'C']);
+const MANA_COLORS = ['W', 'U', 'B', 'R', 'G', 'C'];
+const WORD_NUMBERS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6 };
+
+function emptyManaBundle() {
+  return { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+}
+
+function bundleFromSymbols(symbols) {
+  const mana = emptyManaBundle();
+  for (const symbol of symbols) {
+    if (MANA_COLORS.includes(symbol)) mana[symbol] += 1;
+  }
+  return mana;
+}
+
+export function manaBundleAmount(mana = {}) {
+  return MANA_COLORS.reduce((sum, color) => sum + Number(mana[color] || 0), 0);
+}
+
+export function formatManaBundle(mana = {}) {
+  return MANA_COLORS
+    .flatMap((color) => Array.from({ length: Number(mana[color] || 0) }, () => color))
+    .join('') || '0';
+}
+
+function choiceKey(choice) {
+  return MANA_COLORS.map((color) => Number(choice.mana?.[color] || 0)).join(':');
+}
+
+function dedupeChoices(choices) {
+  const seen = new Set();
+  return choices.filter((choice) => {
+    if (!manaBundleAmount(choice.mana)) return false;
+    const key = choiceKey(choice);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    choice.label = choice.label || formatManaBundle(choice.mana);
+    return true;
+  });
+}
+
+/**
+ * Returns each distinct way a permanent can produce mana as one choice.
+ * A dual land such as “Add {U} or {B}” returns U and B choices.
+ * A bounce land such as “Add {G}{U}” returns one GU bundle.
+ */
+export function manaProductionChoices(card) {
+  if (!card) return [];
+  const text = String(card.oracleText || card.oracle_text || '').replace(/\u2212/g, '-');
+  const type = String(card.typeLine || card.type_line || '');
+  const choices = [];
+
+  // “Any color” sources should present a color choice, not fake hybrid mana.
+  const anyColor = text.match(/add\s+(?:(one|two|three|four|five|six)\s+)?mana\s+of\s+any(?:\s+one)?\s+color/i);
+  if (anyColor) {
+    const amount = WORD_NUMBERS[(anyColor[1] || 'one').toLowerCase()] || 1;
+    for (const color of ['W', 'U', 'B', 'R', 'G']) {
+      const mana = emptyManaBundle();
+      mana[color] = amount;
+      choices.push({ mana, label: amount > 1 ? `${amount}${color}` : color });
+    }
+  }
+
+  // Parse each Oracle “Add …” instruction. This handles most lands and rocks.
+  const clauses = [...text.matchAll(/add\s+([^.;\n]+)/gi)].map((match) => match[1].trim());
+  for (const clause of clauses) {
+    if (/mana\s+of\s+any/i.test(clause)) continue;
+    const symbols = manaSymbols(clause).filter((symbol) => MANA_COLORS.includes(symbol));
+    if (!symbols.length) continue;
+
+    if (/\bor\b/i.test(clause)) {
+      const groups = clause
+        .replace(/,/g, ' ')
+        .split(/\s+or\s+/i)
+        .map((group) => manaSymbols(group).filter((symbol) => MANA_COLORS.includes(symbol)))
+        .filter((group) => group.length);
+      if (groups.length > 1) {
+        groups.forEach((group) => choices.push({ mana: bundleFromSymbols(group) }));
+        continue;
+      }
+    }
+
+    // A comma-separated list such as “{W}, {U}, or {B}” may lose “or” after templating.
+    if (symbols.length > 1 && /,/.test(clause) && !/\}\s*\{/i.test(clause.replace(/\s/g, ''))) {
+      symbols.forEach((symbol) => choices.push({ mana: bundleFromSymbols([symbol]) }));
+      continue;
+    }
+
+    choices.push({ mana: bundleFromSymbols(symbols) });
+  }
+
+  // Basic land types work even when Oracle text is omitted by Scryfall.
+  if (!choices.length) {
+    const basics = [
+      ['Plains', 'W'], ['Island', 'U'], ['Swamp', 'B'],
+      ['Mountain', 'R'], ['Forest', 'G'], ['Wastes', 'C'],
+    ];
+    for (const [landType, color] of basics) {
+      if (!type.includes(landType)) continue;
+      const mana = emptyManaBundle();
+      mana[color] = 1;
+      choices.push({ mana, label: color });
+    }
+  }
+
+  // Scryfall’s produced_mana is a reliable fallback for unusual wording.
+  if (!choices.length) {
+    const colors = [...new Set((card.producedMana || card.produced_mana || []).filter((color) => MANA_COLORS.includes(color)))];
+    for (const color of colors) {
+      const mana = emptyManaBundle();
+      mana[color] = 1;
+      choices.push({ mana, label: color });
+    }
+  }
+
+  return dedupeChoices(choices);
+}
+
+// Compatibility helper for places that only need color possibilities.
+export function manaProductionOptions(card) {
+  return manaProductionChoices(card).flatMap((choice, choiceIndex) =>
+    MANA_COLORS
+      .filter((color) => Number(choice.mana[color] || 0) > 0)
+      .map((color) => ({ color, amount: Number(choice.mana[color] || 0), choiceIndex, mana: choice.mana, label: choice.label })),
+  );
+}
+
+export function manaSourceLabel(card) {
+  const choices = manaProductionChoices(card);
+  return choices.map((choice) => choice.label).join(' / ');
+}
+
+export function untappedManaSources(player) {
+  return (player?.zones?.battlefield || [])
+    .filter((card) => !card.tapped)
+    .map((card) => ({ card, choices: manaProductionChoices(card) }))
+    .filter((source) => source.choices.length);
+}
 
 export function totalMana(pool) {
   return Object.values(pool || {}).reduce((sum, value) => sum + Number(value || 0), 0);
