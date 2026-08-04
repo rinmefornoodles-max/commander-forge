@@ -2,6 +2,8 @@ import {
   CARD_CACHE_KEY,
   DECK_CACHE_KEY,
   DECK_PAYLOAD_CACHE_KEY,
+  LOCAL_PRECON_BASE_URL,
+  LOCAL_PRECON_INDEX_URL,
   MTGJSON_DECK_BASE_URLS,
   MTGJSON_DECK_LIST_URLS,
   SCRYFALL_COLLECTION_URL,
@@ -34,6 +36,12 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 15_000) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function fetchLocalJson(url) {
+  const response = await fetch(url, { cache: 'no-cache', headers: { Accept: 'application/json' } });
+  if (!response.ok) throw new Error(`Local precon catalog returned ${response.status}.`);
+  return response.json();
 }
 
 async function fetchJsonFromCandidates(urls, { attempts = 2 } = {}) {
@@ -136,6 +144,8 @@ function normalizeDeckIndex(payload) {
       code: deck.code || '',
       releaseDate: deck.releaseDate || '',
       type: deck.type || '',
+      cardCount: Number(deck.cardCount || 0),
+      localFile: deck.localFile || '',
     }));
 }
 
@@ -143,16 +153,27 @@ export async function fetchPreconIndex(force = false) {
   const cached = readCache(DECK_CACHE_KEY);
   if (!force && cached.index?.length && Date.now() - cached.updatedAt < 21_600_000) return cached.index;
 
+  // Preferred path: GitHub Actions bundles MTGJSON deck data into this site.
+  // This avoids browser CORS failures and makes the catalog same-origin.
   try {
-    const { payload } = await fetchJsonFromCandidates(MTGJSON_DECK_LIST_URLS, { attempts: 2 });
+    const payload = await fetchLocalJson(`${LOCAL_PRECON_INDEX_URL}?v=4`);
     const index = normalizeDeckIndex(payload);
-    if (!index.length) throw new Error('The deck index was empty.');
-    writeCache(DECK_CACHE_KEY, { index, updatedAt: Date.now() });
+    if (!index.length) throw new Error('The bundled precon index was empty.');
+    writeCache(DECK_CACHE_KEY, { index, updatedAt: Date.now(), source: 'local' });
     return index;
-  } catch (error) {
-    // A stale index is still better than no search at all during an outage.
-    if (cached.index?.length) return cached.index;
-    throw error;
+  } catch (localError) {
+    // Local development may not have run scripts/build_precons.py yet. Keep the
+    // older direct-download path as a fallback, though some browsers block it.
+    try {
+      const { payload } = await fetchJsonFromCandidates(MTGJSON_DECK_LIST_URLS, { attempts: 2 });
+      const index = normalizeDeckIndex(payload);
+      if (!index.length) throw new Error('The deck index was empty.');
+      writeCache(DECK_CACHE_KEY, { index, updatedAt: Date.now(), source: 'remote' });
+      return index;
+    } catch (remoteError) {
+      if (cached.index?.length) return cached.index;
+      throw new Error(`The deployed precon catalog is missing and the browser could not read MTGJSON directly. Re-run the GitHub Pages workflow. ${localError.message}`);
+    }
   }
 }
 
@@ -169,6 +190,19 @@ function deckFileCandidates(fileName) {
 function normalizeDeckPayload(payload, entry) {
   const deck = payload?.data || payload;
   if (!deck || typeof deck !== 'object') throw new Error('The deck response had an unsupported format.');
+
+  // GitHub Actions publishes already-normalized same-origin deck files.
+  if (Array.isArray(deck.entries) && deck.entries.some((card) => card?.name)) {
+    return {
+      name: deck.name || entry.name,
+      entries: deck.entries
+        .filter((card) => card?.name)
+        .map((card) => ({ name: card.name, count: Math.max(1, Number(card.count || 1)) })),
+      commanderNames: Array.isArray(deck.commanderNames) ? deck.commanderNames.filter(Boolean) : [],
+      releaseDate: deck.releaseDate || entry.releaseDate || '',
+      type: deck.type || entry.type || '',
+    };
+  }
 
   const commanderBoard = deck.commander || deck.commanders || [];
   const mainBoard = deck.mainBoard || deck.mainboard || deck.main || deck.cards || [];
@@ -212,10 +246,24 @@ export async function fetchPreconDeck(entry) {
   const payloadCache = readCache(DECK_PAYLOAD_CACHE_KEY);
   const cacheKey = `${entry.code || ''}|${entry.name || ''}`.toLocaleLowerCase();
 
+  if (entry.localFile) {
+    try {
+      const payload = await fetchLocalJson(`${LOCAL_PRECON_BASE_URL}/${encodeURIComponent(entry.localFile)}?v=4`);
+      const normalized = normalizeDeckPayload(payload, entry);
+      payloadCache[cacheKey] = { deck: normalized, updatedAt: Date.now(), fileName: entry.fileName, source: 'local' };
+      writeCache(DECK_PAYLOAD_CACHE_KEY, payloadCache);
+      return normalized;
+    } catch (localError) {
+      const cachedDeck = payloadCache[cacheKey]?.deck;
+      if (cachedDeck?.entries?.length) return cachedDeck;
+      throw new Error(`The bundled deck file for ${entry.name} could not be read. Re-run the GitHub Pages workflow. ${localError.message}`);
+    }
+  }
+
   const attemptEntry = async (candidateEntry) => {
     const { payload } = await fetchJsonFromCandidates(deckFileCandidates(candidateEntry.fileName), { attempts: 2 });
     const normalized = normalizeDeckPayload(payload, candidateEntry);
-    payloadCache[cacheKey] = { deck: normalized, updatedAt: Date.now(), fileName: candidateEntry.fileName };
+    payloadCache[cacheKey] = { deck: normalized, updatedAt: Date.now(), fileName: candidateEntry.fileName, source: 'remote' };
     writeCache(DECK_PAYLOAD_CACHE_KEY, payloadCache);
     return normalized;
   };
@@ -223,11 +271,10 @@ export async function fetchPreconDeck(entry) {
   try {
     return await attemptEntry(entry);
   } catch (firstError) {
-    // MTGJSON rebuilds its files regularly. A cached DeckList can temporarily
-    // point at an old filename, so refresh the index and retry with the latest.
     try {
       const freshIndex = await fetchPreconIndex(true);
       const freshEntry = matchingFreshEntry(freshIndex, entry);
+      if (freshEntry?.localFile) return fetchPreconDeck(freshEntry);
       if (freshEntry) return await attemptEntry(freshEntry);
     } catch { /* use cached deck or original error below */ }
 
