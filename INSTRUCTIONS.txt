@@ -1,0 +1,17 @@
+COMMANDER FORGE PRECON BUILDER MANUAL FIX
+
+1. Upload build_precons.py to the TOP LEVEL of the GitHub repository.
+2. Open .github/workflows/main.yml in GitHub.
+3. Click the pencil/Edit button.
+4. Delete the old workflow and paste everything from MAIN_YML_COPY_THIS.txt.
+5. Commit directly to main.
+6. Open Actions and watch the new run.
+
+A correct run must show:
+- Set up Python
+- Build same-origin official precon catalog
+- Configure GitHub Pages
+- Upload website files
+- Deploy website
+
+It should take longer than the old ~18 second deployment because it downloads and processes the official deck archive.
