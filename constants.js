@@ -22,11 +22,20 @@ export const ZONE_LABELS = {
 };
 
 export const SCRYFALL_COLLECTION_URL = 'https://api.scryfall.com/cards/collection';
-export const MTGJSON_DECK_LIST_URL = 'https://mtgjson.com/api/v5/DeckList.json';
-export const MTGJSON_DECK_BASE_URL = 'https://mtgjson.com/api/v5/decks';
+export const MTGJSON_DECK_LIST_URLS = [
+  'https://mtgjson.com/api/v5/DeckList.json',
+  'https://www.mtgjson.com/api/v5/DeckList.json',
+  'https://mtgjson.net/api/v5/DeckList.json',
+];
+export const MTGJSON_DECK_BASE_URLS = [
+  'https://mtgjson.com/api/v5/decks',
+  'https://www.mtgjson.com/api/v5/decks',
+  'https://mtgjson.net/api/v5/decks',
+];
 
 export const STORAGE_KEY = 'commander-forge-state-v2';
-export const DECK_CACHE_KEY = 'commander-forge-deck-cache-v2';
+export const DECK_CACHE_KEY = 'commander-forge-deck-cache-v3-resilient';
+export const DECK_PAYLOAD_CACHE_KEY = 'commander-forge-precon-payload-cache-v1';
 export const CARD_CACHE_KEY = 'commander-forge-card-cache-v2';
 
 export const DEFAULT_SETTINGS = {
