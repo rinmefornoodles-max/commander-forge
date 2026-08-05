@@ -1,18 +1,18 @@
-THE COMMANDER FORGE 5.6 — COMPACT COMMANDER TAX UI
+THE COMMANDER FORGE 5.7
 
 Upload these four website files to the TOP LEVEL of your GitHub repository:
 
 - index.html
-- commander-forge-5.6.0.js
-- commander-forge-5.6.0.css
+- commander-forge-5.7.0.js
+- commander-forge-5.7.0.css
 - sw.js
 
 Allow index.html and sw.js to replace the existing versions.
-The versioned JS and CSS files can remain beside older versions.
+Commit to main and wait for GitHub Pages to deploy.
 
 Changes:
-- Restores the original compact commander-card layout in the command zone.
-- Removes the large cost panel and Cast commander button.
-- Adds a small − Tax +0 + stepper below each commander.
-- The + and − buttons adjust the tracked number of command-zone casts in steps of one, so tax changes by 2.
-- Dragging or using the card menu to put the commander on the battlefield still checks mana and commander tax.
+- Commander cards sit below the Command Zone heading.
+- Commander tax appears beside the heading as Tax +N.
+- Tax controls were removed.
+- Tax updates automatically only when the commander is cast from the command zone.
+- Casting still enforces base mana cost plus current commander tax.
