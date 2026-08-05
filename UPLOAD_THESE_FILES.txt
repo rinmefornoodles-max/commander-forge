@@ -1,21 +1,19 @@
-THE COMMANDER FORGE 5.13 — PRIVATE HANDS, LIBRARIES, AND PUBLIC REVEALS
+THE COMMANDER FORGE 5.14 — TOKEN CLEANUP
 
-Upload these four website files to the TOP LEVEL of your GitHub repository:
+Upload these four files to the TOP LEVEL of your GitHub repository:
 
 - index.html
-- commander-forge-5.13.0.js
-- commander-forge-5.13.0.css
+- commander-forge-5.14.0.js
+- commander-forge-5.14.0.css
 - sw.js
 
 Allow index.html and sw.js to replace the existing versions.
 Commit to main and wait for GitHub Pages to deploy.
-Both online players must be using version 5.13.
 
-Privacy behavior:
-- Each browser keeps its own exact hand and library locally.
-- Network game-state messages replace every hidden hand/library card with a card-back placeholder.
-- The other player receives hand size and library size, but not names or order.
-- An exact card is transmitted only when its owner presses Reveal publicly.
-- Revealed hand cards remain displayed as known public information until they leave that hand.
-- A revealed library top remains displayed until it is drawn, milled, moved, or shuffled away.
-- Opponent library search and drawer contents remain inaccessible.
+Changes:
+- Tokens no longer remain in hand, graveyard, exile, library, command, or stack.
+- Token dies records a death/zone-change event, queues recognized death or leave triggers, then removes the token.
+- Remove token cleanly makes a token cease to exist without treating it as dying.
+- Dragging a token to graveyard automatically uses Token dies.
+- Dragging a token to another nonbattlefield zone automatically removes it.
+- Normal nontoken cards keep all existing zone actions.
