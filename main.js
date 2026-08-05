@@ -827,6 +827,4 @@ function selectCard(cardId) {
   render();
 }
 
-if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
-}
+// Service worker temporarily disabled by the synchronized recovery build.

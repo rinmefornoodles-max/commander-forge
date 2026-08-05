@@ -72,6 +72,12 @@ function ensureStateShape(next) {
   next.turnNumber ||= 1;
   next.phaseIndex ||= 0;
   next.players ||= {};
+  if (!next.players.p1) next.players.p1 = createPlayer('p1', 'Player 1');
+  if (!next.players.p2) next.players.p2 = createPlayer('p2', 'Player 2');
+  next.activePlayerId = next.players[next.activePlayerId] ? next.activePlayerId : 'p1';
+  next.selected ||= null;
+  next.winner ||= null;
+  next.started = Boolean(next.started);
   for (const [playerId, player] of Object.entries(next.players)) {
     const defaults = createPlayer(playerId, player.name || playerId);
     Object.assign(defaults, player);
