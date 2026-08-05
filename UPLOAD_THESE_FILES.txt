@@ -1,26 +1,28 @@
-THE COMMANDER FORGE 5.2 — PHASE, EFFECT, AND UI FIX
+THE COMMANDER FORGE 5.3 — TABLETOP UX UPDATE
 
 Upload these four website files to the TOP LEVEL of your GitHub repository:
 
 - index.html
-- commander-forge-5.2.0.js
-- commander-forge-5.2.0.css
+- commander-forge-5.3.0.js
+- commander-forge-5.3.0.css
 - sw.js
 
 Allow index.html and sw.js to replace the existing versions.
-The new JS and CSS files may remain beside the older versioned files.
+The versioned JS and CSS files can remain beside older versions.
 
 After committing to main:
-1. Wait for GitHub Pages deployment to turn green.
-2. Open the site in a private/incognito tab first.
-3. Hard-refresh or clear site data if the old version remains.
+1. Wait for the GitHub Pages action to turn green.
+2. Open the website in an Incognito/Private tab first.
+3. Hard-refresh or clear the site's stored data if an older version remains.
 
 Included:
-- Inspector scroll and note cursor remain in place after counter/note changes.
-- Only Next is clickable in the phase timeline.
-- Opponent and player battlefields face the center of the table.
-- Stack objects, combat markers, and pending effects block Next.
-- ETB and phase triggers are queued for manual resolution.
-- Conditional effects require Condition met/not met confirmation.
-- Optional “may” effects can be declined.
-- Non-mana battlefield activated abilities can be queued from the card panel.
+- Mirrored opponent/player utility areas.
+- Cleaner life and poison controls with no overflow.
+- Drag Equipment or Auras from the battlefield onto a valid permanent.
+- Attached cards display as selectable mini cards on the equipped creature.
+- Custom token frame, accent, and text colors.
+- Hide/show battlefield tokens without removing them from game state.
+- Current hand count and calculated maximum hand size.
+- End-step discard safeguard when over maximum hand size.
+- Commander mulligan popup immediately after opening hands are drawn.
+- Free first mulligan and selectable bottom cards after later mulligans.
