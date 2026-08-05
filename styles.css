@@ -263,3 +263,13 @@ button:disabled { opacity: .45; cursor: not-allowed; transform: none !important;
   .mana-chip, .source-chip { font-size: .62rem; padding: 2px 5px; }
   .card-badge.mana { max-width: 54px; }
 }
+
+/* Information-set coach */
+.coach-title-row { display: flex; align-items: center; gap: 8px; }
+.coach-detail { margin: 8px 0; padding: 8px; border-radius: 9px; background: rgba(255,255,255,.035); }
+.coach-detail ul { margin: 5px 0 0 18px; padding: 0; }
+.coach-detail li { margin: 3px 0; color: var(--muted); font-size: .76rem; }
+.coach-risk { margin: 8px 0; padding: 8px; border-left: 3px solid var(--gold); background: rgba(212,166,84,.07); font-size: .76rem; line-height: 1.4; }
+.coach-safe { margin: 8px 0; padding: 8px; border-radius: 9px; border: 1px solid rgba(93,183,136,.35); background: rgba(93,183,136,.08); font-size: .77rem; }
+.coach-audit { margin-top: 10px; border: 1px solid var(--line); border-radius: 10px; padding: 8px; background: rgba(255,255,255,.025); }
+.coach-audit summary { cursor: pointer; font-weight: 800; }

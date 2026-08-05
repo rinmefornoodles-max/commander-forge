@@ -1,10 +1,22 @@
 import { PHASES, ZONE_LABELS } from './constants.js';
 import { drawCards, findCard, updateState } from './state.js';
+import { recordPublicEvent, recordTurnPass, recordZoneTransition } from './knowledge.js';
 import { attackLegality, moveLegality, planManaPayment, spendMana, stackDestination } from './rules.js';
 import { deepClone, formatManaBundle, isCreature, isLand, manaProductionChoices, shuffle, uid } from './utils.js';
 
 function otherPlayerId(state, playerId) {
   return Object.keys(state.players).find((id) => id !== playerId);
+}
+
+function clearCardRelations(draft, card) {
+  for (const player of Object.values(draft.players)) {
+    for (const permanent of player.zones.battlefield) {
+      if (permanent.attachedTo === card.instanceId) permanent.attachedTo = null;
+      permanent.attachments = (permanent.attachments || []).filter((id) => id !== card.instanceId);
+      if (permanent.blocking === card.instanceId) permanent.blocking = null;
+      permanent.blockedBy = (permanent.blockedBy || []).filter((id) => id !== card.instanceId);
+    }
+  }
 }
 
 export function moveCard(instanceId, targetPlayerId, targetZone, { force = false, libraryPosition = 'top' } = {}) {
@@ -99,6 +111,16 @@ export function moveCard(instanceId, targetPlayerId, targetZone, { force = false
         else destinationPlayer.zones.library.unshift(card);
       } else destinationPlayer.zones[targetZone].push(card);
     }
+    if (originalZone === 'battlefield' && targetZone !== 'battlefield') clearCardRelations(draft, card);
+    recordZoneTransition(draft, {
+      card,
+      actorId: targetPlayerId,
+      subjectPlayerId: card.owner,
+      fromZone: originalZone,
+      toZone: targetZone,
+      libraryPosition,
+      castAttempt,
+    });
     draft.selected = { instanceId: card.instanceId };
   }, { log: `${source.card.name}: ${ZONE_LABELS[source.zone]} → ${ZONE_LABELS[targetZone]}.${autoManaText}` });
   return { ok: true, message: autoManaText ? autoManaText.trim() : 'Card moved.' };
@@ -153,7 +175,25 @@ export function toggleAttack(instanceId) {
   updateState((draft) => {
     const located = findCard(instanceId, draft);
     located.card.attacking = !located.card.attacking;
-    if (located.card.attacking) located.card.tapped = true;
+    located.card.blocking = null;
+    if (located.card.attacking) {
+      located.card.tapped = true;
+      recordPublicEvent(draft, {
+        type: 'attack',
+        actorId: located.card.controller,
+        subjectPlayerId: located.card.controller,
+        card: located.card,
+        cards: [located.card],
+        meaningful: true,
+      });
+    } else {
+      recordPublicEvent(draft, {
+        type: 'attack_cancelled',
+        actorId: located.card.controller,
+        subjectPlayerId: located.card.controller,
+        card: located.card,
+      });
+    }
   }, { log: `${found.card.name} ${found.card.attacking ? 'stopped attacking' : 'was declared as an attacker'}.` });
   return { ok: true };
 }
@@ -192,11 +232,15 @@ export function createToken(playerId, token) {
     tapped: Boolean(token.tapped),
     summoningSick: true,
     attacking: false,
+    blocking: null,
+    blockedBy: [],
     faceDown: false,
     token: true,
     commander: false,
     counters: {},
     notes: '',
+    attachedTo: null,
+    attachments: [],
   };
   updateState((draft) => { draft.players[playerId].zones.battlefield.push(card); }, { log: `${draftName(playerId)} created a ${card.name} token.` });
   return card;
@@ -218,6 +262,10 @@ export function copyAsToken(instanceId) {
     copy.commander = false;
     copy.tapped = false;
     copy.attacking = false;
+    copy.blocking = null;
+    copy.blockedBy = [];
+    copy.attachedTo = null;
+    copy.attachments = [];
     copy.summoningSick = isCreature(copy);
     copy.counters = {};
     draft.players[located.card.controller].zones.battlefield.push(copy);
@@ -263,12 +311,29 @@ export function mill(playerId, amount = 1) {
       const card = player.zones.library.shift();
       if (!card) break;
       player.zones.graveyard.push(card);
+      recordPublicEvent(draft, {
+        type: 'milled',
+        actorId: playerId,
+        subjectPlayerId: playerId,
+        card,
+        fromZone: 'library',
+        toZone: 'graveyard',
+        meaningful: true,
+      });
     }
   }, { log: `${draftName(playerId)} milled ${amount} card${amount === 1 ? '' : 's'}.` });
 }
 
 export function shuffleLibrary(playerId) {
-  updateState((draft) => { draft.players[playerId].zones.library = shuffle(draft.players[playerId].zones.library); }, { log: `${draftName(playerId)} shuffled their library.` });
+  updateState((draft) => {
+    draft.players[playerId].zones.library = shuffle(draft.players[playerId].zones.library);
+    recordPublicEvent(draft, {
+      type: 'shuffled',
+      actorId: playerId,
+      subjectPlayerId: playerId,
+      meaningful: true,
+    });
+  }, { log: `${draftName(playerId)} shuffled their library.` });
 }
 
 export function nextPhase() {
@@ -276,6 +341,7 @@ export function nextPhase() {
   const nextIndex = (current.phaseIndex + 1) % PHASES.length;
   updateState((draft) => {
     if (nextIndex === 0) {
+      recordTurnPass(draft, draft.activePlayerId);
       draft.turnNumber += 1;
       draft.activePlayerId = otherPlayerId(draft, draft.activePlayerId);
       const active = draft.players[draft.activePlayerId];
@@ -283,6 +349,8 @@ export function nextPhase() {
       active.zones.battlefield.forEach((card) => {
         card.tapped = false;
         card.attacking = false;
+        card.blocking = null;
+        card.blockedBy = [];
         card.summoningSick = false;
       });
       Object.values(active.mana).forEach((_, key) => key);
@@ -291,7 +359,7 @@ export function nextPhase() {
     draft.phaseIndex = nextIndex;
     const active = draft.players[draft.activePlayerId];
     if (PHASES[nextIndex].id === 'draw' && draft.settings.autoDraw) drawCards(draft, active.id, 1);
-    if (PHASES[nextIndex].id !== 'combat') active.zones.battlefield.forEach((card) => { card.attacking = false; });
+    if (PHASES[nextIndex].id !== 'combat') active.zones.battlefield.forEach((card) => { card.attacking = false; card.blocking = null; card.blockedBy = []; });
   }, { log: nextIndex === 0 ? `Turn passed to ${current.players[otherPlayerId(current, current.activePlayerId)].name}.` : `Phase: ${PHASES[nextIndex].label}.` });
 }
 
@@ -316,6 +384,15 @@ export function resolveStackTop() {
       resolved.summoningSick = isCreature(resolved);
       draft.players[resolved.controller].zones.battlefield.push(resolved);
     } else draft.players[resolved.owner].zones.graveyard.push(resolved);
+    recordPublicEvent(draft, {
+      type: 'resolved',
+      actorId: resolved.controller,
+      subjectPlayerId: resolved.owner,
+      card: resolved,
+      fromZone: 'stack',
+      toZone: destination,
+      meaningful: true,
+    });
   }, { log: `${card.name} resolved to ${ZONE_LABELS[destination]}.` });
   return { ok: true };
 }
@@ -329,7 +406,17 @@ export function counterStackTop() {
     : false;
   updateState((draft) => {
     const countered = draft.stack.pop();
-    draft.players[countered.owner].zones[toCommand ? 'command' : 'graveyard'].push(countered);
+    const destination = toCommand ? 'command' : 'graveyard';
+    draft.players[countered.owner].zones[destination].push(countered);
+    recordPublicEvent(draft, {
+      type: 'countered',
+      actorId: countered.controller,
+      subjectPlayerId: countered.owner,
+      card: countered,
+      fromZone: 'stack',
+      toZone: destination,
+      meaningful: true,
+    });
   }, { log: `${card.name} was countered${toCommand ? ' and returned to the command zone' : ''}.` });
 }
 
@@ -366,6 +453,106 @@ export function flipCard(instanceId) {
 export function revealTop(playerId) {
   const state = window.CommanderForge.getState();
   return state.players[playerId].zones.library[0] || null;
+}
+
+
+export function revealTopPublicly(playerId) {
+  const current = window.CommanderForge.getState();
+  const card = current.players[playerId]?.zones.library?.[0];
+  if (!card) return { ok: false, message: 'The library is empty.' };
+  updateState((draft) => {
+    const top = draft.players[playerId].zones.library[0];
+    recordPublicEvent(draft, {
+      type: 'revealed',
+      actorId: playerId,
+      subjectPlayerId: playerId,
+      card: top,
+      zone: 'library',
+      position: 'top',
+      meaningful: true,
+    });
+    draft.knowledge.players[playerId].knownLibraryTop = [{ card: { ...top }, turn: draft.turnNumber, reason: 'revealed' }];
+  }, { log: `${draftName(playerId)} publicly revealed ${card.name} from the top of their library.` });
+  return { ok: true, card };
+}
+
+export function revealCardPublicly(instanceId) {
+  const current = window.CommanderForge.getState();
+  const found = findCard(instanceId, current);
+  if (!found) return { ok: false, message: 'Card not found.' };
+  updateState((draft) => {
+    const located = findCard(instanceId, draft);
+    recordPublicEvent(draft, {
+      type: located.zone === 'hand' ? 'revealed_in_hand' : 'revealed',
+      actorId: located.card.controller,
+      subjectPlayerId: located.card.owner,
+      card: located.card,
+      zone: located.zone,
+      meaningful: true,
+    });
+  }, { log: `${found.card.name} was publicly revealed from ${found.zone}.` });
+  return { ok: true };
+}
+
+export function assignBlocker(blockerId, attackerId) {
+  const current = window.CommanderForge.getState();
+  const blocker = findCard(blockerId, current);
+  const attacker = findCard(attackerId, current);
+  if (!blocker || !attacker || blocker.zone !== 'battlefield' || attacker.zone !== 'battlefield') return { ok: false, message: 'Both cards must be on the battlefield.' };
+  if (!attacker.card.attacking) return { ok: false, message: `${attacker.card.name} is not marked as attacking.` };
+  updateState((draft) => {
+    const draftBlocker = findCard(blockerId, draft).card;
+    const draftAttacker = findCard(attackerId, draft).card;
+    if (draftBlocker.blocking === attackerId) {
+      draftBlocker.blocking = null;
+      draftAttacker.blockedBy = (draftAttacker.blockedBy || []).filter((id) => id !== blockerId);
+      recordPublicEvent(draft, { type: 'block_cancelled', actorId: draftBlocker.controller, subjectPlayerId: draftBlocker.controller, card: draftBlocker, targetCard: draftAttacker });
+    } else {
+      if (draftBlocker.blocking) {
+        const prior = findCard(draftBlocker.blocking, draft);
+        if (prior) prior.card.blockedBy = (prior.card.blockedBy || []).filter((id) => id !== blockerId);
+      }
+      draftBlocker.blocking = attackerId;
+      draftAttacker.blockedBy ||= [];
+      if (!draftAttacker.blockedBy.includes(blockerId)) draftAttacker.blockedBy.push(blockerId);
+      recordPublicEvent(draft, {
+        type: 'block',
+        actorId: draftBlocker.controller,
+        subjectPlayerId: draftBlocker.controller,
+        card: draftBlocker,
+        targetCard: draftAttacker,
+        meaningful: true,
+      });
+    }
+  }, { log: `${blocker.card.name} ${blocker.card.blocking === attackerId ? 'stopped blocking' : `blocks ${attacker.card.name}`}.` });
+  return { ok: true };
+}
+
+export function attachCard(instanceId, targetId) {
+  const current = window.CommanderForge.getState();
+  const source = findCard(instanceId, current);
+  const target = findCard(targetId, current);
+  if (!source || !target || source.zone !== 'battlefield' || target.zone !== 'battlefield') return { ok: false, message: 'Both cards must be on the battlefield.' };
+  updateState((draft) => {
+    const attachment = findCard(instanceId, draft).card;
+    const permanent = findCard(targetId, draft).card;
+    if (attachment.attachedTo) {
+      const prior = findCard(attachment.attachedTo, draft);
+      if (prior) prior.card.attachments = (prior.card.attachments || []).filter((id) => id !== instanceId);
+    }
+    attachment.attachedTo = targetId;
+    permanent.attachments ||= [];
+    if (!permanent.attachments.includes(instanceId)) permanent.attachments.push(instanceId);
+    recordPublicEvent(draft, {
+      type: 'attached',
+      actorId: attachment.controller,
+      subjectPlayerId: attachment.controller,
+      card: attachment,
+      targetCard: permanent,
+      meaningful: true,
+    });
+  }, { log: `${source.card.name} attached to ${target.card.name}.` });
+  return { ok: true };
 }
 
 function checkLosses(draft) {

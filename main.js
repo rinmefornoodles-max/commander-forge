@@ -18,6 +18,8 @@ import { commanderCandidates, recognizedEffects, validateDeck } from './rules.js
 import { analyzePosition, defenseAdvice, possibleMoves } from './coach.js';
 import {
   addCounter,
+  assignBlocker,
+  attachCard,
   adjustCommanderDamage,
   adjustMana,
   adjustPlayer,
@@ -33,6 +35,8 @@ import {
   concede,
   nextPhase,
   resolveStackTop,
+  revealCardPublicly,
+  revealTopPublicly,
   setPhase,
   shuffleLibrary,
   switchActivePlayer,
@@ -238,6 +242,8 @@ function renderCard(card, state, { compact = false } = {}) {
   if (card.commander) badges.push('<span class="card-badge">CMD</span>');
   if (card.summoningSick) badges.push('<span class="card-badge blue">NEW</span>');
   if (card.attacking) badges.push('<span class="card-badge red">ATK</span>');
+  if (card.blocking) badges.push('<span class="card-badge blue">BLK</span>');
+  if (card.attachedTo) badges.push('<span class="card-badge purple">ATT</span>');
   const manaLabel = manaSourceLabel(card);
   if (manaLabel) badges.push(`<span class="card-badge mana" title="Mana choices">${escapeHtml(manaLabel)}</span>`);
   const counterTotal = Object.values(card.counters || {}).reduce((sum, value) => sum + Number(value || 0), 0);
@@ -266,7 +272,7 @@ function renderInspector(state) {
       ${card.power ? `<div class="small">${escapeHtml(card.power)}/${escapeHtml(card.toughness)}</div>` : ''}${card.commander ? `<div class="small" style="margin-top:5px;color:var(--gold-2)">Cast ${getState().players[card.owner].commanderCastCount[card.instanceId] || 0} time(s) · current tax +${2 * (getState().players[card.owner].commanderCastCount[card.instanceId] || 0)}</div>` : ''}
     </div>
     <div class="inspector-section"><h3>Quick actions</h3><div class="action-grid">
-      ${selected.zone === 'battlefield' ? `${renderManaTapActions(card, state)}<button class="btn" data-action="toggle-attack" data-card-id="${card.instanceId}">${card.attacking ? 'Stop attack' : '⚔ Attack'}</button>` : ''}
+      ${selected.zone === 'battlefield' ? `${renderManaTapActions(card, state)}<button class="btn" data-action="toggle-attack" data-card-id="${card.instanceId}">${card.attacking ? 'Stop attack' : '⚔ Attack'}</button>${renderBlockActions(card, state)}${renderAttachActions(card, state)}` : ''}
       ${zoneMoveButton(card, 'battlefield', 'Battlefield')}
       ${zoneMoveButton(card, 'hand', 'Hand')}
       ${zoneMoveButton(card, 'graveyard', 'Graveyard')}
@@ -276,6 +282,7 @@ function renderInspector(state) {
       <button class="btn" data-action="move-library" data-card-id="${card.instanceId}" data-position="top">Library top</button>
       <button class="btn" data-action="move-library" data-card-id="${card.instanceId}" data-position="bottom">Library bottom</button>
       <button class="btn" data-action="flip-card" data-card-id="${card.instanceId}">${card.faceDown ? 'Turn face up' : 'Turn face down'}</button>
+      <button class="btn" data-action="reveal-public" data-card-id="${card.instanceId}">Reveal publicly</button>
       <button class="btn" data-action="copy-token" data-card-id="${card.instanceId}">Create copy</button>
     </div></div>
     <div class="inspector-section"><h3>Counters</h3><div class="counter-row">${counterButtons.map((counter) => `<button class="btn small-btn" data-action="counter" data-card-id="${card.instanceId}" data-counter="${counter}" data-delta="1">+ ${counter}</button>`).join('')}</div>${Object.entries(card.counters || {}).map(([counter, count]) => `<div class="counter-row" style="margin-top:6px"><span>${escapeHtml(counter)}: ${count}</span><button class="btn small-btn" data-action="counter" data-card-id="${card.instanceId}" data-counter="${escapeHtml(counter)}" data-delta="-1">−</button><button class="btn small-btn" data-action="counter" data-card-id="${card.instanceId}" data-counter="${escapeHtml(counter)}" data-delta="1">+</button></div>`).join('')}</div>
@@ -283,6 +290,25 @@ function renderInspector(state) {
     <div class="inspector-section"><h3>Notes</h3><textarea class="card-note" data-card-id="${card.instanceId}" style="min-height:70px">${escapeHtml(card.notes || '')}</textarea></div>`;
 }
 
+
+
+function renderBlockActions(card, state) {
+  if (!isCreature(card)) return '';
+  const opposingAttackers = Object.values(state.players)
+    .filter((player) => player.id !== card.controller)
+    .flatMap((player) => player.zones.battlefield)
+    .filter((attacker) => attacker.attacking);
+  if (!opposingAttackers.length) return '';
+  return `<div class="mana-choice-group"><div class="small muted wide">Declare blocker</div>${opposingAttackers.map((attacker) => `<button class="btn" data-action="assign-block" data-card-id="${card.instanceId}" data-attacker-id="${attacker.instanceId}">${card.blocking === attacker.instanceId ? 'Stop blocking' : `Block ${escapeHtml(attacker.name)}`}</button>`).join('')}</div>`;
+}
+
+function renderAttachActions(card, state) {
+  const type = String(card.typeLine || '');
+  if (!/Aura|Equipment/.test(type)) return '';
+  const targets = state.players[card.controller]?.zones.battlefield.filter((target) => target.instanceId !== card.instanceId && isCreature(target)) || [];
+  if (!targets.length) return '';
+  return `<div class="mana-choice-group"><div class="small muted wide">Attach to</div>${targets.slice(0, 12).map((target) => `<button class="btn" data-action="attach-card" data-card-id="${card.instanceId}" data-target-id="${target.instanceId}">${escapeHtml(target.name)}</button>`).join('')}</div>`;
+}
 
 function renderManaTapActions(card, state) {
   if (card.tapped) return `<button class="btn" data-action="toggle-tap" data-card-id="${card.instanceId}">↺ Untap</button>`;
@@ -302,8 +328,21 @@ function renderCoachInspector(state) {
   const active = state.players[state.activePlayerId];
   const basicMoves = possibleMoves(state);
   const defense = defenseAdvice(state);
-  const defenseHtml = defense ? `<div class="inspector-section"><h3>Defense suggestion for ${escapeHtml(defense.defenderName)}</h3>${defense.assignments.map((item) => `<div class="coach-result"><strong>${escapeHtml(item.blocker)} blocks ${escapeHtml(item.attacker)}</strong><p class="small muted">${escapeHtml(item.reason)}</p></div>`).join('') || '<div class="validation">No legal-looking blocks found.</div>'}<p class="small">Estimated unblocked/trample damage: ${defense.expectedDamage}</p></div>` : '';
-  return `<div class="inspector-section" style="display:flex;justify-content:space-between;align-items:center"><h3>Monte Carlo coach</h3><button class="icon-btn" data-action="close-inspector">×</button></div><div class="coach-panel"><p class="small muted">The coach scores legal-looking moves and two-step sequences using board value, combat estimates, hidden-information randomness, and ${state.settings.coachRollouts} rollouts per candidate. Card-specific Oracle effects still require manual judgment.</p><button class="btn primary wide" data-action="run-coach">Analyze ${escapeHtml(active.name)}'s position</button><p class="small">${basicMoves.length} current move and sequence candidates.</p>${ui.coach ? ui.coach.results.slice(0, 6).map((result, index) => `<article class="coach-result ${index === 0 ? 'best' : ''}"><span class="score-pill">${result.score >= 0 ? '+' : ''}${result.score}</span><strong>${index + 1}. ${escapeHtml(result.label)}</strong><p class="small muted">${escapeHtml(result.explanation)}</p><div class="small">Simulation range: ${result.range[0]} to ${result.range[1]}</div></article>`).join('') : '<div class="validation">Run analysis to rank plays, sequences, attacks, and passing.</div>'}</div>${defenseHtml}`;
+  const defenseHtml = defense ? `<div class="inspector-section"><h3>Defense suggestion for ${escapeHtml(defense.defenderName)}</h3>${defense.assignments.map((item) => `<div class="coach-result"><strong>${escapeHtml(item.blocker)} blocks ${escapeHtml(item.attacker)}</strong><p class="small muted">${escapeHtml(item.reason)}</p></div>`).join('') || '<div class="validation">No useful legal-looking blocks found.</div>'}<p class="small">Estimated unblocked/trample damage: ${defense.expectedDamage}</p></div>` : '';
+  const resultsHtml = ui.coach
+    ? ui.coach.results.slice(0, 6).map((result, index) => {
+      const details = result.explanationDetails || {};
+      const visible = (details.visibleReasons || []).map((reason) => `<li>${escapeHtml(reason)}</li>`).join('');
+      const memory = (details.publicMemoryReasons || []).map((reason) => `<li>${escapeHtml(reason)}</li>`).join('');
+      const safer = index === 0 && result.saferAlternative
+        ? `<div class="coach-safe"><strong>Safer alternative:</strong> ${escapeHtml(result.saferAlternative.label)} <span class="muted">(${escapeHtml(result.saferAlternative.riskLevel)} risk)</span></div>`
+        : '';
+      return `<article class="coach-result ${index === 0 ? 'best' : ''}"><div class="coach-title-row"><span class="score-pill">${result.score >= 0 ? '+' : ''}${result.score}</span><strong>${index + 1}. ${escapeHtml(result.label)}</strong></div><p class="small">${escapeHtml(details.headline || result.explanation || '')}</p>${visible ? `<div class="coach-detail"><strong>Visible board:</strong><ul>${visible}</ul></div>` : ''}${memory ? `<div class="coach-detail"><strong>Public memory:</strong><ul>${memory}</ul></div>` : ''}<div class="coach-risk"><strong>${escapeHtml(details.riskLevel || 'Low')} risk</strong> · ${escapeHtml(details.hiddenRisk || '')}</div>${safer}<div class="small muted">Confidence: ${result.confidence || 0}% · sampled range ${result.range[0]} to ${result.range[1]}</div></article>`;
+    }).join('')
+    : '<div class="validation">Run analysis to rank plays, sequences, attacks, activated abilities, and passing.</div>';
+  const audit = ui.coach?.informationSetAudit;
+  const auditHtml = audit ? `<details class="coach-audit"><summary>Information used by the coach</summary><div class="small"><div>✓ Your full hand and public zones</div><div>✓ Both visible battlefields and individual card text/state</div><div>✓ Public game memory and opponent hand size/behavior</div><div>✗ No opponent hidden card names or hidden library identities</div></div></details>` : '';
+  return `<div class="inspector-section" style="display:flex;justify-content:space-between;align-items:center"><h3>Information-set coach</h3><button class="icon-btn" data-action="close-inspector">×</button></div><div class="coach-panel"><p class="small muted">Samples plausible hidden interaction from public colors, open mana, known cards, hand size, and behavior. It never reads the opponent's hidden hand or decklist.</p><button class="btn primary wide" data-action="run-coach">Analyze ${escapeHtml(active.name)}'s position</button><p class="small">${basicMoves.length} legal-looking move and sequence candidates · ${state.settings.coachRollouts} samples per candidate.</p>${resultsHtml}${auditHtml}</div>${defenseHtml}`;
 }
 
 function renderDrawer(state) {
@@ -358,7 +397,7 @@ function renderValidation(validation) {
 }
 
 function renderSettingsModal(state) {
-  return `<div class="modal-backdrop"><section class="modal small-modal"><header class="modal-header"><h2>Table tools</h2><button class="icon-btn" data-action="close-settings">×</button></header><div class="modal-body"><div class="field"><label>Rules enforcement</label><select id="rules-mode"><option value="free" ${state.settings.rulesMode === 'free' ? 'selected' : ''}>Free table: never block moves</option><option value="learning" ${state.settings.rulesMode === 'learning' ? 'selected' : ''}>Learning: explain and allow override</option><option value="strict" ${state.settings.rulesMode === 'strict' ? 'selected' : ''}>Strict basics: block known illegal moves</option></select></div><div class="field"><label>Mana handling</label><select id="mana-mode"><option value="manual" ${state.settings.manaMode === 'manual' ? 'selected' : ''}>Manual: tap and edit counters yourself</option><option value="assisted" ${state.settings.manaMode === 'assisted' ? 'selected' : ''}>Assisted: tapping a source adds its mana</option><option value="auto" ${state.settings.manaMode === 'auto' || !state.settings.manaMode ? 'selected' : ''}>Auto-pay: casting taps suggested sources</option></select><div class="small muted" style="margin-top:5px">Dual and hybrid-looking sources appear as choices such as U / B. The floating pool still stores the actual color chosen.</div></div><label><input type="checkbox" id="hide-opponent" ${state.settings.hideOpponentHand ? 'checked' : ''}/> Hide Player 2 hand</label><br /><label><input type="checkbox" id="auto-draw" ${state.settings.autoDraw ? 'checked' : ''}/> Auto draw during draw step</label><br /><label><input type="checkbox" id="show-names" ${state.settings.showCardNames ? 'checked' : ''}/> Show card-name strips</label><div class="field" style="margin-top:10px"><label>Monte Carlo rollouts per move</label><input id="coach-rollouts" type="number" min="50" max="2500" step="50" value="${state.settings.coachRollouts}" /></div><div class="action-grid"><button class="btn" data-action="switch-player">Switch active player</button><button class="btn" data-action="open-token">Create token</button><button class="btn" data-action="mulligan" data-player-id="p1">Mulligan Player 1</button><button class="btn" data-action="mulligan" data-player-id="p2">Mulligan Player 2</button><button class="btn" data-action="random-tool" data-kind="d6">Roll D6</button><button class="btn" data-action="random-tool" data-kind="d20">Roll D20</button><button class="btn" data-action="random-tool" data-kind="coin">Flip coin</button><button class="btn" data-action="export-save">Export save</button><button class="btn" data-action="import-save">Import save</button><button class="btn danger" data-action="concede" data-player-id="p1">P1 concede</button><button class="btn danger" data-action="concede" data-player-id="p2">P2 concede</button><button class="btn danger wide" data-action="reset-game">Reset entire table</button></div><input id="settings-file-input" class="hidden" type="file" accept="application/json" /></div></section></div>`;
+  return `<div class="modal-backdrop"><section class="modal small-modal"><header class="modal-header"><h2>Table tools</h2><button class="icon-btn" data-action="close-settings">×</button></header><div class="modal-body"><div class="field"><label>Rules enforcement</label><select id="rules-mode"><option value="free" ${state.settings.rulesMode === 'free' ? 'selected' : ''}>Free table: never block moves</option><option value="learning" ${state.settings.rulesMode === 'learning' ? 'selected' : ''}>Learning: explain and allow override</option><option value="strict" ${state.settings.rulesMode === 'strict' ? 'selected' : ''}>Strict basics: block known illegal moves</option></select></div><div class="field"><label>Mana handling</label><select id="mana-mode"><option value="manual" ${state.settings.manaMode === 'manual' ? 'selected' : ''}>Manual: tap and edit counters yourself</option><option value="assisted" ${state.settings.manaMode === 'assisted' ? 'selected' : ''}>Assisted: tapping a source adds its mana</option><option value="auto" ${state.settings.manaMode === 'auto' || !state.settings.manaMode ? 'selected' : ''}>Auto-pay: casting taps suggested sources</option></select><div class="small muted" style="margin-top:5px">Dual and hybrid-looking sources appear as choices such as U / B. The floating pool still stores the actual color chosen.</div></div><label><input type="checkbox" id="hide-opponent" ${state.settings.hideOpponentHand ? 'checked' : ''}/> Hide Player 2 hand</label><br /><label><input type="checkbox" id="auto-draw" ${state.settings.autoDraw ? 'checked' : ''}/> Auto draw during draw step</label><br /><label><input type="checkbox" id="show-names" ${state.settings.showCardNames ? 'checked' : ''}/> Show card-name strips</label><div class="field" style="margin-top:10px"><label>Information-set samples per move</label><input id="coach-rollouts" type="number" min="60" max="1000" step="40" value="${state.settings.coachRollouts}" /></div><div class="action-grid"><button class="btn" data-action="switch-player">Switch active player</button><button class="btn" data-action="open-token">Create token</button><button class="btn" data-action="mulligan" data-player-id="p1">Mulligan Player 1</button><button class="btn" data-action="mulligan" data-player-id="p2">Mulligan Player 2</button><button class="btn" data-action="random-tool" data-kind="d6">Roll D6</button><button class="btn" data-action="random-tool" data-kind="d20">Roll D20</button><button class="btn" data-action="random-tool" data-kind="coin">Flip coin</button><button class="btn" data-action="export-save">Export save</button><button class="btn" data-action="import-save">Import save</button><button class="btn danger" data-action="concede" data-player-id="p1">P1 concede</button><button class="btn danger" data-action="concede" data-player-id="p2">P2 concede</button><button class="btn danger wide" data-action="reset-game">Reset entire table</button></div><input id="settings-file-input" class="hidden" type="file" accept="application/json" /></div></section></div>`;
 }
 
 function renderTokenModal() {
@@ -412,7 +451,7 @@ app.addEventListener('click', async (event) => {
     if (action === 'set-phase') setPhase(Number(button.dataset.index));
     if (action === 'undo') { if (!undo()) toast('Nothing to undo.'); }
     if (action === 'coach') { ui.inspectorMode = 'coach'; ui.inspectorOpen = true; render(); }
-    if (action === 'run-coach') { showLoading('Analyzing possible lines', 'Running randomized board evaluations…'); await new Promise((r) => setTimeout(r, 40)); ui.coach = analyzePosition(getState()); hideLoading(); }
+    if (action === 'run-coach') { showLoading('Analyzing possible lines', 'Sampling public-information-consistent hidden states…'); await new Promise((r) => setTimeout(r, 40)); ui.coach = analyzePosition(getState()); hideLoading(); }
     if (action === 'close-inspector') { ui.inspectorOpen = false; getState().selected = null; ui.inspectorMode = 'card'; render(); }
     if (action === 'open-log') { ui.logOpen = true; render(); }
     if (action === 'close-log') { ui.logOpen = false; render(); }
@@ -432,13 +471,16 @@ app.addEventListener('click', async (event) => {
     if (action === 'open-zone') { ui.drawer = { playerId: button.dataset.playerId, zone: button.dataset.zone }; ui.drawerSearch = ''; ui.libraryReveal = null; render(); }
     if (action === 'close-drawer') { ui.drawer = null; ui.drawerSearch = ''; render(); }
     if (action === 'shuffle-library') shuffleLibrary(button.dataset.playerId);
-    if (action === 'reveal-top') { ui.libraryReveal = { playerId: button.dataset.playerId }; render(); }
+    if (action === 'reveal-top') { handleResult(revealTopPublicly(button.dataset.playerId)); ui.libraryReveal = { playerId: button.dataset.playerId }; render(); }
     if (action === 'draw') draw(button.dataset.playerId, Number(button.dataset.amount || 1));
     if (action === 'mill') mill(button.dataset.playerId, Number(button.dataset.amount || 1));
     if (action === 'toggle-tap') handleResult(toggleTap(button.dataset.cardId));
     if (action === 'toggle-tap-only') handleResult(toggleTap(button.dataset.cardId, { mana: false }));
     if (action === 'tap-mana') handleResult(tapForMana(button.dataset.cardId, Number(button.dataset.choiceIndex || 0)));
     if (action === 'toggle-attack') handleResult(toggleAttack(button.dataset.cardId));
+    if (action === 'assign-block') handleResult(assignBlocker(button.dataset.cardId, button.dataset.attackerId));
+    if (action === 'attach-card') handleResult(attachCard(button.dataset.cardId, button.dataset.targetId));
+    if (action === 'reveal-public') handleResult(revealCardPublicly(button.dataset.cardId));
     if (action === 'move-card') moveSelectedTo(button.dataset.cardId, button.dataset.zone);
     if (action === 'move-library') moveSelectedTo(button.dataset.cardId, 'library', button.dataset.position);
     if (action === 'flip-card') flipCard(button.dataset.cardId);
@@ -503,7 +545,7 @@ function saveSettingsFromModal() {
     draft.settings.hideOpponentHand = document.querySelector('#hide-opponent')?.checked ?? true;
     draft.settings.autoDraw = document.querySelector('#auto-draw')?.checked ?? true;
     draft.settings.showCardNames = document.querySelector('#show-names')?.checked ?? true;
-    draft.settings.coachRollouts = Math.max(50, Math.min(2500, Number(document.querySelector('#coach-rollouts')?.value || 450)));
+    draft.settings.coachRollouts = Math.max(60, Math.min(1000, Number(document.querySelector('#coach-rollouts')?.value || 240)));
   }, { snapshot: false });
 }
 

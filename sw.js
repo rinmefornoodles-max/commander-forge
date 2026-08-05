@@ -1,5 +1,5 @@
-const CACHE = 'commander-forge-shell-v6-card-resolution';
-const ASSETS = ['./', './index.html', './styles.css', './main.js', './constants.js', './utils.js', './api.js', './state.js', './rules.js', './game.js', './coach.js', './forge-mark.svg', './card-back.svg', './demo-card.svg', './token.svg'];
+const CACHE = 'commander-forge-shell-v7-information-set-coach';
+const ASSETS = ['./', './index.html', './styles.css', './main.js', './constants.js', './utils.js', './api.js', './state.js', './rules.js', './game.js', './coach.js', './knowledge.js', './card-evaluation.js', './forge-mark.svg', './card-back.svg', './demo-card.svg', './token.svg'];
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
