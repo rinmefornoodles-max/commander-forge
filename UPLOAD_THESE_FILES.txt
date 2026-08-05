@@ -1,29 +1,21 @@
-THE COMMANDER FORGE 5.12 — ONLINE MULTIPLAYER
+THE COMMANDER FORGE 5.13 — PRIVATE HANDS, LIBRARIES, AND PUBLIC REVEALS
 
 Upload these four website files to the TOP LEVEL of your GitHub repository:
 
 - index.html
-- commander-forge-5.12.0.js
-- commander-forge-5.12.0.css
+- commander-forge-5.13.0.js
+- commander-forge-5.13.0.css
 - sw.js
 
-Allow index.html and sw.js to replace the current versions.
-The new versioned JS and CSS files can remain beside older versions.
+Allow index.html and sw.js to replace the existing versions.
+Commit to main and wait for GitHub Pages to deploy.
+Both online players must be using version 5.13.
 
-After committing to main:
-1. Wait for the GitHub Pages deployment to turn green.
-2. Open the site in an Incognito/Private tab first.
-3. Open Decks -> Online multiplayer.
-4. Host creates the invite code as Player 1.
-5. Player 2 opens the same site, enters the code, and chooses their own deck.
-6. The host starts after both deck panels say ready.
-
-Multiplayer behavior:
-- Host is Player 1; guest is Player 2.
-- Each player chooses and validates their own deck.
-- Each controls their own cards and life/poison values.
-- The active player can advance the phase.
-- Opponent hand and library identities are replaced with hidden placeholders before network transfer.
-- Public zones, life, poison, battlefield, command zone, counters, stack, phases, and logs synchronize.
-- The connection is peer-to-peer through PeerJS Cloud signaling.
-- Both pages must stay open; refresh/disconnect requires rejoining with a new or active room.
+Privacy behavior:
+- Each browser keeps its own exact hand and library locally.
+- Network game-state messages replace every hidden hand/library card with a card-back placeholder.
+- The other player receives hand size and library size, but not names or order.
+- An exact card is transmitted only when its owner presses Reveal publicly.
+- Revealed hand cards remain displayed as known public information until they leave that hand.
+- A revealed library top remains displayed until it is drawn, milled, moved, or shuffled away.
+- Opponent library search and drawer contents remain inaccessible.
