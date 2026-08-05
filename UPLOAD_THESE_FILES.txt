@@ -1,20 +1,29 @@
-THE COMMANDER FORGE 5.11 — BASIC LAND STACKS
+THE COMMANDER FORGE 5.12 — ONLINE MULTIPLAYER
 
 Upload these four website files to the TOP LEVEL of your GitHub repository:
 
 - index.html
-- commander-forge-5.11.0.js
-- commander-forge-5.11.0.css
+- commander-forge-5.12.0.js
+- commander-forge-5.12.0.css
 - sw.js
 
-Allow index.html and sw.js to replace the existing versions.
-Commit to main and wait for GitHub Pages to deploy.
+Allow index.html and sw.js to replace the current versions.
+The new versioned JS and CSS files can remain beside older versions.
 
-Changes:
-- Identical basic lands automatically display as one visual stack.
-- The stack shows a visible quantity badge such as ×4.
-- Tapped and untapped copies form separate stacks so available mana stays clear.
-- Clicking or dragging a stack operates on one real card at a time.
-- Tapping a land moves one copy from the untapped stack to the tapped stack.
-- Nonbasic lands always remain separate.
-- Basic lands with counters, notes, attachments, face-down state, or other unique state remain separate.
+After committing to main:
+1. Wait for the GitHub Pages deployment to turn green.
+2. Open the site in an Incognito/Private tab first.
+3. Open Decks -> Online multiplayer.
+4. Host creates the invite code as Player 1.
+5. Player 2 opens the same site, enters the code, and chooses their own deck.
+6. The host starts after both deck panels say ready.
+
+Multiplayer behavior:
+- Host is Player 1; guest is Player 2.
+- Each player chooses and validates their own deck.
+- Each controls their own cards and life/poison values.
+- The active player can advance the phase.
+- Opponent hand and library identities are replaced with hidden placeholders before network transfer.
+- Public zones, life, poison, battlefield, command zone, counters, stack, phases, and logs synchronize.
+- The connection is peer-to-peer through PeerJS Cloud signaling.
+- Both pages must stay open; refresh/disconnect requires rejoining with a new or active room.
