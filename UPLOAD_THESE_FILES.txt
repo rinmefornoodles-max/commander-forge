@@ -1,17 +1,26 @@
-THE COMMANDER FORGE 5.1.1 — PRECON SEARCH FIX
+THE COMMANDER FORGE 5.2 — PHASE, EFFECT, AND UI FIX
 
-Upload these three website files to the TOP LEVEL of your GitHub repository:
+Upload these four website files to the TOP LEVEL of your GitHub repository:
 
 - index.html
-- commander-forge-5.1.1.js
+- commander-forge-5.2.0.js
+- commander-forge-5.2.0.css
 - sw.js
 
 Allow index.html and sw.js to replace the existing versions.
-The new JavaScript file should appear beside commander-forge-5.1.0.js.
+The new JS and CSS files may remain beside the older versioned files.
 
-Commit directly to main and wait for GitHub Pages to deploy.
-Then open the site in a private/incognito tab first.
+After committing to main:
+1. Wait for GitHub Pages deployment to turn green.
+2. Open the site in a private/incognito tab first.
+3. Hard-refresh or clear site data if the old version remains.
 
-Cause fixed:
-The single-file bundler did not export async functions, leaving
-fetchPreconIndex, fetchPreconDeck, and fetchCardsByNames undefined.
+Included:
+- Inspector scroll and note cursor remain in place after counter/note changes.
+- Only Next is clickable in the phase timeline.
+- Opponent and player battlefields face the center of the table.
+- Stack objects, combat markers, and pending effects block Next.
+- ETB and phase triggers are queued for manual resolution.
+- Conditional effects require Condition met/not met confirmation.
+- Optional “may” effects can be declined.
+- Non-mana battlefield activated abilities can be queued from the card panel.
