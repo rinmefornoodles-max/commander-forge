@@ -8,7 +8,7 @@
   <title>The Commander Forge</title>
   <link rel="icon" href="./forge-mark.svg" type="image/svg+xml" />
   <link rel="manifest" href="./manifest.webmanifest" />
-  <link rel="stylesheet" href="./commander-forge-5.10.0.css" />
+  <link rel="stylesheet" href="./commander-forge-5.11.0.css" />
 </head>
 <body>
   <div id="app" aria-live="polite"><div class="boot-loading">Loading The Commander Forge…</div></div>
@@ -17,7 +17,7 @@
     (() => {
       const app=document.getElementById('app');
       window.__forgeStarted=false;
-      const show=(message)=>{app.innerHTML=`<div style="min-height:100vh;display:grid;place-items:center;padding:24px;background:#071015;color:#eef3ee;font-family:system-ui,sans-serif"><div style="max-width:760px;background:#101c22;border:1px solid #a85151;border-radius:16px;padding:22px"><h1 style="margin-top:0">The Commander Forge could not start</h1><p>The single app bundle did not load. Make sure <strong>commander-forge-5.10.0.js</strong> was uploaded beside index.html.</p><pre style="white-space:pre-wrap;overflow:auto;background:#071015;padding:12px;border-radius:10px;color:#ffb4b4">${String(message||'Unknown startup error')}</pre><button onclick="location.reload()" style="padding:10px 16px;border-radius:10px;border:0;cursor:pointer">Reload</button></div></div>`};
+      const show=(message)=>{app.innerHTML=`<div style="min-height:100vh;display:grid;place-items:center;padding:24px;background:#071015;color:#eef3ee;font-family:system-ui,sans-serif"><div style="max-width:760px;background:#101c22;border:1px solid #a85151;border-radius:16px;padding:22px"><h1 style="margin-top:0">The Commander Forge could not start</h1><p>The single app bundle did not load. Make sure <strong>commander-forge-5.11.0.js</strong> was uploaded beside index.html.</p><pre style="white-space:pre-wrap;overflow:auto;background:#071015;padding:12px;border-radius:10px;color:#ffb4b4">${String(message||'Unknown startup error')}</pre><button onclick="location.reload()" style="padding:10px 16px;border-radius:10px;border:0;cursor:pointer">Reload</button></div></div>`};
       window.__forgeBootError=show;
       window.addEventListener('error',(e)=>show(e.error?.stack||e.message));
       window.addEventListener('unhandledrejection',(e)=>show(e.reason?.stack||e.reason));
@@ -26,6 +26,6 @@
       setTimeout(()=>{if(!document.querySelector('.app-header')&&!document.querySelector('.setup-modal')) show('The app file loaded too slowly or did not execute.');},10000);
     })();
   </script>
-  <script defer src="./commander-forge-5.10.0.js" onerror="window.__forgeBootError('HTTP error while loading commander-forge-5.10.0.js')"></script>
+  <script defer src="./commander-forge-5.11.0.js" onerror="window.__forgeBootError('HTTP error while loading commander-forge-5.11.0.js')"></script>
 </body>
 </html>
