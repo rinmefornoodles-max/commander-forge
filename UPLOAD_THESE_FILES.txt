@@ -1,30 +1,36 @@
-THE COMMANDER FORGE 5.17 — RESPONSIVE COACH FIX
+THE COMMANDER FORGE 5.18
 
 Upload these four website files to the TOP LEVEL of your GitHub repository:
 
 - index.html
-- commander-forge-5.17.0.js
-- commander-forge-5.17.0.css
+- commander-forge-5.18.0.js
+- commander-forge-5.18.0.css
 - sw.js
 
 Allow index.html and sw.js to replace the existing versions.
-Both multiplayer players should use version 5.17.0.
+Both online players must use version 5.18.0.
 
-COACH FIXES
-- Opening the Coach panel no longer performs the full tactical search in the background.
-- Analyze runs cooperatively and yields back to the browser throughout move generation and Monte Carlo sampling.
-- Crowded boards automatically use a smaller candidate/sample budget instead of locking the page.
-- Normal boards still use the selected coach sample setting when practical.
-- Duplicate Analyze presses cannot start overlapping searches.
-- The loading window shows progress and includes a Stop analysis button.
-- Card-rule parsing is cached during each simulated state, greatly reducing repeated keyword and Oracle-text work.
-- Hidden library placeholders share a compact simulation representation; private card identities remain hidden.
-- Exact mana payment planning uses bounded search inside the coach while normal gameplay payment remains unchanged.
-- Partial results are clearly labeled when analysis reaches its responsiveness time limit.
+FIXES
+
+DRAWING
+- Automatic drawing is enabled in online multiplayer again.
+- Player 1, the starting player, skips the draw on turn 1 in a 1v1 game.
+- Player 2 draws normally on their first turn.
+- Later turns draw normally for both players.
+- Manual Draw actions still work for spells, abilities, and corrections.
+- Private card identities stay on the drawing player's browser.
+- The opponent only receives the updated hand and library counts.
+
+MULTIPLAYER SETUP
+- Remote deck updates no longer rebuild the setup form while the local player is typing.
+- Remote updates no longer interrupt an open commander/precon selection menu.
+- Typed player names, pasted decklists, searches, and invite codes are saved immediately.
+- Deferred room updates appear after the local player finishes editing.
+- The setup window keeps its scroll position when it refreshes.
 
 AFTER UPLOADING
 1. Commit the files to main.
-2. Wait for the GitHub Pages action to turn green.
-3. Close old Commander Forge tabs.
-4. Open the updated site in a new Incognito/Private tab first.
-5. For multiplayer, both players should use the same 5.17.0 version and create a new room.
+2. Wait for the GitHub Pages deployment to turn green.
+3. Both players should close all older Commander Forge tabs.
+4. Open the updated site in new Incognito/Private tabs.
+5. Create a new invite code. Version 5.17 rooms are not compatible with 5.18.
