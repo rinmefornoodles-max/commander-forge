@@ -1,28 +1,19 @@
-THE COMMANDER FORGE 5.3 — TABLETOP UX UPDATE
+THE COMMANDER FORGE 5.4
 
-Upload these four website files to the TOP LEVEL of your GitHub repository:
+Upload these four files to the TOP LEVEL of your GitHub repository:
 
 - index.html
-- commander-forge-5.3.0.js
-- commander-forge-5.3.0.css
+- commander-forge-5.4.0.js
+- commander-forge-5.4.0.css
 - sw.js
 
 Allow index.html and sw.js to replace the existing versions.
-The versioned JS and CSS files can remain beside older versions.
+Commit directly to main and wait for GitHub Pages to deploy.
 
-After committing to main:
-1. Wait for the GitHub Pages action to turn green.
-2. Open the website in an Incognito/Private tab first.
-3. Hard-refresh or clear the site's stored data if an older version remains.
-
-Included:
-- Mirrored opponent/player utility areas.
-- Cleaner life and poison controls with no overflow.
-- Drag Equipment or Auras from the battlefield onto a valid permanent.
-- Attached cards display as selectable mini cards on the equipped creature.
-- Custom token frame, accent, and text colors.
-- Hide/show battlefield tokens without removing them from game state.
-- Current hand count and calculated maximum hand size.
-- End-step discard safeguard when over maximum hand size.
-- Commander mulligan popup immediately after opening hands are drawn.
-- Free first mulligan and selectable bottom cards after later mulligans.
+Changes:
+- View battlefield button temporarily hides token creation and removes the blur.
+- Return to token creator restores the complete draft.
+- Only Player 2's utility/status column is mirrored toward the table center.
+- Player 1's utility/status column uses the normal orientation.
+- Player 2's hand is always visible.
+- The Hide Player 2 hand setting was removed.
