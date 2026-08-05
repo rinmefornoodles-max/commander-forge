@@ -1,23 +1,26 @@
-THE COMMANDER FORGE 5.19 — TITLE SCREEN
+THE COMMANDER FORGE 5.20 — REVEALED LIBRARY + TITLE FLOW
 
-Upload these four website files to the TOP LEVEL of your GitHub repository:
+Upload these four files to the TOP LEVEL of the GitHub repository:
 
 - index.html
-- commander-forge-5.19.0.js
-- commander-forge-5.19.0.css
+- commander-forge-5.20.0.js
+- commander-forge-5.20.0.css
 - sw.js
 
-Allow index.html and sw.js to replace the existing versions.
-The new bundle and stylesheet can remain beside older versioned files.
+Allow index.html and sw.js to replace the existing versions. Both online players must use 5.20.
 
-Added:
-- A full title screen when opening the website.
-- Buttons for Solo Practice, Online Multiplayer, Deck Lab, Continue Game, How to Play, and Settings.
-- Continue Game only shows when a saved game exists.
-- A How to Play popup on the title screen.
-- Footer legal text: The Commander Forge is not affiliated with Wizards of the Coast. Magic: The Gathering is a trademark of Wizards of the Coast LLC.
+REVEALED LIBRARY CARDS
+- Private Look now has a separate Reveal to opponent toggle on each viewed card.
+- Reveal is independent from Top, Bottom, or Hand destination.
+- The opponent can open the revealing player’s Library and see every currently revealed card.
+- If a revealed library card moves into hand, it remains visible as Known in hand.
+- Revealed opponent cards can be clicked and expanded in the normal right-side inspector.
+- The revealed-card inspector is read-only. Hidden opponent cards still cannot be selected.
+- Shuffling clears currently revealed library identities.
 
-After uploading:
-1. Commit to main.
-2. Wait for GitHub Pages to turn green.
-3. Open the site in an Incognito/Private tab first.
+TITLE SCREEN
+- Solo Practice opens solo setup.
+- Host Online Game creates a host room and invite code.
+- Join Game uses the invite-code field directly from the title screen.
+- The redundant Deck Lab button was removed because it led to the same setup workflow.
+- Continue Game appears only for an actually started saved game.
