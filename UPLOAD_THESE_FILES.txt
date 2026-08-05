@@ -1,0 +1,13 @@
+Upload all four website files to the TOP LEVEL of the GitHub repository:
+
+index.html
+commander-forge-5.1.0.js
+commander-forge-5.1.0.css
+sw.js
+
+They must be visible beside main.js on the main Code page.
+Allow index.html and sw.js to replace the old files.
+Commit to main and wait for GitHub Pages to deploy.
+
+The new index loads one bundled app file. It no longer dynamically imports main.js
+or depends on many browser modules loading as one matching version.

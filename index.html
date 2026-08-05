@@ -8,38 +8,24 @@
   <title>The Commander Forge</title>
   <link rel="icon" href="./forge-mark.svg" type="image/svg+xml" />
   <link rel="manifest" href="./manifest.webmanifest" />
-  <link rel="stylesheet" href="./styles.css?v=2026.08.04.5" />
+  <link rel="stylesheet" href="./commander-forge-5.1.0.css" />
 </head>
 <body>
-  <div id="app" aria-live="polite"></div>
+  <div id="app" aria-live="polite"><div class="boot-loading">Loading The Commander Forge…</div></div>
   <div id="toast-root" aria-live="assertive"></div>
-
   <script>
     (() => {
-      const VERSION = '2026.08.04.5';
-      const app = document.getElementById('app');
-      const showBootError = (error) => {
-        const message = error && (error.stack || error.message) ? (error.stack || error.message) : String(error || 'Unknown startup error');
-        app.innerHTML = `<div style="min-height:100vh;display:grid;place-items:center;padding:24px;background:#071015;color:#eef3ee;font-family:system-ui,sans-serif"><div style="max-width:760px;background:#101c22;border:1px solid #a85151;border-radius:16px;padding:22px"><h1 style="margin-top:0">The Commander Forge could not start</h1><p>The site files did not load as one matching version. Refresh once. If this remains, clear this site's stored data.</p><pre style="white-space:pre-wrap;overflow:auto;background:#071015;padding:12px;border-radius:10px;color:#ffb4b4">${message}</pre><button onclick="location.reload(true)" style="padding:10px 16px;border-radius:10px;border:0;cursor:pointer">Reload</button></div></div>`;
-      };
-      window.addEventListener('error', (event) => showBootError(event.error || event.message));
-      window.addEventListener('unhandledrejection', (event) => showBootError(event.reason));
-      (async () => {
-        try {
-          if ('serviceWorker' in navigator) {
-            const registrations = await navigator.serviceWorker.getRegistrations();
-            await Promise.all(registrations.map((registration) => registration.unregister()));
-          }
-          if ('caches' in window) {
-            const keys = await caches.keys();
-            await Promise.all(keys.map((key) => caches.delete(key)));
-          }
-          await import(`./main.js?v=${VERSION}`);
-        } catch (error) {
-          showBootError(error);
-        }
-      })();
+      const app=document.getElementById('app');
+      window.__forgeStarted=false;
+      const show=(message)=>{app.innerHTML=`<div style="min-height:100vh;display:grid;place-items:center;padding:24px;background:#071015;color:#eef3ee;font-family:system-ui,sans-serif"><div style="max-width:760px;background:#101c22;border:1px solid #a85151;border-radius:16px;padding:22px"><h1 style="margin-top:0">The Commander Forge could not start</h1><p>The single app bundle did not load. Make sure <strong>commander-forge-5.1.0.js</strong> was uploaded beside index.html.</p><pre style="white-space:pre-wrap;overflow:auto;background:#071015;padding:12px;border-radius:10px;color:#ffb4b4">${String(message||'Unknown startup error')}</pre><button onclick="location.reload()" style="padding:10px 16px;border-radius:10px;border:0;cursor:pointer">Reload</button></div></div>`};
+      window.__forgeBootError=show;
+      window.addEventListener('error',(e)=>show(e.error?.stack||e.message));
+      window.addEventListener('unhandledrejection',(e)=>show(e.reason?.stack||e.reason));
+      if('serviceWorker' in navigator) navigator.serviceWorker.getRegistrations().then(rs=>Promise.all(rs.map(r=>r.unregister()))).catch(()=>{});
+      if('caches' in window) caches.keys().then(keys=>Promise.all(keys.map(k=>caches.delete(k)))).catch(()=>{});
+      setTimeout(()=>{if(!document.querySelector('.app-header')&&!document.querySelector('.setup-modal')) show('The app file loaded too slowly or did not execute.');},10000);
     })();
   </script>
+  <script defer src="./commander-forge-5.1.0.js" onerror="window.__forgeBootError('HTTP error while loading commander-forge-5.1.0.js')"></script>
 </body>
 </html>
