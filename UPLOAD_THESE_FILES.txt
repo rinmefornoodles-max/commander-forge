@@ -1,13 +1,17 @@
-Upload all four website files to the TOP LEVEL of the GitHub repository:
+THE COMMANDER FORGE 5.1.1 — PRECON SEARCH FIX
 
-index.html
-commander-forge-5.1.0.js
-commander-forge-5.1.0.css
-sw.js
+Upload these three website files to the TOP LEVEL of your GitHub repository:
 
-They must be visible beside main.js on the main Code page.
-Allow index.html and sw.js to replace the old files.
-Commit to main and wait for GitHub Pages to deploy.
+- index.html
+- commander-forge-5.1.1.js
+- sw.js
 
-The new index loads one bundled app file. It no longer dynamically imports main.js
-or depends on many browser modules loading as one matching version.
+Allow index.html and sw.js to replace the existing versions.
+The new JavaScript file should appear beside commander-forge-5.1.0.js.
+
+Commit directly to main and wait for GitHub Pages to deploy.
+Then open the site in a private/incognito tab first.
+
+Cause fixed:
+The single-file bundler did not export async functions, leaving
+fetchPreconIndex, fetchPreconDeck, and fetchCardsByNames undefined.
