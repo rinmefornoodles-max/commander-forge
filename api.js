@@ -1,410 +1,136 @@
-import {
-  CARD_CACHE_KEY,
-  DECK_CACHE_KEY,
-  DECK_PAYLOAD_CACHE_KEY,
-  LOCAL_PRECON_BASE_URL,
-  LOCAL_PRECON_INDEX_URL,
-  MTGJSON_DECK_BASE_URLS,
-  MTGJSON_DECK_LIST_URLS,
-  SCRYFALL_COLLECTION_URL,
-} from './constants.js';
-import { normalizeName } from './utils.js';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { analyzePosition, buildInteractionRisk, possibleMoves } from '../coach.js';
+import { landEntryPlan, moveLegality, planManaPayment, spellCastLegality, strategicPaymentColors } from '../rules.js';
+import { createInitialState } from '../state.js';
 
-function readCache(key) {
-  try { return JSON.parse(localStorage.getItem(key) || '{}'); } catch { return {}; }
-}
-function writeCache(key, value) {
-  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* cache is optional */ }
-}
-
-function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
-
-async function fetchWithTimeout(url, options = {}, timeoutMs = 15_000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, {
-      ...options,
-      signal: controller.signal,
-      cache: 'no-store',
-      headers: {
-        Accept: 'application/json',
-        'Cache-Control': 'no-cache',
-        ...(options.headers || {}),
-      },
-    });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function fetchLocalJson(url) {
-  const response = await fetch(url, { cache: 'no-cache', headers: { Accept: 'application/json' } });
-  if (!response.ok) throw new Error(`Local precon catalog returned ${response.status}.`);
-  return response.json();
-}
-
-async function fetchJsonFromCandidates(urls, { attempts = 2 } = {}) {
-  const errors = [];
-  for (const url of [...new Set(urls)]) {
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      try {
-        const response = await fetchWithTimeout(url);
-        if (!response.ok) {
-          errors.push(`${response.status} ${url}`);
-          // A missing file will not improve by retrying this exact URL.
-          if (response.status === 404) break;
-        } else {
-          const text = await response.text();
-          try {
-            return { payload: JSON.parse(text), url };
-          } catch {
-            errors.push(`Invalid JSON from ${url}`);
-            break;
-          }
-        }
-      } catch (error) {
-        errors.push(`${error?.name === 'AbortError' ? 'Timed out' : error?.message || 'Network error'}: ${url}`);
-      }
-      if (attempt + 1 < attempts) await delay(350 * (attempt + 1));
-    }
-  }
-  throw new Error(`The precon service could not return readable deck data. ${errors.slice(-3).join(' | ')}`);
-}
-
-function normalizeCardRequest(item) {
-  const source = typeof item === 'string' ? { name: item } : (item || {});
+function card(overrides = {}) {
   return {
-    name: normalizeName(source.name || ''),
-    scryfallId: String(source.scryfallId || source.scryfall_id || source.identifiers?.scryfallId || '').trim(),
-    oracleId: String(source.scryfallOracleId || source.oracleId || source.oracle_id || source.identifiers?.scryfallOracleId || '').trim(),
+    instanceId: overrides.instanceId || `c-${Math.random()}`,
+    name: overrides.name || 'Test Card',
+    manaCost: overrides.manaCost || '', manaValue: overrides.manaValue || 0,
+    typeLine: overrides.typeLine || 'Creature — Test', oracleText: overrides.oracleText || '',
+    power: overrides.power ?? '1', toughness: overrides.toughness ?? '1', keywords: overrides.keywords || [],
+    colors: overrides.colors || [], colorIdentity: overrides.colorIdentity || [],
+    tapped: Boolean(overrides.tapped), summoningSick: Boolean(overrides.summoningSick),
+    attacking: false, blocking: null, blockedBy: [], counters: {},
+    owner: overrides.owner || 'p1', controller: overrides.controller || overrides.owner || 'p1',
+    commander: Boolean(overrides.commander), token: false, faceDown: false,
   };
 }
 
-function canonicalCardName(name = '') {
-  return normalizeName(name).replace(/\s*\/\/\s*/g, ' // ').toLocaleLowerCase();
+function land(name, oracleText, typeLine = 'Land', tapped = false, owner = 'p1') {
+  return card({ name, oracleText, typeLine, tapped, owner, controller: owner, power: '', toughness: '' });
 }
 
-function cardAliases(raw) {
-  const aliases = new Set();
-  if (raw?.name) aliases.add(canonicalCardName(raw.name));
-  for (const face of raw?.card_faces || []) {
-    if (face?.name) aliases.add(canonicalCardName(face.name));
-  }
-  return aliases;
-}
+test('tapped lands are unavailable to the mana planner', () => {
+  const state = createInitialState();
+  state.players.p1.zones.battlefield.push(
+    land('Tapped Island', '{T}: Add {U}.', 'Basic Land — Island', true),
+    land('Swamp', '{T}: Add {B}.', 'Basic Land — Swamp', false),
+  );
+  assert.equal(planManaPayment(state.players.p1, '{U}').ok, false);
+  const black = planManaPayment(state.players.p1, '{B}');
+  assert.equal(black.ok, true);
+  assert.deepEqual(black.sources.map((source) => source.name), ['Swamp']);
+});
 
-function requestMatchesRaw(request, raw) {
-  if (request.scryfallId && request.scryfallId === raw?.id) return true;
-  if (request.oracleId && request.oracleId === raw?.oracle_id) return true;
-  return cardAliases(raw).has(canonicalCardName(request.name));
-}
+test('a land that enters tapped does not enable a same-turn cast sequence', () => {
+  const state = createInitialState();
+  state.phaseIndex = 3;
+  state.players.p1.zones.hand.push(
+    land('Slow Blue Land', 'Slow Blue Land enters the battlefield tapped.\n{T}: Add {U}.', 'Land'),
+    card({ instanceId: 'blue-spell', name: 'Blue One Drop', manaCost: '{U}', manaValue: 1, typeLine: 'Creature — Wizard', owner: 'p1' }),
+  );
+  const labels = possibleMoves(state, 'p1').map((move) => move.label);
+  assert(labels.some((label) => /Play Slow Blue Land/.test(label)));
+  assert.equal(labels.some((label) => /Slow Blue Land.*Blue One Drop/.test(label)), false);
+});
 
-function cacheRawCard(cache, raw, compact, request = null) {
-  if (compact?.name) cache[canonicalCardName(compact.name)] = compact;
-  for (const face of raw?.card_faces || []) {
-    if (face?.name) cache[canonicalCardName(face.name)] = compact;
-  }
-  if (request?.name) cache[canonicalCardName(request.name)] = compact;
-}
+test('an untapped land can enable a same-turn cast sequence', () => {
+  const state = createInitialState();
+  state.phaseIndex = 3;
+  state.players.p1.zones.hand.push(
+    land('Island', '{T}: Add {U}.', 'Basic Land — Island'),
+    card({ instanceId: 'blue-spell', name: 'Blue One Drop', manaCost: '{U}', manaValue: 1, typeLine: 'Creature — Wizard', owner: 'p1' }),
+  );
+  const labels = possibleMoves(state, 'p1').map((move) => move.label);
+  assert.ok(labels.some((label) => /Play Island.*Cast Blue One Drop/.test(label)));
+});
 
-async function fetchNamedFallback(request) {
-  const normalized = normalizeName(request.name).replace(/\s*\/\/\s*/g, ' // ');
-  const queries = [
-    ['exact', normalized],
-    ['fuzzy', normalized.replace(/\s*\/\/\s*/g, ' ')],
-  ];
-  if (normalized.includes(' // ')) {
-    queries.push(['fuzzy', normalized.split(' // ')[0]]);
-  }
+test('mana planning can preserve blue interaction while paying black', () => {
+  const state = createInitialState();
+  const island = land('Island', '{T}: Add {U}.', 'Basic Land — Island');
+  const dual = land('Underground River', '{T}: Add {U} or {B}.', 'Land');
+  const removal = card({ instanceId: 'removal', name: 'Black Spell', manaCost: '{B}', manaValue: 1, typeLine: 'Sorcery', owner: 'p1' });
+  const counter = card({ instanceId: 'counter', name: 'Visible Counter', manaCost: '{U}', manaValue: 1, typeLine: 'Instant', oracleText: 'Counter target spell.', owner: 'p1' });
+  state.players.p1.zones.battlefield.push(island, dual);
+  state.players.p1.zones.hand.push(removal, counter);
+  const preserve = strategicPaymentColors(state.players.p1, removal.instanceId);
+  const plan = planManaPayment(state.players.p1, removal.manaCost, 0, { preserveColors: preserve });
+  assert.equal(plan.ok, true);
+  assert.deepEqual(plan.sources.map((source) => source.name), ['Underground River']);
+  assert.deepEqual(plan.sources[0].mana, { W: 0, U: 0, B: 1, R: 0, G: 0, C: 0 });
+  assert.ok(plan.preservedColors.includes('U'));
+});
 
-  for (const [mode, value] of queries) {
-    if (!value) continue;
-    const url = `https://api.scryfall.com/cards/named?${mode}=${encodeURIComponent(value)}`;
-    try {
-      const response = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 12_000);
-      if (response.ok) return response.json();
-      if (response.status !== 404) throw new Error(`Scryfall returned ${response.status}.`);
-    } catch (error) {
-      if (error?.name === 'AbortError') continue;
-    }
-    await delay(90);
-  }
-  return null;
-}
+test('common land-entry conditions are evaluated from visible state', () => {
+  const state = createInitialState();
+  const checkland = land('Drowned Catacomb', 'Drowned Catacomb enters the battlefield tapped unless you control an Island or a Swamp.\n{T}: Add {U} or {B}.');
+  assert.equal(landEntryPlan(checkland, state.players.p1).tapped, true);
+  state.players.p1.zones.battlefield.push(land('Island', '{T}: Add {U}.', 'Basic Land — Island'));
+  assert.equal(landEntryPlan(checkland, state.players.p1).tapped, false);
+});
 
-export async function fetchCardsByNames(items, onProgress = () => {}) {
-  const requests = (items || [])
-    .map(normalizeCardRequest)
-    .filter((request) => request.name);
-  const uniqueRequests = [];
-  const seen = new Set();
-  for (const request of requests) {
-    const key = request.scryfallId || request.oracleId || canonicalCardName(request.name);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    uniqueRequests.push(request);
-  }
+test('noninstant spells require main-phase timing and an empty stack', () => {
+  const state = createInitialState();
+  state.phaseIndex = 4;
+  state.players.p1.zones.battlefield.push(land('Island', '{T}: Add {U}.', 'Basic Land — Island'));
+  const sorcery = card({ name: 'Test Sorcery', manaCost: '{U}', typeLine: 'Sorcery', owner: 'p1' });
+  assert.equal(spellCastLegality(state, 'p1', sorcery, 'hand').legal, false);
+  state.phaseIndex = 3;
+  state.stack.push(card({ name: 'Spell on Stack', typeLine: 'Instant', owner: 'p2', controller: 'p2' }));
+  assert.equal(spellCastLegality(state, 'p1', sorcery, 'hand').legal, false);
+});
 
-  const cache = readCache(CARD_CACHE_KEY);
-  const missing = uniqueRequests.filter((request) => !cache[canonicalCardName(request.name)]);
-  const unresolved = [];
+test('tapped blue and black lands do not create immediate interaction risk', () => {
+  const state = createInitialState();
+  state.players.p2.colorIdentity = ['U', 'B'];
+  state.players.p2.zones.hand = Array.from({ length: 7 }, (_, index) => card({ name: `Hidden ${index}`, typeLine: 'Instant', owner: 'p2', controller: 'p2' }));
+  state.players.p2.zones.battlefield.push(
+    land('Island', '{T}: Add {U}.', 'Basic Land — Island', true, 'p2'),
+    land('Swamp', '{T}: Add {B}.', 'Basic Land — Swamp', true, 'p2'),
+  );
+  const risk = buildInteractionRisk(state, 'p1');
+  assert.equal(risk.categories.counterspell.probability, 0);
+  assert.equal(risk.categories.removal.probability, 0);
+});
 
-  for (let start = 0; start < missing.length; start += 75) {
-    const batch = missing.slice(start, start + 75);
-    onProgress({ loaded: start, total: missing.length, message: `Loading cards ${start + 1}-${Math.min(start + 75, missing.length)}…` });
-    const response = await fetch(SCRYFALL_COLLECTION_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({
-        identifiers: batch.map((request) => {
-          if (request.scryfallId) return { id: request.scryfallId };
-          if (request.oracleId) return { oracle_id: request.oracleId };
-          return { name: request.name };
-        }),
-      }),
-    });
-    if (!response.ok) throw new Error(`Scryfall returned ${response.status}. Try again in a moment.`);
-    const payload = await response.json();
-    const raws = payload.data || [];
+test('the coach prefers an untapped early land over an otherwise similar tapped land', () => {
+  const state = createInitialState();
+  state.phaseIndex = 3;
+  state.turnNumber = 1;
+  state.players.p1.zones.hand.push(
+    land('Slow Island', 'Slow Island enters the battlefield tapped.\n{T}: Add {U}.', 'Land'),
+    land('Island', '{T}: Add {U}.', 'Basic Land — Island'),
+  );
+  const analysis = analyzePosition(state, 'p1', 70);
+  const islandMove = analysis.results.find((result) => result.label === 'Play Island');
+  const slowMove = analysis.results.find((result) => /Play Slow Island/.test(result.label));
+  assert.ok(islandMove.score > slowMove.score);
+});
 
-    for (const raw of raws) {
-      const compact = compactScryfallCard(raw);
-      cacheRawCard(cache, raw, compact);
-    }
 
-    for (const request of batch) {
-      const raw = raws.find((candidate) => requestMatchesRaw(request, candidate));
-      if (raw) {
-        const compact = compactScryfallCard(raw);
-        cacheRawCard(cache, raw, compact, request);
-      } else {
-        unresolved.push(request);
-      }
-    }
-    await delay(90);
-  }
-
-  const notFound = [];
-  for (let index = 0; index < unresolved.length; index += 1) {
-    const request = unresolved[index];
-    onProgress({ loaded: missing.length + index, total: missing.length + unresolved.length, message: `Resolving ${request.name}…` });
-    const raw = await fetchNamedFallback(request);
-    if (raw?.object === 'card') {
-      const compact = compactScryfallCard(raw);
-      cacheRawCard(cache, raw, compact, request);
-    } else {
-      notFound.push(request.name);
-    }
-    await delay(90);
-  }
-
-  writeCache(CARD_CACHE_KEY, cache);
-  onProgress({ loaded: missing.length + unresolved.length, total: missing.length + unresolved.length, message: 'Cards loaded.' });
-  return {
-    cards: uniqueRequests.map((request) => cache[canonicalCardName(request.name)]).filter(Boolean),
-    byName: Object.fromEntries(uniqueRequests.map((request) => [canonicalCardName(request.name), cache[canonicalCardName(request.name)]])),
-    notFound,
-  };
-}
-
-function compactScryfallCard(raw) {
-  const face = raw.card_faces?.[0];
-  return {
-    scryfallId: raw.id,
-    oracleId: raw.oracle_id,
-    name: raw.name,
-    manaCost: raw.mana_cost || face?.mana_cost || '',
-    manaValue: Number(raw.cmc || 0),
-    typeLine: raw.type_line || face?.type_line || '',
-    oracleText: raw.oracle_text || raw.card_faces?.map((f) => `${f.name}: ${f.oracle_text || ''}`).join('\n\n') || '',
-    power: raw.power || face?.power || '',
-    toughness: raw.toughness || face?.toughness || '',
-    loyalty: raw.loyalty || face?.loyalty || '',
-    keywords: raw.keywords || [],
-    colors: raw.colors || face?.colors || [],
-    colorIdentity: raw.color_identity || [],
-    legalities: raw.legalities || {},
-    layout: raw.layout,
-    image: raw.image_uris?.normal || face?.image_uris?.normal || './card-back.svg',
-    imageSmall: raw.image_uris?.small || face?.image_uris?.small || raw.image_uris?.normal || './card-back.svg',
-    backImage: raw.card_faces?.[1]?.image_uris?.normal || null,
-    producedMana: raw.produced_mana || [],
-  };
-}
-
-function normalizeDeckIndex(payload) {
-  const data = Array.isArray(payload) ? payload : payload?.data || [];
-  return data
-    .filter((deck) => deck?.name && deck?.fileName)
-    .map((deck) => ({
-      name: deck.name,
-      fileName: deck.fileName,
-      code: deck.code || '',
-      releaseDate: deck.releaseDate || '',
-      type: deck.type || '',
-      cardCount: Number(deck.cardCount || 0),
-      localFile: deck.localFile || '',
-    }));
-}
-
-export async function fetchPreconIndex(force = false) {
-  const cached = readCache(DECK_CACHE_KEY);
-  if (!force && cached.index?.length && Date.now() - cached.updatedAt < 21_600_000) return cached.index;
-
-  // Preferred path: GitHub Actions bundles MTGJSON deck data into this site.
-  // This avoids browser CORS failures and makes the catalog same-origin.
-  try {
-    const payload = await fetchLocalJson(`${LOCAL_PRECON_INDEX_URL}?v=5`);
-    const index = normalizeDeckIndex(payload);
-    if (!index.length) throw new Error('The bundled precon index was empty.');
-    writeCache(DECK_CACHE_KEY, { index, updatedAt: Date.now(), source: 'local' });
-    return index;
-  } catch (localError) {
-    // Local development may not have run scripts/build_precons.py yet. Keep the
-    // older direct-download path as a fallback, though some browsers block it.
-    try {
-      const { payload } = await fetchJsonFromCandidates(MTGJSON_DECK_LIST_URLS, { attempts: 2 });
-      const index = normalizeDeckIndex(payload);
-      if (!index.length) throw new Error('The deck index was empty.');
-      writeCache(DECK_CACHE_KEY, { index, updatedAt: Date.now(), source: 'remote' });
-      return index;
-    } catch (remoteError) {
-      if (cached.index?.length) return cached.index;
-      throw new Error(`The deployed precon catalog is missing and the browser could not read MTGJSON directly. Re-run the GitHub Pages workflow. ${localError.message}`);
-    }
-  }
-}
-
-function deckFileCandidates(fileName) {
-  const clean = String(fileName || '').trim().replace(/^\/+/, '');
-  const withExtension = clean.toLowerCase().endsWith('.json') ? clean : `${clean}.json`;
-  const encoded = withExtension.split('/').map(encodeURIComponent).join('/');
-  return MTGJSON_DECK_BASE_URLS.flatMap((base) => [
-    `${base}/${encoded}`,
-    `${base}/${withExtension}`,
-  ]);
-}
-
-function normalizeDeckPayload(payload, entry) {
-  const deck = payload?.data || payload;
-  if (!deck || typeof deck !== 'object') throw new Error('The deck response had an unsupported format.');
-
-  // GitHub Actions publishes already-normalized same-origin deck files.
-  if (Array.isArray(deck.entries) && deck.entries.some((card) => card?.name)) {
-    return {
-      name: deck.name || entry.name,
-      entries: deck.entries
-        .filter((card) => card?.name)
-        .map((card) => ({
-          name: card.name,
-          count: Math.max(1, Number(card.count || 1)),
-          ...(card.scryfallId ? { scryfallId: card.scryfallId } : {}),
-          ...(card.scryfallOracleId ? { scryfallOracleId: card.scryfallOracleId } : {}),
-          ...(card.faceName ? { faceName: card.faceName } : {}),
-        })),
-      commanderNames: Array.isArray(deck.commanderNames) ? deck.commanderNames.filter(Boolean) : [],
-      releaseDate: deck.releaseDate || entry.releaseDate || '',
-      type: deck.type || entry.type || '',
-    };
-  }
-
-  const commanderBoard = deck.commander || deck.commanders || [];
-  const mainBoard = deck.mainBoard || deck.mainboard || deck.main || deck.cards || [];
-  const sideBoard = deck.sideBoard || deck.sideboard || [];
-  const commanderNames = commanderBoard
-    .filter((card) => card?.name)
-    .flatMap((card) => Array(Math.max(1, Number(card.count ?? card.quantity ?? card.qty ?? 1))).fill(card.name));
-
-  const cardsByName = new Map();
-  // Some MTGJSON products place relevant cards in sideBoard, so use it only if
-  // the main board is unexpectedly empty.
-  const board = mainBoard.length ? mainBoard : sideBoard;
-  for (const card of board) {
-    if (!card?.name) continue;
-    const count = Math.max(1, Number(card.count ?? card.quantity ?? card.qty ?? 1));
-    const key = canonicalCardName(card.name);
-    const identifiers = card.identifiers || {};
-    const prior = cardsByName.get(key) || {
-      name: card.name,
-      count: 0,
-      scryfallId: identifiers.scryfallId || '',
-      scryfallOracleId: identifiers.scryfallOracleId || '',
-      faceName: card.faceName || '',
-    };
-    prior.count += count;
-    prior.scryfallId ||= identifiers.scryfallId || '';
-    prior.scryfallOracleId ||= identifiers.scryfallOracleId || '';
-    prior.faceName ||= card.faceName || '';
-    cardsByName.set(key, prior);
-  }
-  for (const commander of commanderNames) {
-    const key = canonicalCardName(commander);
-    if (!cardsByName.has(key)) cardsByName.set(key, { name: commander, count: 1 });
-  }
-  if (!cardsByName.size) throw new Error('The deck file contained no readable cards.');
-
-  return {
-    name: deck.name || entry.name,
-    entries: [...cardsByName.values()].map((card) => ({
-      name: card.name,
-      count: card.count,
-      ...(card.scryfallId ? { scryfallId: card.scryfallId } : {}),
-      ...(card.scryfallOracleId ? { scryfallOracleId: card.scryfallOracleId } : {}),
-      ...(card.faceName ? { faceName: card.faceName } : {}),
-    })),
-    commanderNames,
-    releaseDate: deck.releaseDate || entry.releaseDate || '',
-    type: deck.type || entry.type || '',
-  };
-}
-
-function matchingFreshEntry(index, entry) {
-  const code = String(entry.code || '').toLocaleLowerCase();
-  const name = String(entry.name || '').toLocaleLowerCase();
-  return index.find((item) => code && String(item.code || '').toLocaleLowerCase() === code && String(item.name || '').toLocaleLowerCase() === name)
-    || index.find((item) => String(item.name || '').toLocaleLowerCase() === name)
-    || null;
-}
-
-export async function fetchPreconDeck(entry) {
-  const payloadCache = readCache(DECK_PAYLOAD_CACHE_KEY);
-  const cacheKey = `${entry.code || ''}|${entry.name || ''}`.toLocaleLowerCase();
-
-  if (entry.localFile) {
-    try {
-      const payload = await fetchLocalJson(`${LOCAL_PRECON_BASE_URL}/${encodeURIComponent(entry.localFile)}?v=5`);
-      const normalized = normalizeDeckPayload(payload, entry);
-      payloadCache[cacheKey] = { deck: normalized, updatedAt: Date.now(), fileName: entry.fileName, source: 'local' };
-      writeCache(DECK_PAYLOAD_CACHE_KEY, payloadCache);
-      return normalized;
-    } catch (localError) {
-      const cachedDeck = payloadCache[cacheKey]?.deck;
-      if (cachedDeck?.entries?.length) return cachedDeck;
-      throw new Error(`The bundled deck file for ${entry.name} could not be read. Re-run the GitHub Pages workflow. ${localError.message}`);
-    }
-  }
-
-  const attemptEntry = async (candidateEntry) => {
-    const { payload } = await fetchJsonFromCandidates(deckFileCandidates(candidateEntry.fileName), { attempts: 2 });
-    const normalized = normalizeDeckPayload(payload, candidateEntry);
-    payloadCache[cacheKey] = { deck: normalized, updatedAt: Date.now(), fileName: candidateEntry.fileName, source: 'remote' };
-    writeCache(DECK_PAYLOAD_CACHE_KEY, payloadCache);
-    return normalized;
-  };
-
-  try {
-    return await attemptEntry(entry);
-  } catch (firstError) {
-    try {
-      const freshIndex = await fetchPreconIndex(true);
-      const freshEntry = matchingFreshEntry(freshIndex, entry);
-      if (freshEntry?.localFile) return fetchPreconDeck(freshEntry);
-      if (freshEntry) return await attemptEntry(freshEntry);
-    } catch { /* use cached deck or original error below */ }
-
-    const cachedDeck = payloadCache[cacheKey]?.deck;
-    if (cachedDeck?.entries?.length) return cachedDeck;
-    throw new Error(`${firstError.message} Try Search again to refresh the precon list, or paste the decklist manually.`);
-  }
-}
+test('strict legality uses untapped sources only in auto-pay mode', () => {
+  const state = createInitialState();
+  state.phaseIndex = 3;
+  const island = land('Island', '{T}: Add {U}.', 'Basic Land — Island');
+  const spell = card({ instanceId: 'cast-me', name: 'Blue Permanent', manaCost: '{U}', typeLine: 'Creature — Wizard', owner: 'p1' });
+  state.players.p1.zones.battlefield.push(island);
+  state.players.p1.zones.hand.push(spell);
+  const source = { card: spell, playerId: 'p1', zone: 'hand' };
+  state.settings.manaMode = 'manual';
+  assert.equal(moveLegality(state, spell, source, 'p1', 'battlefield').legal, false);
+  state.settings.manaMode = 'auto';
+  assert.equal(moveLegality(state, spell, source, 'p1', 'battlefield').legal, true);
+});

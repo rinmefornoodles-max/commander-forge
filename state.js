@@ -22,12 +22,16 @@ export function createPlayer(id, name) {
 export function createInitialState() {
   const players = { p1: createPlayer('p1', 'Player 1'), p2: createPlayer('p2', 'Player 2') };
   return {
-    version: 4,
+    version: 5,
     players,
     activePlayerId: 'p1',
     turnNumber: 1,
     phaseIndex: 0,
     stack: [],
+    priorityPlayerId: 'p1',
+    consecutivePasses: 0,
+    pendingTriggers: [],
+    eventQueue: [],
     selected: null,
     log: [],
     knowledge: createKnowledgeState(Object.keys(players)),
@@ -59,15 +63,23 @@ function normalizeCardShape(card) {
   card.notes ||= '';
   card.attachedTo ||= null;
   card.attachments ||= [];
+  card.damageMarked = Number(card.damageMarked || 0);
+  card.deathtouchDamaged = Boolean(card.deathtouchDamaged);
+  card.continuousEffects ||= [];
   return card;
 }
 
 function ensureStateShape(next) {
-  next.version = 4;
+  next.version = 5;
   const previousSettings = next.settings || {};
-  next.settings = { ...DEFAULT_SETTINGS, ...previousSettings, manaAutomationV3: true, coachInformationSetV4: true };
-  if (!previousSettings.coachInformationSetV4 && Number(previousSettings.coachRollouts || 0) === 450) next.settings.coachRollouts = 240;
+  next.settings = { ...DEFAULT_SETTINGS, ...previousSettings, manaAutomationV3: true, coachInformationSetV4: true, coachTacticalV5: true };
+  if (!previousSettings.coachInformationSetV4 && Number(previousSettings.coachRollouts || 0) === 450) next.settings.coachRollouts = 120;
+  if (!previousSettings.coachTacticalV5 && Number(previousSettings.coachRollouts || 0) > 100) next.settings.coachRollouts = 80;
   next.stack ||= [];
+  next.priorityPlayerId = next.players?.[next.priorityPlayerId] ? next.priorityPlayerId : (next.activePlayerId || 'p1');
+  next.consecutivePasses = Number(next.consecutivePasses || 0);
+  next.pendingTriggers ||= [];
+  next.eventQueue ||= [];
   next.log ||= [];
   next.turnNumber ||= 1;
   next.phaseIndex ||= 0;
@@ -140,7 +152,7 @@ export function restore() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return false;
     const parsed = JSON.parse(raw);
-    if (![2, 3, 4].includes(parsed.version)) return false;
+    if (![2, 3, 4, 5].includes(parsed.version)) return false;
     const previousSettings = parsed.settings || {};
     parsed.settings = { ...DEFAULT_SETTINGS, ...previousSettings };
     if (!previousSettings.manaAutomationV3) parsed.settings.manaMode = 'auto';
@@ -151,7 +163,7 @@ export function restore() {
 }
 
 export function importState(imported) {
-  if (!imported || ![2, 3, 4].includes(imported.version) || !imported.players) throw new Error('This is not a compatible Commander Forge save file.');
+  if (!imported || ![2, 3, 4, 5].includes(imported.version) || !imported.players) throw new Error('This is not a compatible Commander Forge save file.');
   history = [];
   state = ensureStateShape(imported);
   persist();

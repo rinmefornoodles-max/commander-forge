@@ -1,3 +1,7 @@
+# The Commander Forge — Tactical Coach Base 5.0
+
+This synchronized release adds a shared tactical rules/search engine, 3-ply sequence analysis, common special-cost support, card-level combat, and commander/deck strategy profiles. See `TACTICAL_COACH_BASE.md`.
+
 # The Commander Forge — Skilled Public-Information Coach
 
 A two-seat digital Commander practice table for GitHub Pages. Both seats can be controlled manually, while the coach reasons like a skilled player with perfect memory of public information and no access to hidden opponent cards.

@@ -1,29 +1,20 @@
-THE COMMANDER FORGE — SPLIT/MULTI-FACE CARD FIX
+THE COMMANDER FORGE — TACTICAL COACH BASE 5.0
 
-This fixes errors such as:
-Missing card data: Commit // Memory
+1. Extract this ZIP.
+2. Open the main Code page of your GitHub commander-forge repository.
+3. Choose Add file -> Upload files.
+4. Drag EVERYTHING inside the extracted folder into the repository.
+5. Allow matching files to be replaced.
+6. Commit directly to main.
+7. Open Actions and wait for Deploy The Commander Forge to turn green.
+8. Hard-refresh the website or clear its stored site data.
 
-Upload all five code files in this folder to the TOP LEVEL of your GitHub repository:
-- api.js
-- main.js
-- constants.js
-- sw.js
-- build_precons.py
+This is a complete synchronized build. Do not upload only coach.js or rules.js.
 
-They should replace the files with the same names.
+A correct deployment runs:
+- Build same-origin official precon catalog
+- Run trainer and coach tests
+- Deploy website
 
-Keep:
-.github/workflows/main.yml
-
-After committing:
-1. Open GitHub Actions.
-2. Wait for Deploy The Commander Forge to finish with a green check.
-3. Confirm the run includes “Build same-origin official precon catalog.”
-4. Reopen the website and hard-refresh it.
-
-What changed:
-- Precon files now preserve Scryfall card IDs and Oracle IDs from MTGJSON.
-- Split, transform, meld, adventure, and other multi-face cards are matched by ID.
-- If an ID is unavailable, the app retries exact and fuzzy Scryfall name lookups.
-- Precon search shows up to 100 matching results instead of 30.
-- Old precon/card caches are versioned out so stale missing-card results are not reused.
+The package includes the .github workflow, existing precon fixes, playmat,
+custom decks, public memory, auto-mana, and the new tactical coach engine.

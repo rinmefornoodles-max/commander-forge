@@ -1,0 +1,22 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+test('main application renders initial Commander Forge shell', async () => {
+  const app = { innerHTML: '', addEventListener() {} };
+  const toast = { append() {} };
+  globalThis.document = {
+    querySelector(selector) { if (selector === '#app') return app; if (selector === '#toast-root') return toast; return null; },
+    addEventListener() {},
+    createElement() { return { style: {}, classList: { add() {}, remove() {} }, append() {}, remove() {}, click() {} }; },
+    body: { append() {}, classList: { add() {}, remove() {} } },
+  };
+  globalThis.window = globalThis;
+  globalThis.localStorage = { data: new Map(), getItem(key) { return this.data.get(key) || null; }, setItem(key, value) { this.data.set(key, String(value)); } };
+  Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true });
+  Object.defineProperty(globalThis, 'location', { value: { protocol: 'file:' }, configurable: true });
+  globalThis.requestAnimationFrame = (fn) => fn();
+  globalThis.confirm = () => true;
+  await import(`../main.js?smoke=${Date.now()}`);
+  assert.match(app.innerHTML, /The Commander Forge/);
+  assert.match(app.innerHTML, /Set up the Commander table/);
+});

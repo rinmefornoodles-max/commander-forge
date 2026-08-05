@@ -1,7 +1,7 @@
 import { PHASES, ZONE_LABELS } from './constants.js';
 import { drawCards, findCard, updateState } from './state.js';
 import { recordPublicEvent, recordTurnPass, recordZoneTransition } from './knowledge.js';
-import { attackLegality, moveLegality, planManaPayment, spendMana, stackDestination } from './rules.js';
+import { applySpellPayment, attackLegality, landEntryPlan, moveLegality, spellCastLegality, stackDestination } from './rules.js';
 import { deepClone, formatManaBundle, isCreature, isLand, manaProductionChoices, shuffle, uid } from './utils.js';
 
 function otherPlayerId(state, playerId) {
@@ -29,22 +29,16 @@ export function moveCard(instanceId, targetPlayerId, targetZone, { force = false
     && (targetZone === 'stack' || (targetZone === 'battlefield' && !isLand(source.card)));
   const tax = source.zone === 'command' ? 2 * (targetPlayer.commanderCastCount[source.card.instanceId] || 0) : 0;
   let autoPlan = null;
-  let legalityState = currentState;
+  const legalityState = currentState;
+  const landPlan = source.zone === 'hand' && targetZone === 'battlefield' && isLand(source.card)
+    ? landEntryPlan(source.card, targetPlayer, { opponentCount: Math.max(1, Object.keys(currentState.players).length - 1), payLife: 'auto' })
+    : null;
 
-  if (castAttempt && currentState.settings.manaMode === 'auto') {
-    autoPlan = planManaPayment(targetPlayer, source.card.manaCost, tax);
-    if (autoPlan.ok && autoPlan.sources.length) {
-      legalityState = deepClone(currentState);
-      const projected = legalityState.players[targetPlayerId];
-      for (const item of autoPlan.sources) {
-        const manaSource = findCard(item.instanceId, legalityState);
-        if (!manaSource || manaSource.zone !== 'battlefield' || manaSource.card.tapped) continue;
-        manaSource.card.tapped = true;
-        for (const color of ['W', 'U', 'B', 'R', 'G', 'C']) {
-          projected.mana[color] = Number(projected.mana[color] || 0) + Number(item.mana?.[color] || 0);
-        }
-      }
-    }
+  if (castAttempt) {
+    const castLegality = spellCastLegality(currentState, targetPlayerId, source.card, source.zone, {
+      useUntappedSources: currentState.settings.manaMode === 'auto',
+    });
+    autoPlan = castLegality.payment;
   }
 
   const legality = moveLegality(legalityState, source.card, source, targetPlayerId, targetZone);
@@ -62,6 +56,9 @@ export function moveCard(instanceId, targetPlayerId, targetZone, { force = false
   const autoManaText = autoPlan?.sources?.length
     ? ` Auto-paid by tapping ${autoPlan.sources.map((item) => `${item.name} for ${item.label || formatManaBundle(item.mana)}`).join(', ')}.`
     : '';
+  const landEntryText = landPlan
+    ? ` ${landPlan.tapped ? 'Entered tapped' : 'Entered untapped'}${landPlan.lifePaid ? ` after paying ${landPlan.lifePaid} life` : ''}.`
+    : '';
 
   updateState((draft) => {
     const located = findCard(instanceId, draft);
@@ -70,38 +67,30 @@ export function moveCard(instanceId, targetPlayerId, targetZone, { force = false
     const destinationPlayer = draft.players[targetPlayerId];
     const originalZone = located.zone;
 
-    if (castAttempt && autoPlan?.ok) {
-      for (const item of autoPlan.sources) {
-        const manaSource = findCard(item.instanceId, draft);
-        if (!manaSource || manaSource.zone !== 'battlefield' || manaSource.card.tapped) continue;
-        manaSource.card.tapped = true;
-        for (const color of ['W', 'U', 'B', 'R', 'G', 'C']) {
-          destinationPlayer.mana[color] = Number(destinationPlayer.mana[color] || 0) + Number(item.mana?.[color] || 0);
-        }
-      }
-    }
+    if (castAttempt && autoPlan?.ok) applySpellPayment(draft, targetPlayerId, autoPlan);
 
     if (targetZone === 'stack') {
       card.controller = targetPlayerId;
       card.attacking = false;
       if (['hand', 'command'].includes(originalZone)) {
-        const commanderTax = originalZone === 'command' ? 2 * (destinationPlayer.commanderCastCount[card.instanceId] || 0) : 0;
-        destinationPlayer.mana = spendMana(destinationPlayer.mana, card.manaCost, commanderTax);
         if (originalZone === 'command') destinationPlayer.commanderCastCount[card.instanceId] = (destinationPlayer.commanderCastCount[card.instanceId] || 0) + 1;
       }
       draft.stack.push(card);
+      draft.priorityPlayerId = targetPlayerId;
+      draft.consecutivePasses = 0;
     } else {
       card.controller = targetPlayerId;
       card.attacking = false;
       if (targetZone === 'battlefield') {
         if (isLand(card) && originalZone === 'hand') destinationPlayer.landPlaysThisTurn += 1;
         if (!isLand(card) && ['hand', 'command'].includes(originalZone)) {
-          const commanderTax = originalZone === 'command' ? 2 * (destinationPlayer.commanderCastCount[card.instanceId] || 0) : 0;
-          destinationPlayer.mana = spendMana(destinationPlayer.mana, card.manaCost, commanderTax);
-          if (originalZone === 'command') destinationPlayer.commanderCastCount[card.instanceId] = (destinationPlayer.commanderCastCount[card.instanceId] || 0) + 1;
+              if (originalZone === 'command') destinationPlayer.commanderCastCount[card.instanceId] = (destinationPlayer.commanderCastCount[card.instanceId] || 0) + 1;
         }
         card.summoningSick = isCreature(card);
-        card.tapped = false;
+        if (isLand(card) && originalZone === 'hand' && landPlan) {
+          card.tapped = Boolean(landPlan.tapped);
+          destinationPlayer.life -= Number(landPlan.lifePaid || 0);
+        } else card.tapped = false;
       } else {
         card.summoningSick = false;
         card.tapped = false;
@@ -122,7 +111,7 @@ export function moveCard(instanceId, targetPlayerId, targetZone, { force = false
       castAttempt,
     });
     draft.selected = { instanceId: card.instanceId };
-  }, { log: `${source.card.name}: ${ZONE_LABELS[source.zone]} → ${ZONE_LABELS[targetZone]}.${autoManaText}` });
+  }, { log: `${source.card.name}: ${ZONE_LABELS[source.zone]} → ${ZONE_LABELS[targetZone]}.${autoManaText}${landEntryText}` });
   return { ok: true, message: autoManaText ? autoManaText.trim() : 'Card moved.' };
 }
 
@@ -352,6 +341,8 @@ export function nextPhase() {
         card.blocking = null;
         card.blockedBy = [];
         card.summoningSick = false;
+        card.damageMarked = 0;
+        card.deathtouchDamaged = false;
       });
       Object.values(active.mana).forEach((_, key) => key);
       active.mana = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
@@ -384,6 +375,8 @@ export function resolveStackTop() {
       resolved.summoningSick = isCreature(resolved);
       draft.players[resolved.controller].zones.battlefield.push(resolved);
     } else draft.players[resolved.owner].zones.graveyard.push(resolved);
+    draft.priorityPlayerId = draft.activePlayerId;
+    draft.consecutivePasses = 0;
     recordPublicEvent(draft, {
       type: 'resolved',
       actorId: resolved.controller,
@@ -408,6 +401,8 @@ export function counterStackTop() {
     const countered = draft.stack.pop();
     const destination = toCommand ? 'command' : 'graveyard';
     draft.players[countered.owner].zones[destination].push(countered);
+    draft.priorityPlayerId = draft.activePlayerId;
+    draft.consecutivePasses = 0;
     recordPublicEvent(draft, {
       type: 'countered',
       actorId: countered.controller,

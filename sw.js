@@ -1,5 +1,5 @@
-const CACHE = 'commander-forge-shell-v7-information-set-coach';
-const ASSETS = ['./', './index.html', './styles.css', './main.js', './constants.js', './utils.js', './api.js', './state.js', './rules.js', './game.js', './coach.js', './knowledge.js', './card-evaluation.js', './forge-mark.svg', './card-back.svg', './demo-card.svg', './token.svg'];
+const CACHE = 'commander-forge-shell-v9-tactical-coach-base';
+const ASSETS = ['./', './index.html', './styles.css', './main.js', './constants.js', './utils.js', './api.js', './state.js', './rules.js', './game.js', './coach.js', './knowledge.js', './card-evaluation.js', './tactical-engine.js', './strategy-profile.js', './forge-mark.svg', './card-back.svg', './demo-card.svg', './token.svg'];
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();

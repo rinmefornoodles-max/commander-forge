@@ -1,8 +1,10 @@
 import { PHASES } from './constants.js';
 import { cardTraits, canBlock, combatOutcome, combatTradeScore, effectiveStats, permanentValue, publicCardSnapshot } from './card-evaluation.js';
 import { ensureKnowledge, knownHandCards, publicMemorySummary, visibleManaSnapshot } from './knowledge.js';
-import { attackLegality, planManaPayment, spendMana } from './rules.js';
+import { attackLegality, landEntryPlan, landPlayLegality, manaDevelopmentSnapshot, planManaPayment, spendMana, spellCastLegality, strategicPaymentColors } from './rules.js';
 import { clamp, deepClone, isCreature, isLand, isPermanent, manaProductionChoices, numericStat, totalMana } from './utils.js';
+import { applyTacticalAction, generateShortSequences, generateTacticalActions, tacticalStateScore } from './tactical-engine.js';
+import { actionStrategyBonus, buildStrategyProfile, strategyLabel } from './strategy-profile.js';
 
 const COLORS = ['W', 'U', 'B', 'R', 'G', 'C'];
 const INTERACTION_MODELS = {
@@ -170,49 +172,9 @@ function simulationStateFromInformationSet(state, info) {
 }
 
 export function possibleMoves(state, playerId = state.activePlayerId) {
-  const player = state.players[playerId];
-  const opponentId = otherPlayerId(state, playerId);
-  const moves = [];
-  const phase = phaseId(state);
-
-  if (['untap', 'upkeep', 'draw'].includes(phase) && player.landPlaysThisTurn < 1) {
-    const openingLand = player.zones.hand.find((card) => isLand(card));
-    if (openingLand) moves.push({ type: 'advance-land', cardId: openingLand.instanceId, label: `Advance to Main 1 → play ${openingLand.name}` });
-    else moves.push({ type: 'advance-phase', label: 'Advance toward Main 1' });
-  }
-
-  for (const card of player.zones.hand) {
-    if (isLand(card)) {
-      if (['main1', 'main2'].includes(phase) && player.landPlaysThisTurn < 1) moves.push({ type: 'play-land', cardId: card.instanceId, label: `Play ${card.name}` });
-      continue;
-    }
-    const traits = cardTraits(card);
-    const instantSpeed = traits.instant || traits.flash;
-    if ((['main1', 'main2'].includes(phase) || instantSpeed) && planManaPayment(player, card.manaCost, 0).ok) {
-      moves.push({ type: isPermanent(card) ? 'cast-permanent' : 'cast-spell', cardId: card.instanceId, label: `Cast ${card.name}` });
-    }
-  }
-
-  for (const card of player.zones.command) {
-    const tax = 2 * (player.commanderCastCount[card.instanceId] || 0);
-    if ((['main1', 'main2'].includes(phase) || cardTraits(card).flash) && planManaPayment(player, card.manaCost, tax).ok) {
-      moves.push({ type: 'cast-commander', cardId: card.instanceId, label: `Cast ${card.name}${tax ? ` (+${tax} tax)` : ''}` });
-    }
-  }
-
-  for (const card of player.zones.battlefield) {
-    const traits = cardTraits(card);
-    if (traits.activatedAbility && (!traits.tapAbility || !card.tapped)) {
-      moves.push({ type: 'activate-ability', cardId: card.instanceId, label: `Activate ${card.name}` });
-    }
-  }
-
-  addCastSequences(state, playerId, moves);
-  addLandCastSequences(state, playerId, moves);
-  addAttackMoves(state, playerId, opponentId, moves);
-
-  moves.push({ type: 'hold', label: 'Pass / hold resources' });
-  return dedupeMoves(moves).slice(0, 34);
+  const immediate = generateTacticalActions(state, playerId, { limit: 24 });
+  const sequences = generateShortSequences(state, playerId, { depth: 3, beamWidth: 10, limit: 8 });
+  return dedupeMoves([...immediate, ...sequences]).slice(0, 28);
 }
 
 function dedupeMoves(moves) {
@@ -253,7 +215,8 @@ function addLandCastSequences(state, playerId, moves) {
     for (const card of simulation.players[playerId].zones.hand.filter((item) => !isLand(item)).slice(0, 12)) {
       const traits = cardTraits(card);
       if (!['main1', 'main2'].includes(phase) && landMove.type !== 'advance-land' && !(traits.instant || traits.flash)) continue;
-      const castMove = { type: isPermanent(card) ? 'cast-permanent' : 'cast-spell', cardId: card.instanceId, label: `Cast ${card.name}` };
+      const paymentPlan = planManaPayment(simulation.players[playerId], card.manaCost || '', 0, { preserveColors: strategicPaymentColors(simulation.players[playerId], card.instanceId), maxNodes: 10000 });
+      const castMove = { type: isPermanent(card) ? 'cast-permanent' : 'cast-spell', cardId: card.instanceId, paymentPlan, label: `Cast ${card.name}` };
       if (!canApplyMove(simulation, playerId, castMove)) continue;
       moves.push({ type: 'sequence', steps: [landMove, castMove], label: `${landMove.label} → Cast ${card.name}` });
       if (moves.filter((move) => move.type === 'sequence').length >= 12) return;
@@ -479,31 +442,51 @@ function findSimCard(player, instanceId) {
   return null;
 }
 
+function paymentPlanUsable(player, card, tax, paymentPlan) {
+  if (!paymentPlan?.ok) return false;
+  const working = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0, ...(player.mana || {}) };
+  for (const source of paymentPlan.sources || []) {
+    const found = findSimCard(player, source.instanceId);
+    if (!found || found.zone !== 'battlefield' || found.card.tapped) return false;
+    for (const color of COLORS) working[color] = Number(working[color] || 0) + Number(source.mana?.[color] || 0);
+  }
+  return planManaPayment({ ...player, mana: working, zones: { ...player.zones, battlefield: [] } }, card.manaCost || '', tax, { maxNodes: 100 }).ok;
+}
+
 function canApplyMove(draft, playerId, move) {
   const player = draft.players[playerId];
-  if (move.type === 'sequence') return (move.steps || []).every((step) => canApplyMove(draft, playerId, step));
+  if (move.type === 'sequence') {
+    const preview = deepClone(draft);
+    return (move.steps || []).every((step) => applyMoveToDraft(preview, playerId, step).ok);
+  }
   if (['play-land', 'advance-land'].includes(move.type)) {
     const found = findSimCard(player, move.cardId);
     return Boolean(found?.zone === 'hand' && isLand(found.card) && player.landPlaysThisTurn < 1);
   }
   if (['cast-permanent', 'cast-spell'].includes(move.type)) {
     const found = findSimCard(player, move.cardId);
-    return Boolean(found?.zone === 'hand' && planManaPayment(player, found.card.manaCost, 0).ok);
+    if (!found || found.zone !== 'hand') return false;
+    if (paymentPlanUsable(player, found.card, 0, move.paymentPlan)) return true;
+    return planManaPayment(player, found.card.manaCost, 0, { preserveColors: strategicPaymentColors(player, found.card.instanceId), maxNodes: 5000 }).ok;
   }
   if (move.type === 'cast-commander') {
     const found = findSimCard(player, move.cardId);
     const tax = found ? 2 * Number(player.commanderCastCount[found.card.instanceId] || 0) : 0;
-    return Boolean(found?.zone === 'command' && planManaPayment(player, found.card.manaCost, tax).ok);
+    if (!found || found.zone !== 'command') return false;
+    if (paymentPlanUsable(player, found.card, tax, move.paymentPlan)) return true;
+    return planManaPayment(player, found.card.manaCost, tax, { preserveColors: strategicPaymentColors(player, found.card.instanceId), maxNodes: 5000 }).ok;
   }
   return true;
 }
 
-function payApproximateMana(player, card, tax = 0) {
-  const plan = planManaPayment(player, card.manaCost || '', tax);
+function payApproximateMana(player, card, tax = 0, preferredPlan = null) {
+  const plan = paymentPlanUsable(player, card, tax, preferredPlan)
+    ? preferredPlan
+    : planManaPayment(player, card.manaCost || '', tax, { preserveColors: strategicPaymentColors(player, card.instanceId), maxNodes: 5000 });
   if (!plan.ok) return false;
   for (const source of plan.sources || []) {
     const found = findSimCard(player, source.instanceId);
-    if (!found || found.card.tapped) continue;
+    if (!found || found.card.tapped) return false;
     found.card.tapped = true;
     for (const color of COLORS) player.mana[color] = Number(player.mana[color] || 0) + Number(source.mana?.[color] || 0);
   }
@@ -533,9 +516,13 @@ function applyMoveToDraft(draft, playerId, move) {
     const found = findSimCard(player, move.cardId);
     if (!found || found.zone !== 'hand' || !isLand(found.card) || player.landPlaysThisTurn >= 1) return { ok: false };
     const card = found.cards.splice(found.index, 1)[0];
+    const entry = move.entryPlan || landEntryPlan(card, player, { opponentCount: Math.max(1, Object.keys(draft.players).length - 1), payLife: 'auto' });
+    card.tapped = Boolean(entry.tapped);
+    player.life -= Number(entry.lifePaid || 0);
     player.zones.battlefield.push(card);
     player.landPlaysThisTurn += 1;
     draft._coach.newPermanents.push(card.instanceId);
+    draft._coach.actionNotes.push(`${card.name} entered ${card.tapped ? 'tapped' : 'untapped'}${entry.lifePaid ? ` after paying ${entry.lifePaid} life` : ''}`);
     return { ok: true };
   }
   if (['cast-permanent', 'cast-spell', 'cast-commander'].includes(move.type)) {
@@ -543,7 +530,7 @@ function applyMoveToDraft(draft, playerId, move) {
     const found = findSimCard(player, move.cardId);
     if (!found || found.zone !== sourceZone) return { ok: false };
     const tax = sourceZone === 'command' ? 2 * Number(player.commanderCastCount[found.card.instanceId] || 0) : 0;
-    if (!payApproximateMana(player, found.card, tax)) return { ok: false };
+    if (!payApproximateMana(player, found.card, tax, move.paymentPlan)) return { ok: false };
     const card = found.cards.splice(found.index, 1)[0];
     draft._coach.castCards.push(card.instanceId);
     draft._coach.lastCastCardId = card.instanceId;
@@ -806,6 +793,19 @@ function strategicAdjustment(state, playerId, move, risk) {
   if (move.type === 'sequence') adjustment += 0.8;
   if (move.type === 'attack') adjustment += (move.cardIds || []).reduce((sum, id) => sum + Math.max(-2, visibleAttackValue(state, playerId, cardById(state, id)) * 0.45), 0);
 
+  const paymentPlans = move.type === 'sequence'
+    ? (move.steps || []).map((step) => step.paymentPlan).filter(Boolean)
+    : [move.paymentPlan].filter(Boolean);
+  for (const plan of paymentPlans) {
+    if (plan.preservedColors?.length) adjustment += Math.min(1.2, plan.preservedColors.length * 0.35);
+    if (playerHasUsefulInstant(player) && plan.sources?.length && !plan.preservedColors?.length) adjustment -= 0.65;
+  }
+  const landEntries = move.type === 'sequence'
+    ? (move.steps || []).filter((step) => ['play-land', 'advance-land'].includes(step.type)).map((step) => step.entryPlan)
+    : (['play-land', 'advance-land'].includes(move.type) ? [move.entryPlan] : []);
+  if (landEntries.some((entry) => entry?.tapped)) adjustment -= earlyTurn ? 0.8 : 0.35;
+  if (landEntries.some((entry) => entry && !entry.tapped)) adjustment += 0.45;
+
   const boardWipeRisk = risk.categories.boardWipe.probability;
   if (['cast-permanent', 'cast-commander', 'sequence'].includes(move.type) && boardWipeRisk > 0.28) {
     const newCreatureCount = cards.filter(isCreature).length;
@@ -862,7 +862,9 @@ function playerScore(player, opponent, virtual = 0) {
   for (const card of player.zones.exile) {
     if (/cast .* from exile|play .* from exile|suspend|foretell|adventure/i.test(card.oracleText || '')) score += 0.35;
   }
-  score += estimatedManaCapacity(player) * 0.55;
+  const mana = manaDevelopmentSnapshot(player);
+  score += mana.nextTurn * 0.48 + mana.available * 0.24 + mana.colors.length * 0.10;
+  if (playerHasUsefulInstant(player) && mana.available > 0) score += 0.55;
   const highestCommanderDamage = Math.max(0, ...Object.values(player.commanderDamage || {}).map(Number));
   score -= highestCommanderDamage * 0.68;
   if (player.life <= 0 || player.poison >= 10 || highestCommanderDamage >= 21 || player.lost) score -= 1000;
@@ -876,7 +878,16 @@ function boardScore(state, playerId) {
 }
 
 function estimatedManaCapacity(player) {
-  return visibleManaSnapshot(player).total;
+  return manaDevelopmentSnapshot(player).available;
+}
+
+function rulesAwareResourceAdjustment(state, playerId) {
+  const opponentId = otherPlayerId(state, playerId);
+  const ours = manaDevelopmentSnapshot(state.players[playerId]);
+  const theirs = manaDevelopmentSnapshot(state.players[opponentId]);
+  return (ours.available - theirs.available) * 0.10
+    + (ours.nextTurn - theirs.nextTurn) * 0.08
+    + (ours.untappedSourceCount - theirs.untappedSourceCount) * 0.08;
 }
 
 function moveExposure(move, risk) {
@@ -915,8 +926,17 @@ function visibleReasonsForMove(state, playerId, move) {
   const player = state.players[playerId];
   const opponent = state.players[otherPlayerId(state, playerId)];
   const reasons = [];
-  if (['play-land', 'advance-land'].includes(move.type)) reasons.push('Makes the normal land drop and permanently increases future mana without spending mana.');
-  if (move.type === 'sequence') reasons.push('Uses sequencing rather than evaluating each spell in isolation.');
+  if (['play-land', 'advance-land'].includes(move.type)) {
+    reasons.push('Makes the normal land drop and permanently increases future mana without spending mana.');
+    if (move.entryPlan?.tapped) reasons.push(`${cardById(state, move.cardId)?.name || 'The land'} enters tapped, so it will not produce mana this turn.`);
+    else reasons.push(`${cardById(state, move.cardId)?.name || 'The land'} is available as an untapped mana source this turn.`);
+  }
+  if (move.type === 'sequence') reasons.push('Uses sequencing and the exact remaining untapped mana sources rather than evaluating each spell in isolation.');
+  const plans = move.type === 'sequence' ? (move.steps || []).map((step) => step.paymentPlan).filter(Boolean) : [move.paymentPlan].filter(Boolean);
+  for (const plan of plans.slice(0, 2)) {
+    if (plan.sources?.length) reasons.push(`Payment taps ${plan.sources.map((source) => `${source.name} for ${source.label}`).join(', ')}.`);
+    if (plan.preservedColors?.length) reasons.push(`The payment leaves ${plan.preservedColors.join('/')} available for visible instant-speed options.`);
+  }
   for (const card of moveCards(state, move)) {
     const traits = cardTraits(card);
     const abilities = [];
@@ -986,21 +1006,24 @@ function evaluateMove(state, info, risk, playerId, move, rollouts, seed) {
   const scores = [];
   const responseCounts = {};
   const baseSimulation = simulationStateFromInformationSet(state, info);
+  const profile = buildStrategyProfile(state.players[playerId]);
+  const actionResult = applyTacticalAction(baseSimulation, playerId, move, { autoResolve: true });
+  if (!actionResult.ok) {
+    return {
+      ...move, score: -999, range: [-999, -999], stdev: 0, riskProbability: 1,
+      explanationDetails: explainMove(state, playerId, move, -999, risk, {}),
+    };
+  }
+  const deterministicState = actionResult.state;
   for (let i = 0; i < rollouts; i += 1) {
     const rng = mulberry32(seed + i * 2654435761 + hashString(move.label));
-    const simulated = deepClone(baseSimulation);
-    const result = applyMoveToDraft(simulated, playerId, move);
-    if (!result.ok) {
-      scores.push(-999);
-      total -= 999;
-      low = Math.min(low, -999);
-      high = Math.max(high, -999);
-      continue;
-    }
+    const simulated = deepClone(deterministicState);
     const scenario = sampleHiddenScenario(risk, rng);
     for (const category of scenario.categories) responseCounts[category] = Number(responseCounts[category] || 0) + 1;
     respondToMove(simulated, playerId, move, scenario, rng);
-    const score = boardScore(simulated, playerId) + strategicAdjustment(state, playerId, move, risk);
+    const score = tacticalStateScore(simulated, playerId, profile)
+      + strategicAdjustment(state, playerId, move, risk)
+      + actionStrategyBonus(move, state, playerId, profile);
     scores.push(score);
     total += score;
     high = Math.max(high, score);
@@ -1010,13 +1033,16 @@ function evaluateMove(state, info, risk, playerId, move, rollouts, seed) {
   const variance = scores.reduce((sum, score) => sum + (score - average) ** 2, 0) / Math.max(1, scores.length);
   const stdev = Math.sqrt(variance);
   const responseStats = Object.fromEntries(Object.entries(responseCounts).map(([key, count]) => [key, Number((count / Math.max(1, rollouts)).toFixed(3))]));
+  const explanationDetails = explainMove(state, playerId, move, average, risk, responseStats);
+  explanationDetails.strategy = `Visible plan: ${strategyLabel(profile)}.`;
+  if (!explanationDetails.visibleReasons.includes(explanationDetails.strategy)) explanationDetails.visibleReasons.push(explanationDetails.strategy);
   return {
     ...move,
     score: Number(average.toFixed(2)),
     range: [Number(low.toFixed(1)), Number(high.toFixed(1))],
     stdev: Number(stdev.toFixed(2)),
     riskProbability: moveExposure(move, risk),
-    explanationDetails: explainMove(state, playerId, move, average, risk, responseStats),
+    explanationDetails,
   };
 }
 
@@ -1026,7 +1052,7 @@ export function analyzePosition(state, playerId = state.activePlayerId, rollouts
   const risk = buildInteractionRisk(state, playerId);
   const moves = possibleMoves(state, playerId);
   const seed = analysisSeed(state, playerId);
-  const perMoveRollouts = Math.max(60, Math.min(1600, Number(rollouts || 450)));
+  const perMoveRollouts = Math.max(40, Math.min(240, Number(rollouts || 80)));
   const results = moves.map((move) => evaluateMove(state, informationSet, risk, playerId, move, perMoveRollouts, seed));
   results.sort((a, b) => b.score - a.score);
 
@@ -1052,9 +1078,9 @@ export function analyzePosition(state, playerId = state.activePlayerId, rollouts
   return {
     moves,
     results,
-    baseline: boardScore(simulationStateFromInformationSet(state, informationSet), playerId),
+    baseline: tacticalStateScore(simulationStateFromInformationSet(state, informationSet), playerId, buildStrategyProfile(state.players[playerId])),
     rollouts: perMoveRollouts,
-    searchType: 'Information-set sampled Monte Carlo search',
+    searchType: 'Rules-aware tactical information-set Monte Carlo search (3-ply beam look-ahead)',
     informationSetAudit: informationSet.audit,
     risk,
   };

@@ -37,6 +37,14 @@ jobs:
       - name: Build same-origin official precon catalog
         run: python build_precons.py
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run trainer and coach tests
+        run: npm test
+
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
