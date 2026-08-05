@@ -1,28 +1,27 @@
-THE COMMANDER FORGE 5.21
+THE COMMANDER FORGE 5.22 — PREDEFINED TOKENS + BUTTON RELIABILITY
 
-Upload these four website files to the TOP LEVEL of your GitHub repository:
+Upload these four files to the TOP LEVEL of your GitHub repository:
 
 - index.html
-- commander-forge-5.21.0.js
-- commander-forge-5.21.0.css
+- commander-forge-5.22.0.js
+- commander-forge-5.22.0.css
 - sw.js
 
-Allow index.html and sw.js to replace the existing versions.
-Both online players must use version 5.21.0.
+Changes:
+- Replaces the one-click Treasure shortcut with a searchable Predefined Tokens browser.
+- Loads the official English token-card catalog from Scryfall and caches it for seven days.
+- Search by token name, type, rules text, or power/toughness.
+- Filters for all, creature, artifact, and other tokens.
+- Select controller, quantity, and whether tokens enter tapped.
+- Creates exact token type lines, rules text, stats, colors, keywords, images, and mana abilities.
+- Official double-faced token cards can transform with a Transform token action.
+- Custom token creation remains available.
+- Defers network/UI rerenders during an active pointer press so fast clicks are not lost.
+- Cancels stale title-screen launch callbacks when another menu option is pressed.
+- Repairs the Close button in How to Play.
 
-CHANGES
-- Restores the cleaner title screen with two main choices: Solo Practice and Online Multiplayer.
-- Removes Deck Lab and the direct Host/Join controls from the title screen.
-- Solo Practice opens only the local two-player deck setup.
-- Online Multiplayer opens only the host/join connection setup.
-- The redundant Solo/Online tabs are removed from the setup window.
-- Adds a Main menu button before a game starts.
-- Adds Create Treasure to Table Tools / Settings.
-- The Treasure is a proper artifact token with: {T}, Sacrifice this artifact: Add one mana of any color.
-- In online play, Create Treasure always creates it for the local player.
-- In solo play, it creates it for the active player.
-
-AFTER UPLOADING
+After uploading:
 1. Commit to main.
 2. Wait for GitHub Pages to turn green.
-3. Open the site in a new Incognito/Private tab first.
+3. Open the site in an Incognito/Private tab first.
+4. Both multiplayer players must use version 5.22.0.

@@ -8,7 +8,7 @@
   <title>The Commander Forge</title>
   <link rel="icon" href="./forge-mark.svg" type="image/svg+xml" />
   <link rel="manifest" href="./manifest.webmanifest" />
-  <link rel="stylesheet" href="./commander-forge-5.21.0.css" />
+  <link rel="stylesheet" href="./commander-forge-5.22.0.css" />
 </head>
 <body>
   <div id="title-screen" class="forge-title-screen" aria-label="The Commander Forge title screen">
@@ -46,7 +46,7 @@
           </div>
         </div>
         <div class="forge-title-footer">
-          <div class="forge-title-version">Version 5.21 · Cards and rules data provided by Scryfall</div>
+          <div class="forge-title-version">Version 5.22 · Cards and rules data provided by Scryfall</div>
           <div class="forge-title-legal">The Commander Forge is not affiliated with Wizards of the Coast.<br/>Magic: The Gathering is a trademark of Wizards of the Coast LLC.</div>
         </div>
       </section>
@@ -68,7 +68,7 @@
   <div id="toast-root" aria-live="assertive"></div>
   <script>
     (() => {
-      const APP_VERSION='5.21.0';
+      const APP_VERSION='5.22.0';
       const STORAGE_KEY='commander-forge-state-v2';
       const app=document.getElementById('app');
       const title=document.getElementById('title-screen');
@@ -102,14 +102,19 @@
       window.CommanderForgeTitle = { show: showTitle, hide: hideTitle };
       const openHelp = () => { help.classList.add('open'); help.setAttribute('aria-hidden','false'); };
       const closeHelp = () => { help.classList.remove('open'); help.setAttribute('aria-hidden','true'); };
-      help.addEventListener('click', (e) => { if (e.target === help) closeHelp(); });
+      help.addEventListener('click', (e) => {
+        const closeButton = e.target.closest?.('[data-title-action="close-help"]');
+        if (closeButton || e.target === help) closeHelp();
+      });
       document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeHelp(); });
 
-      function waitFor(condition, callback, timeout=12000) {
+      let titleLaunchId = 0;
+      function waitFor(condition, callback, timeout=12000, launchId=null) {
         const start = Date.now();
         const tick = () => {
           let result = null;
           try { result = condition(); } catch {}
+          if (launchId !== null && launchId !== titleLaunchId) return;
           if (result) return callback(result);
           if (Date.now() - start > timeout) return callback(null);
           setTimeout(tick, 120);
@@ -120,6 +125,7 @@
         waitFor(() => document.querySelector(selector), (el) => el && el.click(), timeout);
       }
       function launch(mode) {
+        const launchId = ++titleLaunchId;
         hideTitle();
         if (mode === 'continue') {
           clickWhenReady('[data-action="close-setup"]', 3000);
@@ -127,7 +133,7 @@
         }
         if (mode === 'solo' || mode === 'online') {
           window.__forgeSetupModeLock = mode;
-          waitFor(() => window.CommanderForgeMode?.select, (select) => select?.(mode), 6000);
+          waitFor(() => window.CommanderForgeMode?.select, (select) => select?.(mode), 6000, launchId);
           return;
         }
         if (mode === 'settings') clickWhenReady('[data-action="open-settings"]', 6000);
@@ -149,6 +155,6 @@
     })();
   </script>
   <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js" integrity="sha512-XEKeWX+mI3Ov+tg2evDlVQFzVOIp4T8J3cNcCEPaEUGpxJV3eZaN8rHuvnFPvQpGJBHPmrozJDMpm2xcDvtmyQ==" crossorigin="anonymous"></script>
-  <script defer src="./commander-forge-5.21.0.js" onerror="window.__forgeBootError('HTTP error while loading commander-forge-5.21.0.js')"></script>
+  <script defer src="./commander-forge-5.22.0.js" onerror="window.__forgeBootError('HTTP error while loading commander-forge-5.22.0.js')"></script>
 </body>
 </html>
