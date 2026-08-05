@@ -1,37 +1,30 @@
-THE COMMANDER FORGE 5.16
+THE COMMANDER FORGE 5.17 — RESPONSIVE COACH FIX
 
 Upload these four website files to the TOP LEVEL of your GitHub repository:
 
 - index.html
-- commander-forge-5.16.0.js
-- commander-forge-5.16.0.css
+- commander-forge-5.17.0.js
+- commander-forge-5.17.0.css
 - sw.js
 
 Allow index.html and sw.js to replace the existing versions.
-Both players must use version 5.16.0.
+Both multiplayer players should use version 5.17.0.
 
-MULTIPLAYER FIX
-- Replaces the size-limited PeerJS JSON channel with its binary/chunked channel.
-- Public game snapshots are compacted before transmission.
-- Hands and libraries remain counts only; their card identities and order stay local.
-- Local display settings are no longer transmitted as game state.
-- The previous “Message too big for JSON channel” failure should no longer disconnect the room.
-
-PRIVATE SCRY AND TOP-CARD EFFECTS
-- Open Library and press Scry… for a manual private scry amount.
-- Cards that say “Scry N” receive a private Scry N button in Card Actions.
-- The amount is read from the card’s Oracle text.
-- Scry cards can be kept on top or placed on the bottom in any order.
-- Top and bottom groups can be reordered before confirming.
-- Effects such as “Scry 2, then draw a card” automatically draw after the choices.
-- Common “look at the top N cards, put one into your hand” wording is detected.
-- Private Look… supports top, bottom, hand, graveyard, and exile for manual effects.
-- Normal Scry correctly does not allow moving a viewed card directly into hand.
-- The opponent receives only the public action and card counts, never the privately viewed identities or order.
+COACH FIXES
+- Opening the Coach panel no longer performs the full tactical search in the background.
+- Analyze runs cooperatively and yields back to the browser throughout move generation and Monte Carlo sampling.
+- Crowded boards automatically use a smaller candidate/sample budget instead of locking the page.
+- Normal boards still use the selected coach sample setting when practical.
+- Duplicate Analyze presses cannot start overlapping searches.
+- The loading window shows progress and includes a Stop analysis button.
+- Card-rule parsing is cached during each simulated state, greatly reducing repeated keyword and Oracle-text work.
+- Hidden library placeholders share a compact simulation representation; private card identities remain hidden.
+- Exact mana payment planning uses bounded search inside the coach while normal gameplay payment remains unchanged.
+- Partial results are clearly labeled when analysis reaches its responsiveness time limit.
 
 AFTER UPLOADING
 1. Commit the files to main.
-2. Wait for the GitHub Pages deployment to turn green.
-3. Both players must close every old Commander Forge tab.
-4. Both players should open the updated site in new Incognito/Private tabs.
-5. Create a new invite code. Old 5.15 rooms are not compatible with 5.16.
+2. Wait for the GitHub Pages action to turn green.
+3. Close old Commander Forge tabs.
+4. Open the updated site in a new Incognito/Private tab first.
+5. For multiplayer, both players should use the same 5.17.0 version and create a new room.
