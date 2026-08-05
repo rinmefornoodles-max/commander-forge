@@ -1,27 +1,24 @@
-THE COMMANDER FORGE 5.22 — PREDEFINED TOKENS + BUTTON RELIABILITY
+THE COMMANDER FORGE 5.23
 
-Upload these four files to the TOP LEVEL of your GitHub repository:
+Upload these four files to the TOP LEVEL of GitHub:
 
 - index.html
-- commander-forge-5.22.0.js
-- commander-forge-5.22.0.css
+- commander-forge-5.23.0.js
+- commander-forge-5.23.0.css
 - sw.js
 
 Changes:
-- Replaces the one-click Treasure shortcut with a searchable Predefined Tokens browser.
-- Loads the official English token-card catalog from Scryfall and caches it for seven days.
-- Search by token name, type, rules text, or power/toughness.
-- Filters for all, creature, artifact, and other tokens.
-- Select controller, quantity, and whether tokens enter tapped.
-- Creates exact token type lines, rules text, stats, colors, keywords, images, and mana abilities.
-- Official double-faced token cards can transform with a Transform token action.
-- Custom token creation remains available.
-- Defers network/UI rerenders during an active pointer press so fast clicks are not lost.
-- Cancels stale title-screen launch callbacks when another menu option is pressed.
-- Repairs the Close button in How to Play.
+- Public reveals now also appear to the revealing player.
+- Publicly revealed library cards are visible and inspectable in both players' library drawers.
+- Card Actions reads common Oracle wording for Reveal top N and Reveal until effects.
+- Reveal-until effects can reveal one additional card at a time.
+- Cards moved from a revealed library selection into hand remain publicly known.
+- Enchantments and noncreature tokens use the resource lane opposite the lands.
+- Identical basic lands, tokens, and safe duplicate enchantments visually stack.
+- Fresh lands and tokens remain beside the existing stack until the turn ends.
+- Token dies and Remove token actions work again.
+- Custom asymmetric P/T counters such as +1/+0, +0/+1, or -2/+3.
+- Derived power/toughness and coach evaluation use custom P/T counters.
+- On mobile, Player 1's battlefield is above Player 1's status area, mirroring Player 2.
 
-After uploading:
-1. Commit to main.
-2. Wait for GitHub Pages to turn green.
-3. Open the site in an Incognito/Private tab first.
-4. Both multiplayer players must use version 5.22.0.
+Both online players must use version 5.23.0.
