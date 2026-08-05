@@ -1,18 +1,18 @@
-THE COMMANDER FORGE 5.7
+THE COMMANDER FORGE 5.8
 
 Upload these four website files to the TOP LEVEL of your GitHub repository:
 
 - index.html
-- commander-forge-5.7.0.js
-- commander-forge-5.7.0.css
+- commander-forge-5.8.0.js
+- commander-forge-5.8.0.css
 - sw.js
 
 Allow index.html and sw.js to replace the existing versions.
 Commit to main and wait for GitHub Pages to deploy.
 
 Changes:
-- Commander cards sit below the Command Zone heading.
-- Commander tax appears beside the heading as Tax +N.
-- Tax controls were removed.
-- Tax updates automatically only when the commander is cast from the command zone.
-- Casting still enforces base mana cost plus current commander tax.
+- Each battlefield is divided into two horizontal lanes.
+- Creatures and all other nonland permanents render in the upper lane.
+- Lands render automatically in the lower lane.
+- Both lanes remain valid battlefield drag-and-drop targets.
+- Equipment, Auras, tapping, counters, tokens, and coach analysis continue using the same underlying cards.
