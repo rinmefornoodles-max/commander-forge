@@ -1,28 +1,37 @@
-THE COMMANDER FORGE 5.15 — MULTIPLAYER START FIX
+THE COMMANDER FORGE 5.16
 
 Upload these four website files to the TOP LEVEL of your GitHub repository:
 
 - index.html
-- commander-forge-5.15.0.js
-- commander-forge-5.15.0.css
+- commander-forge-5.16.0.js
+- commander-forge-5.16.0.css
 - sw.js
 
 Allow index.html and sw.js to replace the existing versions.
-Both players must use version 5.15.0.
+Both players must use version 5.16.0.
 
-Fixes:
-- Player 2 now leaves setup and enters mulligan when the host starts.
-- The start message is compact and no longer includes large hidden-zone placeholder arrays.
-- The host automatically retries the start message until Player 2 confirms receipt.
-- Player 2 sends a start acknowledgement after entering the game.
-- Repeated start messages cannot create duplicate games or redraw the opening hand.
-- If Player 2 is still validating a deck, the start waits and resumes automatically when ready.
-- Hidden hands and libraries remain private and are synchronized by counts only.
-- Post-start public game-state synchronization continues after mulligans begin.
+MULTIPLAYER FIX
+- Replaces the size-limited PeerJS JSON channel with its binary/chunked channel.
+- Public game snapshots are compacted before transmission.
+- Hands and libraries remain counts only; their card identities and order stay local.
+- Local display settings are no longer transmitted as game state.
+- The previous “Message too big for JSON channel” failure should no longer disconnect the room.
 
-After uploading:
+PRIVATE SCRY AND TOP-CARD EFFECTS
+- Open Library and press Scry… for a manual private scry amount.
+- Cards that say “Scry N” receive a private Scry N button in Card Actions.
+- The amount is read from the card’s Oracle text.
+- Scry cards can be kept on top or placed on the bottom in any order.
+- Top and bottom groups can be reordered before confirming.
+- Effects such as “Scry 2, then draw a card” automatically draw after the choices.
+- Common “look at the top N cards, put one into your hand” wording is detected.
+- Private Look… supports top, bottom, hand, graveyard, and exile for manual effects.
+- Normal Scry correctly does not allow moving a viewed card directly into hand.
+- The opponent receives only the public action and card counts, never the privately viewed identities or order.
+
+AFTER UPLOADING
 1. Commit the files to main.
-2. Wait for the GitHub Pages action to turn green.
-3. Both players should close old game tabs.
-4. Both players should open the updated site in a new Incognito/Private tab.
-5. Create a new invite code and reconnect.
+2. Wait for the GitHub Pages deployment to turn green.
+3. Both players must close every old Commander Forge tab.
+4. Both players should open the updated site in new Incognito/Private tabs.
+5. Create a new invite code. Old 5.15 rooms are not compatible with 5.16.
