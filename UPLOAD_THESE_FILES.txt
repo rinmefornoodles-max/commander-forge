@@ -1,24 +1,18 @@
-THE COMMANDER FORGE 5.5
+THE COMMANDER FORGE 5.6 — COMPACT COMMANDER TAX UI
 
 Upload these four website files to the TOP LEVEL of your GitHub repository:
 
 - index.html
-- commander-forge-5.5.0.js
-- commander-forge-5.5.0.css
+- commander-forge-5.6.0.js
+- commander-forge-5.6.0.css
 - sw.js
 
 Allow index.html and sw.js to replace the existing versions.
 The versioned JS and CSS files can remain beside older versions.
 
-After committing to main:
-1. Wait for the GitHub Pages action to turn green.
-2. Open the website in an Incognito/Private tab first.
-3. Hard-refresh or clear stored site data if an older version remains.
-
-Included:
-- Every permanent outside the battlefield has a Battlefield tapped quick action.
-- Library, graveyard, and exile tapped-entry actions are treated as manual effects.
-- Shock-style lands entering through that action do not automatically pay life.
-- Each command-zone commander shows cast count, commander tax, and current cast cost.
-- Command zones include a Cast commander button.
-- Dragging or clicking a commander out of the command zone cannot bypass mana or commander tax.
+Changes:
+- Restores the original compact commander-card layout in the command zone.
+- Removes the large cost panel and Cast commander button.
+- Adds a small − Tax +0 + stepper below each commander.
+- The + and − buttons adjust the tracked number of command-zone casts in steps of one, so tax changes by 2.
+- Dragging or using the card menu to put the commander on the battlefield still checks mana and commander tax.
