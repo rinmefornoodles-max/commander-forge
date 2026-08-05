@@ -1,24 +1,45 @@
-THE COMMANDER FORGE 5.23
+THE COMMANDER FORGE 5.24
 
-Upload these four files to the TOP LEVEL of GitHub:
+Upload these four website files to the TOP LEVEL of your GitHub repository:
 
 - index.html
-- commander-forge-5.23.0.js
-- commander-forge-5.23.0.css
+- commander-forge-5.24.0.js
+- commander-forge-5.24.0.css
 - sw.js
 
-Changes:
-- Public reveals now also appear to the revealing player.
-- Publicly revealed library cards are visible and inspectable in both players' library drawers.
-- Card Actions reads common Oracle wording for Reveal top N and Reveal until effects.
-- Reveal-until effects can reveal one additional card at a time.
-- Cards moved from a revealed library selection into hand remain publicly known.
-- Enchantments and noncreature tokens use the resource lane opposite the lands.
-- Identical basic lands, tokens, and safe duplicate enchantments visually stack.
-- Fresh lands and tokens remain beside the existing stack until the turn ends.
-- Token dies and Remove token actions work again.
-- Custom asymmetric P/T counters such as +1/+0, +0/+1, or -2/+3.
-- Derived power/toughness and coach evaluation use custom P/T counters.
-- On mobile, Player 1's battlefield is above Player 1's status area, mirroring Player 2.
+Allow index.html and sw.js to replace the existing versions.
+Both online players must use version 5.24.0.
 
-Both online players must use version 5.23.0.
+CHANGES
+
+BATTLEFIELD ORGANIZATION
+- Lands are always on the left side of the resource lane for both players.
+- Enchantments and noncreature tokens are always on the right.
+- The vertical tabletop mirroring between Player 1 and Player 2 remains intact.
+
+VISIBLE COUNTERS
+- Every counter type now receives its own top-right badge.
+- Custom counters display their full values, such as +1/0 or -1/+2.
+- Multiple matching P/T counters display the type and quantity, such as +1/+1 ×2.
+- Named counters display their name and count, such as Charge 2, Page 1, Stun 1, or Loyalty 3.
+- The previous unclear combined counter number was removed.
+
+KEYWORD ABILITIES
+- A new Keyword abilities section appears below All counters.
+- Add common abilities such as Flying, Reach, Haste, Hexproof, Indestructible, Lifelink, Menace, Trample, Vigilance, Ward, or Protection.
+- Custom wording is supported for abilities such as Ward {3} or Protection from artifacts.
+- Added abilities can be removed individually.
+- Granted abilities are shown on the card and synchronized in multiplayer.
+- Combat, targeting, casting timing, mana-creature summoning sickness, and the coach use the added rules.
+
+SIMPLER COACH
+- Results now lead with “Do this,” “Why,” and “Watch out.”
+- Technical scores and detailed reasoning are hidden under an optional details section.
+- Defense recommendations use the same simpler format.
+
+TESTING
+- JavaScript syntax passed.
+- Manual Flying, Haste, Indestructible, Ward, and Protection rules passed.
+- Custom P/T counter calculations passed.
+- Token cleanup, predefined tokens, visual stacking, and reveal parsing regression tests passed.
+- ZIP integrity was verified.
