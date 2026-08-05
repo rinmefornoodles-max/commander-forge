@@ -8,25 +8,142 @@
   <title>The Commander Forge</title>
   <link rel="icon" href="./forge-mark.svg" type="image/svg+xml" />
   <link rel="manifest" href="./manifest.webmanifest" />
-  <link rel="stylesheet" href="./commander-forge-5.18.0.css" />
+  <link rel="stylesheet" href="./commander-forge-5.19.0.css" />
 </head>
 <body>
+  <div id="title-screen" class="forge-title-screen" aria-label="The Commander Forge title screen">
+    <div class="forge-title-shell">
+      <section class="forge-title-card">
+        <div class="forge-title-eyebrow">⚒ Commander training table</div>
+        <h1 class="forge-title-heading">The Commander Forge</h1>
+        <p class="forge-title-tagline">Build your deck. Test your decisions. Master the table.</p>
+        <div class="forge-title-grid">
+          <div>
+            <div class="forge-title-main-actions">
+              <button class="forge-title-btn primary" data-title-action="solo">Solo Practice</button>
+              <button class="forge-title-btn secondary" data-title-action="online">Online Multiplayer</button>
+              <button class="forge-title-btn ghost" data-title-action="decklab">Deck Lab</button>
+            </div>
+            <div class="forge-title-small-actions" style="margin-top:14px">
+              <button class="forge-title-btn ghost" id="continue-game-btn" data-title-action="continue">Continue Game</button>
+              <button class="forge-title-btn ghost" data-title-action="howto">How to Play</button>
+              <button class="forge-title-btn ghost" data-title-action="settings">Settings</button>
+            </div>
+          </div>
+          <div class="forge-title-side">
+            <div class="forge-title-panel">
+              <h3>What you can do</h3>
+              <ul>
+                <li>Practice Commander lines solo with a tactical coach.</li>
+                <li>Host a direct online 1v1 with an invite code.</li>
+                <li>Paste a custom decklist or load an official precon.</li>
+                <li>Track zones, counters, commander tax, mulligans, and more.</li>
+              </ul>
+            </div>
+            <div class="forge-title-panel">
+              <h3>Forge tip</h3>
+              <p>Every board state has a best line. Use the title screen to jump into solo practice, multiplayer, or direct deck testing without immediately dropping into setup.</p>
+            </div>
+          </div>
+        </div>
+        <div class="forge-title-footer">
+          <div class="forge-title-version">Version 5.19 · Cards and rules data provided by Scryfall</div>
+          <div class="forge-title-legal">The Commander Forge is not affiliated with Wizards of the Coast.<br/>Magic: The Gathering is a trademark of Wizards of the Coast LLC.</div>
+        </div>
+      </section>
+    </div>
+  </div>
+  <div id="title-help" class="forge-title-help" aria-hidden="true">
+    <section class="forge-title-help-card" role="dialog" aria-modal="true" aria-labelledby="title-help-heading">
+      <h2 id="title-help-heading">How to use The Commander Forge</h2>
+      <ol>
+        <li>Choose <strong>Solo Practice</strong> for local testing or <strong>Online Multiplayer</strong> for invite-code play.</li>
+        <li>Paste a decklist or search for an official precon, then validate and choose your commander.</li>
+        <li>Use drag-and-drop, quick actions, and zone drawers to play the game on-screen.</li>
+        <li>Open <strong>Coach</strong> when you want tactical advice based on the visible board and your private information.</li>
+      </ol>
+      <div class="forge-title-help-close"><button class="forge-title-btn primary" data-title-action="close-help">Close</button></div>
+    </section>
+  </div>
   <div id="app" aria-live="polite"><div class="boot-loading">Loading The Commander Forge…</div></div>
   <div id="toast-root" aria-live="assertive"></div>
   <script>
     (() => {
+      const APP_VERSION='5.19.0';
+      const STORAGE_KEY='commander-forge-state-v2';
       const app=document.getElementById('app');
+      const title=document.getElementById('title-screen');
+      const help=document.getElementById('title-help');
+      const continueBtn=document.getElementById('continue-game-btn');
       window.__forgeStarted=false;
-      const show=(message)=>{app.innerHTML=`<div style="min-height:100vh;display:grid;place-items:center;padding:24px;background:#071015;color:#eef3ee;font-family:system-ui,sans-serif"><div style="max-width:760px;background:#101c22;border:1px solid #a85151;border-radius:16px;padding:22px"><h1 style="margin-top:0">The Commander Forge could not start</h1><p>The single app bundle did not load. Make sure <strong>commander-forge-5.18.0.js</strong> was uploaded beside index.html.</p><pre style="white-space:pre-wrap;overflow:auto;background:#071015;padding:12px;border-radius:10px;color:#ffb4b4">${String(message||'Unknown startup error')}</pre><button onclick="location.reload()" style="padding:10px 16px;border-radius:10px;border:0;cursor:pointer">Reload</button></div></div>`};
+      const show=(message)=>{app.innerHTML=`<div style="min-height:100vh;display:grid;place-items:center;padding:24px;background:#071015;color:#eef3ee;font-family:system-ui,sans-serif"><div style="max-width:760px;background:#101c22;border:1px solid #a85151;border-radius:16px;padding:22px"><h1 style="margin-top:0">The Commander Forge could not start</h1><p>The single app bundle did not load. Make sure <strong>commander-forge-${APP_VERSION}.js</strong> was uploaded beside index.html.</p><pre style="white-space:pre-wrap;overflow:auto;background:#071015;padding:12px;border-radius:10px;color:#ffb4b4">${String(message||'Unknown startup error')}</pre><button onclick="location.reload()" style="padding:10px 16px;border-radius:10px;border:0;cursor:pointer">Reload</button></div></div>`};
       window.__forgeBootError=show;
       window.addEventListener('error',(e)=>show(e.error?.stack||e.message));
       window.addEventListener('unhandledrejection',(e)=>show(e.reason?.stack||e.reason));
       if('serviceWorker' in navigator) navigator.serviceWorker.getRegistrations().then(rs=>Promise.all(rs.map(r=>r.unregister()))).catch(()=>{});
       if('caches' in window) caches.keys().then(keys=>Promise.all(keys.map(k=>caches.delete(k)))).catch(()=>{});
       setTimeout(()=>{if(!document.querySelector('.app-header')&&!document.querySelector('.setup-modal')) show('The app file loaded too slowly or did not execute.');},10000);
+
+      const hasSave = () => {
+        try { return Boolean(localStorage.getItem(STORAGE_KEY)); } catch { return false; }
+      };
+      const updateContinue = () => {
+        if (continueBtn) continueBtn.style.display = hasSave() ? '' : 'none';
+      };
+      updateContinue();
+      const hideTitle = () => {
+        title.classList.add('hidden');
+        setTimeout(()=> title.remove(), 260);
+      };
+      const openHelp = () => { help.classList.add('open'); help.setAttribute('aria-hidden','false'); };
+      const closeHelp = () => { help.classList.remove('open'); help.setAttribute('aria-hidden','true'); };
+      help.addEventListener('click', (e) => { if (e.target === help) closeHelp(); });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeHelp(); });
+
+      function waitFor(condition, callback, timeout=12000) {
+        const start = Date.now();
+        const tick = () => {
+          let result = null;
+          try { result = condition(); } catch {}
+          if (result) return callback(result);
+          if (Date.now() - start > timeout) return callback(null);
+          setTimeout(tick, 120);
+        };
+        tick();
+      }
+      function clickWhenReady(selector, timeout=12000) {
+        waitFor(() => document.querySelector(selector), (el) => el && el.click(), timeout);
+      }
+      function focusWhenReady(selector, timeout=12000) {
+        waitFor(() => document.querySelector(selector), (el) => { if (el) { el.focus(); if (el.select) el.select(); } }, timeout);
+      }
+      function launch(mode) {
+        hideTitle();
+        if (mode === 'continue') {
+          clickWhenReady('[data-action="close-setup"]', 3000);
+          return;
+        }
+        clickWhenReady('[data-action="open-setup"]', 5000);
+        if (mode === 'solo' || mode === 'decklab') clickWhenReady('[data-action="setup-mode"][data-mode="solo"]', 6000);
+        if (mode === 'online') clickWhenReady('[data-action="setup-mode"][data-mode="online"]', 6000);
+        if (mode === 'settings') clickWhenReady('[data-action="open-settings"]', 6000);
+        if (mode === 'decklab') {
+          clickWhenReady('[data-action="deck-source"][data-player-id="p1"][data-source="custom"]', 6000);
+          focusWhenReady('[data-draft-field="text"][data-player-id="p1"]', 7000);
+        }
+      }
+
+      title.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-title-action]');
+        if (!btn) return;
+        const action = btn.dataset.titleAction;
+        if (action === 'howto') return openHelp();
+        if (action === 'close-help') return closeHelp();
+        launch(action);
+      });
     })();
   </script>
   <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js" integrity="sha512-XEKeWX+mI3Ov+tg2evDlVQFzVOIp4T8J3cNcCEPaEUGpxJV3eZaN8rHuvnFPvQpGJBHPmrozJDMpm2xcDvtmyQ==" crossorigin="anonymous"></script>
-  <script defer src="./commander-forge-5.18.0.js" onerror="window.__forgeBootError('HTTP error while loading commander-forge-5.18.0.js')"></script>
+  <script defer src="./commander-forge-5.19.0.js" onerror="window.__forgeBootError('HTTP error while loading commander-forge-5.19.0.js')"></script>
 </body>
 </html>

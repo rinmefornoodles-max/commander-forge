@@ -1,36 +1,23 @@
-THE COMMANDER FORGE 5.18
+THE COMMANDER FORGE 5.19 — TITLE SCREEN
 
 Upload these four website files to the TOP LEVEL of your GitHub repository:
 
 - index.html
-- commander-forge-5.18.0.js
-- commander-forge-5.18.0.css
+- commander-forge-5.19.0.js
+- commander-forge-5.19.0.css
 - sw.js
 
 Allow index.html and sw.js to replace the existing versions.
-Both online players must use version 5.18.0.
+The new bundle and stylesheet can remain beside older versioned files.
 
-FIXES
+Added:
+- A full title screen when opening the website.
+- Buttons for Solo Practice, Online Multiplayer, Deck Lab, Continue Game, How to Play, and Settings.
+- Continue Game only shows when a saved game exists.
+- A How to Play popup on the title screen.
+- Footer legal text: The Commander Forge is not affiliated with Wizards of the Coast. Magic: The Gathering is a trademark of Wizards of the Coast LLC.
 
-DRAWING
-- Automatic drawing is enabled in online multiplayer again.
-- Player 1, the starting player, skips the draw on turn 1 in a 1v1 game.
-- Player 2 draws normally on their first turn.
-- Later turns draw normally for both players.
-- Manual Draw actions still work for spells, abilities, and corrections.
-- Private card identities stay on the drawing player's browser.
-- The opponent only receives the updated hand and library counts.
-
-MULTIPLAYER SETUP
-- Remote deck updates no longer rebuild the setup form while the local player is typing.
-- Remote updates no longer interrupt an open commander/precon selection menu.
-- Typed player names, pasted decklists, searches, and invite codes are saved immediately.
-- Deferred room updates appear after the local player finishes editing.
-- The setup window keeps its scroll position when it refreshes.
-
-AFTER UPLOADING
-1. Commit the files to main.
-2. Wait for the GitHub Pages deployment to turn green.
-3. Both players should close all older Commander Forge tabs.
-4. Open the updated site in new Incognito/Private tabs.
-5. Create a new invite code. Version 5.17 rooms are not compatible with 5.18.
+After uploading:
+1. Commit to main.
+2. Wait for GitHub Pages to turn green.
+3. Open the site in an Incognito/Private tab first.
