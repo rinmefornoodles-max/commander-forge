@@ -8,7 +8,7 @@
   <title>The Commander Forge</title>
   <link rel="icon" href="./forge-mark.svg" type="image/svg+xml" />
   <link rel="manifest" href="./manifest.webmanifest" />
-  <link rel="stylesheet" href="./commander-forge-5.20.0.css" />
+  <link rel="stylesheet" href="./commander-forge-5.21.0.css" />
 </head>
 <body>
   <div id="title-screen" class="forge-title-screen" aria-label="The Commander Forge title screen">
@@ -21,11 +21,7 @@
           <div>
             <div class="forge-title-main-actions">
               <button class="forge-title-btn primary" data-title-action="solo">Solo Practice</button>
-              <button class="forge-title-btn secondary" data-title-action="host">Host Online Game</button>
-              <div class="forge-title-join">
-                <input id="title-join-code" maxlength="8" autocomplete="off" placeholder="Invite code" aria-label="Multiplayer invite code" />
-                <button class="forge-title-btn ghost" data-title-action="join">Join Game</button>
-              </div>
+              <button class="forge-title-btn secondary" data-title-action="online">Online Multiplayer</button>
             </div>
             <div class="forge-title-small-actions" style="margin-top:14px">
               <button class="forge-title-btn ghost" id="continue-game-btn" data-title-action="continue">Continue Game</button>
@@ -39,18 +35,18 @@
               <ul>
                 <li>Practice Commander lines solo with a tactical coach.</li>
                 <li>Host a direct online 1v1 with an invite code.</li>
-                <li>Solo opens local deck setup, Host immediately creates a room, and Join uses an invite code.</li>
+                <li>Solo and Online open completely separate setup screens.</li>
                 <li>Track zones, counters, commander tax, mulligans, and more.</li>
               </ul>
             </div>
             <div class="forge-title-panel">
               <h3>Forge tip</h3>
-              <p>Every board state has a best line. Each main option now performs a different action instead of sending you to the same generic setup screen.</p>
+              <p>Choose your mode here first. Solo shows only local deck setup, while Online shows only the host and invite-code connection tools.</p>
             </div>
           </div>
         </div>
         <div class="forge-title-footer">
-          <div class="forge-title-version">Version 5.20 · Cards and rules data provided by Scryfall</div>
+          <div class="forge-title-version">Version 5.21 · Cards and rules data provided by Scryfall</div>
           <div class="forge-title-legal">The Commander Forge is not affiliated with Wizards of the Coast.<br/>Magic: The Gathering is a trademark of Wizards of the Coast LLC.</div>
         </div>
       </section>
@@ -72,7 +68,7 @@
   <div id="toast-root" aria-live="assertive"></div>
   <script>
     (() => {
-      const APP_VERSION='5.20.0';
+      const APP_VERSION='5.21.0';
       const STORAGE_KEY='commander-forge-state-v2';
       const app=document.getElementById('app');
       const title=document.getElementById('title-screen');
@@ -96,8 +92,14 @@
       updateContinue();
       const hideTitle = () => {
         title.classList.add('hidden');
-        setTimeout(()=> title.remove(), 260);
+        title.setAttribute('aria-hidden','true');
       };
+      const showTitle = () => {
+        title.classList.remove('hidden');
+        title.setAttribute('aria-hidden','false');
+        updateContinue();
+      };
+      window.CommanderForgeTitle = { show: showTitle, hide: hideTitle };
       const openHelp = () => { help.classList.add('open'); help.setAttribute('aria-hidden','false'); };
       const closeHelp = () => { help.classList.remove('open'); help.setAttribute('aria-hidden','true'); };
       help.addEventListener('click', (e) => { if (e.target === help) closeHelp(); });
@@ -117,54 +119,25 @@
       function clickWhenReady(selector, timeout=12000) {
         waitFor(() => document.querySelector(selector), (el) => el && el.click(), timeout);
       }
-      function focusWhenReady(selector, timeout=12000) {
-        waitFor(() => document.querySelector(selector), (el) => { if (el) { el.focus(); if (el.select) el.select(); } }, timeout);
-      }
-      function clickAfter(selector, callback, timeout=12000) {
-        waitFor(() => document.querySelector(selector), (el) => {
-          if (!el) return;
-          el.click();
-          if (callback) setTimeout(callback, 80);
-        }, timeout);
-      }
       function launch(mode) {
-        if (mode === 'join') {
-          const code = String(document.getElementById('title-join-code')?.value || '').toUpperCase().replace(/[^A-Z2-9]/g,'').slice(0,8);
-          if (!code) {
-            const input = document.getElementById('title-join-code');
-            input?.focus();
-            input?.setCustomValidity('Enter the host invite code.');
-            input?.reportValidity();
-            setTimeout(() => input?.setCustomValidity(''), 1200);
-            return;
-          }
-          hideTitle();
-          clickAfter('[data-action="setup-mode"][data-mode="online"]', () => {
-            waitFor(() => document.querySelector('#join-code'), (input) => {
-              if (!input) return;
-              input.value = code;
-              input.dispatchEvent(new Event('input', { bubbles: true }));
-              document.querySelector('[data-action="join-online"]')?.click();
-            });
-          });
-          return;
-        }
         hideTitle();
         if (mode === 'continue') {
           clickWhenReady('[data-action="close-setup"]', 3000);
           return;
         }
-        if (mode === 'solo') {
-          clickAfter('[data-action="setup-mode"][data-mode="solo"]');
-          return;
-        }
-        if (mode === 'host') {
-          clickAfter('[data-action="setup-mode"][data-mode="online"]', () => clickWhenReady('[data-action="host-online"]'));
+        if (mode === 'solo' || mode === 'online') {
+          window.__forgeSetupModeLock = mode;
+          waitFor(() => window.CommanderForgeMode?.select, (select) => select?.(mode), 6000);
           return;
         }
         if (mode === 'settings') clickWhenReady('[data-action="open-settings"]', 6000);
       }
 
+      const inviteFromUrl = new URLSearchParams(location.search).get('join');
+      if (inviteFromUrl) {
+        window.__forgeSetupModeLock = 'online';
+        hideTitle();
+      }
       title.addEventListener('click', (e) => {
         const btn = e.target.closest('[data-title-action]');
         if (!btn) return;
@@ -176,6 +149,6 @@
     })();
   </script>
   <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js" integrity="sha512-XEKeWX+mI3Ov+tg2evDlVQFzVOIp4T8J3cNcCEPaEUGpxJV3eZaN8rHuvnFPvQpGJBHPmrozJDMpm2xcDvtmyQ==" crossorigin="anonymous"></script>
-  <script defer src="./commander-forge-5.20.0.js" onerror="window.__forgeBootError('HTTP error while loading commander-forge-5.20.0.js')"></script>
+  <script defer src="./commander-forge-5.21.0.js" onerror="window.__forgeBootError('HTTP error while loading commander-forge-5.21.0.js')"></script>
 </body>
 </html>
