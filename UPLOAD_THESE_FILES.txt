@@ -1,26 +1,22 @@
-THE COMMANDER FORGE 5.9 — RULES KNOWLEDGE COACH
+THE COMMANDER FORGE 5.10
 
 Upload these four website files to the TOP LEVEL of your GitHub repository:
 
 - index.html
-- commander-forge-5.9.0.js
-- commander-forge-5.9.0.css
+- commander-forge-5.10.0.js
+- commander-forge-5.10.0.css
 - sw.js
 
 Allow index.html and sw.js to replace the existing versions.
-The versioned JS and CSS files may remain beside older versions.
+Commit to main and wait for GitHub Pages to deploy.
 
-After committing to main:
-1. Wait for the GitHub Pages action to turn green.
-2. Open the site in an Incognito/Private tab first.
-3. Hard-refresh or clear stored site data if the old version remains.
-
-Major changes:
-- Shared card-rules model for the playmat and coach.
-- Broader keyword, targeting, combat, trigger, static-effect, and activated-ability understanding.
-- Derived power/toughness from counters, Equipment, Auras, and anthem effects.
-- Exact executable mana abilities, colors, restrictions, activation costs, life costs, sacrifice costs, and discard costs.
-- Summoning-sick mana creatures are unavailable unless they have haste.
-- Commander-identity lands produce only legal colors.
-- Legal extra land plays, flash grants, casting restrictions, and group attack restrictions.
-- Tactical search uses the same legality, payment, targeting, and combat functions as the table.
+Changes:
+- Player 2's battlefield lanes are mirrored:
+  lands are above, nearer Player 2's hand;
+  other permanents are below, facing the center.
+- Player 1 keeps other permanents above lands.
+- Dedicated charge and page counter controls.
+- Cards mentioning a named counter automatically show that counter's +/- tracker.
+- Charge counters display as a lightning badge.
+- Page counters display as a book badge.
+- Tome of Legends is tracked with page counters, matching its Oracle text.
