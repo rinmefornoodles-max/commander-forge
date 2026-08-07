@@ -8,7 +8,8 @@
   <title>The Commander Forge</title>
   <link rel="icon" href="./forge-mark.svg" type="image/svg+xml" />
   <link rel="manifest" href="./manifest.webmanifest" />
-  <link rel="stylesheet" href="./commander-forge-5.29.0.css" />
+  <link rel="stylesheet" href="./commander-forge-5.30.0.css" />
+  <script src="./feedback-config.js"></script>
 </head>
 <body>
   <div id="title-screen" class="forge-title-screen" aria-label="The Commander Forge title screen">
@@ -55,13 +56,14 @@
                   </select>
                   <button class="forge-title-btn ghost" type="submit">Send feedback</button>
                 </div>
-                <p class="forge-feedback-note">Opens your email app addressed to rinmefornoodles@gmail.com.</p>
+                <p id="forge-feedback-status" class="forge-feedback-status" role="status" aria-live="polite"></p>
+                <p class="forge-feedback-note">When Google Sheets is connected, feedback is saved privately to your Sheet without making visitors leave Commander Forge.</p>
               </form>
             </div>
           </div>
         </div>
         <div class="forge-title-footer">
-          <div class="forge-title-version">Version 5.29 · Cards and rules data provided by Scryfall</div>
+          <div class="forge-title-version">Version 5.30 · Cards and rules data provided by Scryfall</div>
           <div class="forge-title-legal">The Commander Forge is not affiliated with Wizards of the Coast.<br/>Magic: The Gathering is a trademark of Wizards of the Coast LLC.</div>
         </div>
       </section>
@@ -109,11 +111,25 @@
     </section>
   </div>
 
+  <div id="it-card-inspector" class="it-card-inspector" aria-hidden="true">
+    <section id="it-card-inspector-card" class="it-card-inspector-card" role="dialog" aria-modal="true" aria-label="Tutorial card details"></section>
+  </div>
+
+  <div id="forge-card-zoom" class="forge-card-zoom" aria-hidden="true">
+    <section class="forge-card-zoom-shell" role="dialog" aria-modal="true" aria-label="Large card view">
+      <button id="forge-card-zoom-close" class="icon-btn forge-card-zoom-close" type="button" aria-label="Close large card view">×</button>
+      <img id="forge-card-zoom-image" alt="Large Magic card" />
+      <p class="forge-card-zoom-hint">Click outside the card or press Esc to close.</p>
+    </section>
+  </div>
+
+  <iframe id="forge-feedback-target" name="forge-feedback-target" title="Feedback submission target" hidden></iframe>
+
   <div id="app" aria-live="polite"><div class="boot-loading">Loading The Commander Forge…</div></div>
   <div id="toast-root" aria-live="assertive"></div>
   <script>
     (() => {
-      const APP_VERSION='5.29.0';
+      const APP_VERSION='5.30.0';
       const STORAGE_KEY='commander-forge-state-v2';
       const app=document.getElementById('app');
       const title=document.getElementById('title-screen');
@@ -284,7 +300,7 @@
       });
 
 
-      // 5.29 interactive tutorial: a small deterministic rules trainer that does not alter saved games.
+      // 5.30 interactive tutorial: a small deterministic rules trainer that does not alter saved games.
       const interactiveTutorial = document.getElementById('interactive-tutorial');
       const itBody = document.getElementById('it-body');
       const itSubtitle = document.getElementById('it-header-subtitle');
@@ -310,6 +326,10 @@
         oppBear:()=>({id:'oppbear',name:'Bear Cub',cost:'{1}{G}',type:'Creature — Bear',text:'',power:'2',toughness:'2',role:'oppbear'}),
       };
       let it = {screen:'hub'};
+      let itDrag = null;
+      let itSuppressClickUntil = 0;
+      const itCardInspector = document.getElementById('it-card-inspector');
+      const itCardInspectorCard = document.getElementById('it-card-inspector-card');
       const itDelay = (ms)=>new Promise(resolve=>setTimeout(resolve,ms));
       function freshCard(card, extra={}) { return {...card,tapped:false,sick:false,attacking:false,blocking:false,pacified:false,...extra}; }
       function shuffled(items){ const out=[...items]; for(let i=out.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[out[i],out[j]]=[out[j],out[i]];} return out; }
@@ -329,23 +349,32 @@
         ];
         return patterns[Math.floor(Math.random()*patterns.length)]();
       }
-      function tutorialCardImageUrl(card){
+      function tutorialCardImageUrl(card,version='small'){
         const name=encodeURIComponent(String(card?.name||''));
-        return `https://api.scryfall.com/cards/named?exact=${name}&format=image&version=small`;
+        return `https://api.scryfall.com/cards/named?exact=${name}&format=image&version=${encodeURIComponent(version)}`;
       }
       function buildBasicsState(){
         const v=tutorialVariant();
-        const baseHand=[
+        const practiceSecondHand=[
+          itLand('p-free-forest','Forest','mulligan-practice-land'),
+          itLand('p-free-plains','Plains','mulligan-practice-land'),
+          freshCard(TC.fromTuple('p-free-dork',v.dork,'mulligan-practice-card')),
+          freshCard(TC.fromTuple('p-free-bear',v.bear,'mulligan-practice-card')),
+          freshCard(TC.growth('p-free-growth')),
+          freshCard(TC.angel('p-free-angel')),
+          freshCard({id:'p-free-dreadmaw',name:'Colossal Dreadmaw',cost:'{4}{G}{G}',type:'Creature — Dinosaur',text:'Trample',power:'6',toughness:'6',role:'mulligan-practice-card'}),
+        ];
+        const finalHand=[
           itLand('p-forest-1','Forest','first-land'),
           itLand('p-plains-1','Plains','second-land'),
+          itLand('p-forest-extra','Forest','opening-extra-land'),
           freshCard(TC.fromTuple('dork',v.dork,'dork')),
           freshCard(TC.fromTuple('bear',v.bear,'bear')),
           freshCard(TC.growth()),
-          freshCard(TC.fromTuple('removal',v.removal,'removal')),
           freshCard(TC.angel()),
         ];
         const bad=tutorialBadOpeningHand();
-        it={screen:'basics',stage:'M0',variant:v,mulliganLesson:bad,goodOpeningHand:shuffled(baseHand),mulligans:0,turn:1,phase:'Pregame',busy:false,feedback:'',flashCardId:'',mana:{G:0,W:0},player:{name:'You',life:40,hand:shuffled(bad.hand),battlefield:[],lands:[],graveyard:[],commander:freshCard(TC.commander()),commanderCasts:0},opponent:{name:'Training Opponent',life:40,handCount:7,battlefield:[],lands:[],graveyard:[]}};
+        it={screen:'basics',stage:'M0',variant:v,mulliganLesson:bad,practiceSecondHand:shuffled(practiceSecondHand),finalOpeningHand:shuffled(finalHand),mulligans:0,nonFreeMulligans:0,bottomedCards:[],turn:1,phase:'Pregame',busy:false,feedback:'',flashCardId:'',mana:{G:0,W:0},player:{name:'You',life:40,hand:shuffled(bad.hand),battlefield:[],lands:[],graveyard:[],commander:freshCard(TC.commander()),commanderCasts:0},opponent:{name:'Training Opponent',life:40,handCount:7,battlefield:[],lands:[],graveyard:[]}};
       }
       function buildGuidedState(){
         const v=tutorialVariant();
@@ -358,59 +387,122 @@
         ]),battlefield:[freshCard(TC.fromTuple('g-dork',v.dork,'dork')),freshCard(TC.fromTuple('g-bear',v.bear,'guided-bear'))],lands:[1,2,3,4,5].map((n)=>itLand(`g-land-${n}`,n%3===0?'Plains':'Forest','guided-existing-land')),graveyard:[],commander:freshCard(TC.commander()),commanderCasts:0},opponent:{name:'Training Opponent',life:12,handCount:5,battlefield:[freshCard(TC.hill()),freshCard(TC.flyer())],lands:[1,2,3,4,5].map((n)=>itLand(`go-land-${n}`,n%3===0?'Swamp':'Mountain','opp-land')),graveyard:[]}};
       }
       function itStageNumber(){
-        const basics=['M0','M1','B0','B1','B2','B3','B4','B5','B6','B7','B8','B9','B10','B11','B12','B13','B14','B15','B16','B17','B18','B19','B20'];
+        const basics=['M0','M1','M2','M3','B0','B1','B2','B3','B4','B5','B6','B7','B8','B9','B10','B11','B12','B13','B14','B15','B16','B17','B18','B19','B20'];
         const guided=['G0','G1','G1T','G2','G3','G4','G5','G6','G7','G8','G9','G10','G11','G12','G13','G14','G15'];
         const list=it.screen==='guided'?guided:basics; return {index:Math.max(0,list.indexOf(it.stage)),total:list.length};
       }
       function itGuideData(){
         const s=it.stage;
         const guides={
-          M0:{eyebrow:'Pregame · Mulligan',title:'Would you keep this opening hand?',text:`Before turn 1, look at all seven cards. This example is a <strong>${it.mulliganLesson?.label||'risky hand'}</strong>. Decide whether you would keep it or take a mulligan.`,why:`${it.mulliganLesson?.reason||'This hand does not have a reliable early plan.'} For a new player, a useful first check is: do I have roughly 2–4 lands, the colors I need, and at least one useful early play?`,hint:'The tutorial intentionally gives you a bad hand first so you can practice the decision.',buttons:[['Keep it','keep-bad','ghost'],['Mulligan','take-mulligan','primary']]},
-          M1:{eyebrow:'Pregame · New seven',title:'This hand has a real plan',text:'Your new hand has two lands, an early one-mana creature, a two-mana creature, interaction, and spells you can grow into. That does not guarantee a win, but it gives you things to do in the first few turns.',why:'Mulligan decisions depend on the deck, but beginners should usually prefer hands that can make their colors, develop mana, and cast something early instead of hoping to draw perfectly.',buttons:[['Keep this hand','keep-good','primary'],['Explain another mulligan','mulligan-info','ghost']]},
-          B0:{eyebrow:'Basics · Opening hand kept',title:'You are ready to start',text:'You kept your seven-card hand. Your commander begins in the command zone. Because this training game is a 1v1 and you are going first, you will skip the draw on turn 1.',why:'The opening-hand lesson used a deliberately bad hand followed by a playable hand. The rest of the cards still vary between curated versions so the tutorial is not identical every time.',buttons:[['Begin your first turn','begin-basics','primary']]},
-          B1:{eyebrow:'Turn 1 · Main phase',title:'Play your first land',text:'Find the Forest in your hand and tap it. Playing a land does not use the stack, and you normally get one land play each turn.',why:'Lands are your main source of mana. You are allowed to play zero lands, but this hand has one you want to play.',hint:'The correct card is glowing.'},
-          B2:{eyebrow:'Mana',title:'Tap the Forest for green mana',text:'Tap the Forest you just played. Tapping turns it sideways and adds one green mana.',why:'Mana pays costs. The {G} symbol on your one-mana creature requires green mana.',hint:'Tap the glowing Forest on the battlefield.'},
-          B3:{eyebrow:'Casting a spell',title:`Cast ${it.variant?.dork?.[0]||'your mana creature'}`,text:'You now have {G} available. Tap the highlighted creature in your hand to cast it. The tutorial will resolve the spell immediately.',why:'Creature spells normally can be cast during your main phase while the stack is empty.'},
-          B4:{eyebrow:'Creatures',title:'Try to attack with it',text:'Tap your new creature as though you wanted to attack.',why:'It entered this turn, so summoning sickness prevents it from attacking or using a {T} ability unless it has haste.',hint:'Try it anyway—the tutorial will explain the rule.'},
+          M0:{eyebrow:'Pregame · Mulligan 0',title:'Would you keep this opening hand?',text:`Before turn 1, look at all seven cards. This example is a <strong>${it.mulliganLesson?.label||'risky hand'}</strong>. Decide whether you would keep it or take a mulligan.`,why:`${it.mulliganLesson?.reason||'This hand does not have a reliable early plan.'} For a new player, a useful first check is: do I have roughly 2–4 lands, the colors I need, and at least one useful early play?`,hint:'In multiplayer Commander, your first mulligan is free. You shuffle this hand back and draw a fresh seven.',buttons:[['Keep it','keep-bad','ghost'],['Mulligan','take-mulligan','primary']]},
+          M1:{eyebrow:'Pregame · Mulligan 1 · FREE',title:'Your free mulligan drew seven again',text:'This new hand is actually keepable: it has lands, both colors, and early plays. In a real game you could keep it.',why:'Multiplayer Commander gives you one free mulligan. That means your first mulligan still lets you keep seven cards. For this lesson, take one more mulligan so you can learn what happens after the free one.',hint:'The next mulligan is not free. You will still draw seven, but when you keep you must put one card on the bottom of your library.',buttons:[['Keep this hand','keep-free-hand','ghost'],['Mulligan again','take-second-mulligan','primary']]},
+          M2:{eyebrow:'Pregame · Mulligan 2',title:'Choose one card to put on the bottom',text:'You drew seven cards again. Because your first mulligan was free, this second mulligan counts as one non-free mulligan. When you keep, you must put <strong>one card</strong> from this seven on the bottom of your library.',why:'This is not a discard. The card does <strong>not</strong> go to your graveyard. It goes to the bottom of your library, so your opening hand will contain six cards.',hint:'Drag the card you least need early into the highlighted “Bottom of library” area. The expensive five-mana creature is a strong choice.'},
+          M3:{eyebrow:'Pregame · Keep 6',title:'That card went to the bottom — not the graveyard',text:`You now have ${it.player?.hand?.length||6} cards in your opening hand. The card you chose is still in your library, just on the bottom.`,why:'After one non-free mulligan, you begin with six cards. If you had taken another non-free mulligan, you would draw seven again and then put two cards on the bottom when you finally kept.',buttons:[['Keep this hand and start','keep-after-bottom','primary']]},
+          B0:{eyebrow:'Basics · Opening hand kept',title:'You are ready to start',text:'Your mulligan lesson is complete. Your commander begins in the command zone. Because this scripted training table is 1v1 and you are going first, you will skip the draw on turn 1.',why:'The tutorial used the multiplayer Commander free mulligan to teach the format, then made you practice the London mulligan bottom-card rule. Now the controls work like the normal table: click a card to inspect it; drag it to move or play it.',buttons:[['Begin your first turn','begin-basics','primary']]},
+          B1:{eyebrow:'Turn 1 · Main phase',title:'Play your first land',text:'Find the Forest in your hand and drag it from your hand into the highlighted Lands area. Playing a land does not use the stack, and you normally get one land play each turn.',why:'Lands are your main source of mana. You are allowed to play zero lands, but this hand has one you want to play.',hint:'The correct card is glowing. Click it if you want to read it; drag it when you are ready to play it.'},
+          B2:{eyebrow:'Mana',title:'Tap the Forest for green mana',text:'Click the Forest you just played to open the large card view and action menu, then choose Tap for mana. Tapping turns it sideways and adds one green mana.',why:'Mana pays costs. The {G} symbol on your one-mana creature requires green mana.',hint:'Click the glowing Forest, read it if you want, then use its Tap action.'},
+          B3:{eyebrow:'Casting a spell',title:`Cast ${it.variant?.dork?.[0]||'your mana creature'}`,text:'You now have {G} available. Drag the highlighted creature from your hand onto your battlefield to cast it. The tutorial will resolve the spell immediately.',why:'Creature spells normally can be cast during your main phase while the stack is empty.'},
+          B4:{eyebrow:'Creatures',title:'Try to attack with it',text:'Click your new creature to inspect it, then choose Attack from its action menu.',why:'It entered this turn, so summoning sickness prevents it from attacking or using a {T} ability unless it has haste.',hint:'Try it anyway—the tutorial will explain the rule.'},
           B5:{eyebrow:'End of turn',title:'Pass the turn',text:'You have used your land and mana. End the turn and watch the opponent take its turn.',why:'The opponent is scripted, but it plays cards visibly so you can follow what is happening.',buttons:[['End turn','end-turn','primary']]},
-          B6:{eyebrow:'Turn 2',title:'Play a second land',text:'Your permanents untapped and you drew for turn. Play the Plains from your hand.',why:'You may normally play one land on each of your own turns.'},
-          B7:{eyebrow:'Paying a cost',title:'Make two mana',text:'Tap your Forest and Plains. The mana pool on this guide will show the mana you made.',why:'Your two-mana creature costs {1}{G}: one mana must be green and the other can be any type.',hint:'Tap two glowing lands.'},
-          B8:{eyebrow:'Casting a creature',title:`Cast ${it.variant?.bear?.[0]||'your 2/2'}`,text:'You have enough mana. Cast the highlighted 2/2 creature from your hand.',why:'The mana is spent as part of casting the spell, then the creature resolves onto the battlefield.'},
+          B6:{eyebrow:'Turn 2',title:'Play a second land',text:'Your permanents untapped and you drew for turn. Drag the Plains from your hand into your Lands area.',why:'You may normally play one land on each of your own turns.'},
+          B7:{eyebrow:'Paying a cost',title:'Make two mana',text:'Click your Forest and Plains one at a time and use Tap for mana from each card’s action menu. The mana pool on this guide will show the mana you made.',why:'Your two-mana creature costs {1}{G}: one mana must be green and the other can be any type.',hint:'Click each glowing land and choose Tap for mana.'},
+          B8:{eyebrow:'Casting a creature',title:`Cast ${it.variant?.bear?.[0]||'your 2/2'}`,text:'You have enough mana. Drag the highlighted 2/2 creature from your hand onto your battlefield.',why:'The mana is spent as part of casting the spell, then the creature resolves onto the battlefield.'},
           B9:{eyebrow:'Prepare to defend',title:'End your turn',text:'Your older mana creature can act now, but the 2/2 you just cast has summoning sickness. End the turn.',why:'On the opponent’s turn, you will get a chance to block.',buttons:[['End turn','end-turn','primary']]},
-          B10:{eyebrow:'Opponent combat',title:'Block the attacker',text:'The opponent attacked with a 1/1. Tap your highlighted 2/2 to block it.',why:'Blocked creatures deal combat damage to each other. Your 2/2 survives one damage and destroys the 1/1.'},
-          B11:{eyebrow:'Your combat',title:'Attack with your 2/2',text:'Your creature survived and all damage was removed at the end of the previous turn. Attack with it now.',why:'The opponent still has a 2/1 blocker, so watch what happens after blockers are declared.'},
-          B12:{eyebrow:'Instants & priority',title:'Use Giant Growth before damage',text:'The opponent blocked your 2/2 with a 2/1. Cast Giant Growth now.',why:'Instants can be cast during combat when you receive priority. Giant Growth makes your creature 5/5 for the turn, so it wins combat.'},
-          B13:{eyebrow:'Main phase 2',title:'Play the Forest you drew',text:'Combat is over, but you have not used your land play this turn. Play the new Forest during your second main phase.',why:'Your one land play is for the entire turn, not separately for each main phase.'},
+          B10:{eyebrow:'Opponent combat',title:'Block the attacker',text:'The opponent attacked with a 1/1. Click your highlighted 2/2, then choose Block from its action menu.',why:'Blocked creatures deal combat damage to each other. Your 2/2 survives one damage and destroys the 1/1.'},
+          B11:{eyebrow:'Your combat',title:'Attack with your 2/2',text:'Your creature survived and all damage was removed at the end of the previous turn. Click it and choose Attack from its action menu.',why:'The opponent still has a 2/1 blocker, so watch what happens after blockers are declared.'},
+          B12:{eyebrow:'Instants & priority',title:'Use Giant Growth before damage',text:'The opponent blocked your 2/2 with a 2/1. Click Giant Growth to read it, then choose Cast / Use from its action menu.',why:'Instants can be cast during combat when you receive priority. Giant Growth makes your creature 5/5 for the turn, so it wins combat.'},
+          B13:{eyebrow:'Main phase 2',title:'Play the Forest you drew',text:'Combat is over, but you have not used your land play this turn. Drag the new Forest into your Lands area during your second main phase.',why:'Your one land play is for the entire turn, not separately for each main phase.'},
           B14:{eyebrow:'Fast-forward',title:'Move to the Commander lesson',text:'Real Commander games take time to develop. We will jump ahead a couple of turns so you can practice casting your commander without waiting.',why:'The tutorial keeps the important game state but skips repetitive land drops.',buttons:[['Fast-forward','fast-forward','primary']]},
-          B15:{eyebrow:'Commander',title:'Cast Jasmine Boreal',text:'Tap your commander in the command zone. The tutorial will auto-pay the five mana so you can focus on where commanders are cast from.',why:'Your commander starts in the command zone and can normally be cast from there.'},
+          B15:{eyebrow:'Commander',title:'Cast Jasmine Boreal',text:'Drag your commander from the command zone onto your battlefield. The tutorial will auto-pay the five mana so you can focus on where commanders are cast from.',why:'Your commander starts in the command zone and can normally be cast from there.'},
           B16:{eyebrow:'Opponent interaction',title:'End the turn',text:'Your commander is on the battlefield. Pass and watch the opponent respond.',why:'Commander does not make your creature immune to removal.',buttons:[['End turn','end-turn','primary']]},
           B17:{eyebrow:'Commander zone choice',title:'Put your commander in the command zone',text:'Murder destroyed your commander. For this lesson, choose the command zone so you can practice commander tax.',why:'When your commander goes to the graveyard or exile, you get a chance to move it to the command zone.',buttons:[['Command Zone','commander-command','primary'],['Graveyard','commander-graveyard','ghost']]},
           B18:{eyebrow:'Commander tax',title:'Move to your next turn',text:'Your commander has been cast from the command zone once. Its next command-zone cast costs an additional {2}.',why:'Commander tax counts previous times that commander was cast from the command zone.',buttons:[['Next turn','tax-next','primary']]},
-          B19:{eyebrow:'Commander tax',title:'Recast your commander for seven mana',text:'Jasmine normally costs five mana. The command-zone tax is now +{2}, so the tutorial has given you seven available lands.',why:'The extra cost increases by another {2} each time you cast that commander from the command zone.',hint:'Tap Jasmine in the command zone to cast it.'},
+          B19:{eyebrow:'Commander tax',title:'Recast your commander for seven mana',text:'Jasmine normally costs five mana. The command-zone tax is now +{2}, so the tutorial has given you seven available lands.',why:'The extra cost increases by another {2} each time you cast that commander from the command zone.',hint:'Drag Jasmine from the command zone onto your battlefield.'},
           B20:{eyebrow:'Basics complete',title:'Now play a short guided game',text:'You have practiced lands, mana, casting, summoning sickness, combat, blocking, instants, the command zone, and commander tax.',why:'The next section gives you less direct instruction. The opponent still follows a short script so the game reaches interesting decisions quickly.',buttons:[['Start guided game','start-guided','primary'],['Rules reference','rules-reference','ghost']]},
-          G0:{eyebrow:'Guided game · Turn 5',title:'The game has been fast-forwarded',text:'Both players started at 40 life. A few turns have passed. You are at 30 and your opponent is at 12. Start by developing your mana for this turn.',why:'Play the land in your hand. From here, the guide will explain goals more than exact clicks.',hint:'Find the land yourself—nothing is highlighted this time.'},
-          G1:{eyebrow:'Read the battlefield',title:'Deal with the flying threat',text:'Your opponent has Air Elemental, a 4/4 with flying. Your ground creatures cannot block it. Use the Aura in your hand to stop it from attacking.',why:'Removal is often best saved for something that meaningfully threatens you.'},
-          G1T:{eyebrow:'Choose a target',title:'Target Air Elemental',text:'You cast the Aura. Now choose which opposing creature it should enchant.',why:'A spell or ability that uses the word “target” needs a legal target before it can resolve.',hint:'Tap Air Elemental.'},
+          G0:{eyebrow:'Guided game · Turn 5',title:'The game has been fast-forwarded',text:'Both players started at 40 life. A few turns have passed. You are at 30 and your opponent is at 12. Start by developing your mana for this turn.',why:'Drag the land in your hand into your Lands area. From here, the guide will explain goals more than exact clicks.',hint:'Find the land yourself—nothing is highlighted this time.'},
+          G1:{eyebrow:'Read the battlefield',title:'Deal with the flying threat',text:'Your opponent has Air Elemental, a 4/4 with flying. Your ground creatures cannot block it. Drag the Aura from your hand onto your battlefield, then choose its target.',why:'Removal is often best saved for something that meaningfully threatens you.'},
+          G1T:{eyebrow:'Choose a target',title:'Target Air Elemental',text:'You cast the Aura. Now choose which opposing creature it should enchant.',why:'A spell or ability that uses the word “target” needs a legal target before it can resolve.',hint:'Click Air Elemental and choose it as the Aura target.'},
           G2:{eyebrow:'Combat decision',title:'Would you attack the 2/2?',text:'The opponent still has an untapped 3/3 ground creature. Attacking your 2/2 alone would let them block and destroy it for free.',why:'You do not have to attack every turn. Keeping a creature back can be the stronger play.',buttons:[['Attack anyway','bad-attack','ghost'],['Hold it back','hold-back','primary']]},
           G3:{eyebrow:'Pass with a plan',title:'End your turn',text:'You used your removal and kept a blocker. Pass the turn.',why:'You also still have Giant Growth, so untapped mana can matter on defense.',buttons:[['End turn','guided-end-1','primary']]},
-          G4:{eyebrow:'Opponent combat',title:'Block the 3/3',text:'The opponent attacked with Hill Giant. Block it with your 2/2.',why:'Your creature would normally lose this combat, but you have an instant that can change the math.'},
-          G5:{eyebrow:'Combat trick',title:'Save your blocker with Giant Growth',text:'Before combat damage, cast Giant Growth on the creature that is blocking.',why:'Your 2/2 becomes 5/5 until end of turn and survives while destroying the 3/3 attacker.'},
-          G6:{eyebrow:'Your next turn',title:'Cast your commander',text:'Your lands untapped. Cast Jasmine Boreal from the command zone.',why:'Now that the dangerous flyer is disabled and the ground attacker is gone, developing your commander is much safer.'},
-          G7:{eyebrow:'Combat',title:'Attack with your 2/2',text:'Your commander has summoning sickness, but the 2/2 has been under your control since an earlier turn. Attack with the 2/2.',why:'The opponent has no creature that can legally block it right now.'},
+          G4:{eyebrow:'Opponent combat',title:'Block the 3/3',text:'The opponent attacked with Hill Giant. Click your 2/2 and choose Block from its action menu.',why:'Your creature would normally lose this combat, but you have an instant that can change the math.'},
+          G5:{eyebrow:'Combat trick',title:'Save your blocker with Giant Growth',text:'Before combat damage, click Giant Growth and choose Cast / Use from its action menu.',why:'Your 2/2 becomes 5/5 until end of turn and survives while destroying the 3/3 attacker.'},
+          G6:{eyebrow:'Your next turn',title:'Cast your commander',text:'Your lands untapped. Drag Jasmine Boreal from the command zone onto your battlefield.',why:'Now that the dangerous flyer is disabled and the ground attacker is gone, developing your commander is much safer.'},
+          G7:{eyebrow:'Combat',title:'Attack with your 2/2',text:'Your commander has summoning sickness, but the 2/2 has been under your control since an earlier turn. Click the 2/2 and choose Attack.',why:'The opponent has no creature that can legally block it right now.'},
           G8:{eyebrow:'End the turn',title:'Pass to the opponent',text:'You dealt 2 damage and brought the opponent to 10.',why:'Your commander will be able to attack after you begin your next turn.',buttons:[['End turn','guided-end-2','primary']]},
-          G9:{eyebrow:'Turn 7',title:'Make another land drop',text:'You drew a Plains. Play it so you have seven lands available.',why:'Continuing to make land drops lets you cast a large spell while still developing your board.'},
-          G10:{eyebrow:'Flying & vigilance',title:'Cast Serra Angel',text:'Cast Serra Angel from your hand.',why:'Flying makes it difficult for ground creatures to block. Vigilance means it will not tap when it attacks.'},
-          G11:{eyebrow:'Multiple attackers',title:'Choose Jasmine and your 2/2 as attackers',text:'Tap both creatures to select them as attackers, then send the attack.',why:'Serra Angel just entered this turn, so it cannot attack yet. Jasmine and your older 2/2 can.',hint:'Select two attackers, then use the button below.',buttons:[['Send selected attackers','send-guided-attack','primary']]},
+          G9:{eyebrow:'Turn 7',title:'Make another land drop',text:'You drew a Plains. Drag it into your Lands area so you have seven lands available.',why:'Continuing to make land drops lets you cast a large spell while still developing your board.'},
+          G10:{eyebrow:'Flying & vigilance',title:'Cast Serra Angel',text:'Drag Serra Angel from your hand onto your battlefield.',why:'Flying makes it difficult for ground creatures to block. Vigilance means it will not tap when it attacks.'},
+          G11:{eyebrow:'Multiple attackers',title:'Choose Jasmine and your 2/2 as attackers',text:'Click Jasmine and your 2/2 and use Attack on each card, then send the selected attack.',why:'Serra Angel just entered this turn, so it cannot attack yet. Jasmine and your older 2/2 can.',hint:'Select two attackers, then use the button below.',buttons:[['Send selected attackers','send-guided-attack','primary']]},
           G12:{eyebrow:'Damage',title:'End the turn',text:'Your attack dealt 6 damage. The opponent is down to 4 life.',why:'You are one clean flying attack away from winning.',buttons:[['End turn','guided-end-3','primary']]},
           G13:{eyebrow:'Opponent develops',title:'Your final turn begins',text:'The opponent played a 2/2 ground blocker. Your Serra Angel is now ready to attack.',why:'A normal ground creature cannot block a creature with flying unless it also has flying or reach.',buttons:[['Go to combat','go-final-combat','primary']]},
-          G14:{eyebrow:'Find lethal',title:'Attack with Serra Angel',text:'The opponent is at 4 life. Attack with Serra Angel to finish the game.',why:'Its 4 flying power is lethal, and the opponent’s ground blocker cannot block it.'},
+          G14:{eyebrow:'Find lethal',title:'Attack with Serra Angel',text:'The opponent is at 4 life. Click Serra Angel and choose Attack to finish the game.',why:'Its 4 flying power is lethal, and the opponent’s ground blocker cannot block it.'},
           G15:{eyebrow:'Victory',title:'You finished the guided game',text:'You just played through a shortened Commander game instead of only reading about one.',why:'You made land drops, managed mana, used removal, chose not to make a bad attack, blocked, used an instant, cast your commander, and found lethal through flying.',buttons:[['Practice in Commander Forge','open-solo','primary'],['Play tutorial again','restart-tutorial','ghost'],['Rules reference','rules-reference','ghost']]},
         };
         return guides[s]||guides.B0;
       }
+      function itExpectedDrop(card,side,zone){
+        if(side!=='player')return null;
+        const s=it.stage;
+        if(s==='M2'&&zone==='hand')return 'bottom';
+        if((s==='B1'&&card.role==='first-land')||(s==='B6'&&card.role==='second-land')||(s==='B13'&&card.role==='third-land')||(s==='G0'&&card.role==='guided-land')||(s==='G9'&&card.role==='guided-land-2'))return 'lands';
+        if((s==='B3'&&card.role==='dork')||(s==='B8'&&card.role==='bear')||(s==='G1'&&card.role==='guided-removal')||(s==='G10'&&card.role==='angel'))return 'battlefield';
+        if((s==='B15'||s==='B19'||s==='G6')&&zone==='command'&&card.role==='commander')return 'battlefield';
+        return null;
+      }
+      function itLessonActionLabel(found){
+        if(!found||!cardIsValid(found.card,found.side,found.zone))return '';
+        const s=it.stage;
+        if(['B1','B3','B6','B8','B13','B15','B19','G0','G1','G6','G9','G10','M2'].includes(s))return '';
+        if(s==='B2'||s==='B7')return found.card.tapped?'Already tapped':'Tap for mana';
+        if(s==='B4'||s==='B11'||s==='G7'||s==='G11'||s==='G14')return found.card.attacking?'Stop attack':'Attack';
+        if(s==='B10'||s==='G4')return 'Block';
+        if(s==='B12'||s==='G5')return 'Cast / Use';
+        if(s==='G1T')return 'Choose as target';
+        return 'Use for lesson';
+      }
+      function closeItInspector(){
+        itCardInspector?.classList.remove('open');
+        itCardInspector?.setAttribute('aria-hidden','true');
+        if(itCardInspectorCard)itCardInspectorCard.innerHTML='';
+      }
+      function openItInspector(cardId){
+        const found=findItCard(cardId); if(!found||!itCardInspectorCard)return;
+        const card=found.card; const lessonAction=itLessonActionLabel(found); const expected=itExpectedDrop(card,found.side,found.zone);
+        const normalImage=tutorialCardImageUrl(card,'normal');
+        itCardInspectorCard.innerHTML=`
+          <header class="it-inspector-header"><div><span class="it-guide-eyebrow">${found.zone==='command'?'Command zone':found.zone}</span><h3>${card.name}</h3></div><button class="icon-btn" type="button" data-it-inspector="close" aria-label="Close card details">×</button></header>
+          <div class="it-inspector-grid">
+            <button type="button" class="it-inspector-image-button" data-card-zoom-src="${normalImage}" data-card-zoom-name="${card.name}" aria-label="Enlarge ${card.name}"><img class="it-inspector-image" src="${normalImage}" alt="${card.name}" /></button>
+            <div class="it-inspector-details"><div class="it-inspector-meta">${card.cost||''}${card.cost?' · ':''}${card.type||''}</div>${card.text?`<div class="it-inspector-oracle">${card.text}</div>`:''}${card.power!==undefined&&card.power!==''?`<div class="it-inspector-pt">${card.power}/${card.toughness}</div>`:''}
+              ${expected?`<div class="it-inspector-drag-note"><strong>To play/move this card:</strong> close this view and drag it to the highlighted ${expected==='bottom'?'Bottom of library':expected} area.</div>`:''}
+              <div class="it-inspector-actions"><h4>Card actions</h4>${lessonAction?`<button class="btn primary" type="button" data-it-inspector="lesson" data-card-id="${card.id}">${lessonAction}</button>`:''}<button class="btn ghost" type="button" disabled>Graveyard</button><button class="btn ghost" type="button" disabled>Exile</button><button class="btn ghost" type="button" disabled>Return to hand</button></div>
+              <p class="it-inspector-note">The normal Commander Forge card menu has full zone, counter, attachment, and keyword actions. During the tutorial, actions that would skip the lesson stay locked.</p>
+            </div>
+          </div>`;
+        itCardInspector?.classList.add('open'); itCardInspector?.setAttribute('aria-hidden','false');
+      }
+      function bottomTutorialCard(card){
+        if(!card||it.stage!=='M2')return;
+        if(card.role!=='angel'){
+          const reason=/Land/.test(card.type||'')?'That is legal in a real game, but cutting a land here makes this opening hand less reliable.':'That is legal, but this card helps your early turns more than the expensive Serra Angel.';
+          it.feedback=`${reason} Try dragging Serra Angel to the bottom for this teaching hand.`; renderInteractiveTutorial(); return;
+        }
+        const index=it.player.hand.findIndex(c=>c.id===card.id); if(index<0)return;
+        const [bottomed]=it.player.hand.splice(index,1); it.bottomedCards.push(bottomed); it.stage='M3';
+        it.feedback='Good choice. Serra Angel costs five mana, so the cheaper cards and lands are more useful in your opening turns. It went to the bottom of your library, not your graveyard.';
+        renderInteractiveTutorial();
+      }
+      async function handleItDrop(cardId,side,zone,dropZone){
+        const found=findItCard(cardId); if(!found||found.side!==side||found.zone!==zone)return;
+        const expected=itExpectedDrop(found.card,side,zone);
+        if(!expected){tutorialToast('This lesson is not asking you to drag that card right now. Click it to inspect its actions.');return;}
+        if(dropZone!==expected){tutorialToast(`Try dragging that card to the highlighted ${expected==='bottom'?'Bottom of library':expected} area.`);return;}
+        if(it.stage==='M2'){bottomTutorialCard(found.card);return;}
+        await handleItCard(cardId,side,zone);
+      }
       function cardIsValid(card,side,zone){
         const s=it.stage;
         if(it.busy)return false;
+        if(s==='M2')return side==='player'&&zone==='hand';
         if(s==='B1')return side==='player'&&zone==='hand'&&card.role==='first-land';
         if(s==='B2')return side==='player'&&zone==='lands'&&card.role==='first-land';
         if(s==='B3')return side==='player'&&zone==='hand'&&card.role==='dork';
@@ -440,7 +532,7 @@
         const valid=cardIsValid(card,side,zone); const classes=['it-card'];
         if(valid)classes.push('valid'); if(card.tapped)classes.push('tapped'); if(card.attacking)classes.push('attacking'); if(card.blocking)classes.push('blocking'); if(card.sick)classes.push('sick'); if(card.pacified)classes.push('pacified'); if(it.flashCardId===card.id)classes.push('entering');
         const image=tutorialCardImageUrl(card);
-        return `<button type="button" class="${classes.join(' ')}" data-it-card="${card.id}" data-it-side="${side}" data-it-zone="${zone}" aria-label="${card.name}" title="${card.name}"><span class="it-card-fallback"><span class="it-card-name">${card.name}</span>${card.cost?`<span class="it-card-cost">${card.cost}</span>`:''}<span class="it-card-type">${card.type||''}</span><span class="it-card-text">${card.text||''}</span>${card.power!==undefined&&card.power!==''?`<span class="it-card-pt">${card.power}/${card.toughness}</span>`:''}</span><img class="it-card-image" src="${image}" alt="${card.name}" draggable="false" decoding="async" onerror="this.remove()"/><span class="it-art-name">${card.name}</span></button>`;
+        return `<button type="button" class="${classes.join(' ')}" data-it-card="${card.id}" data-it-side="${side}" data-it-zone="${zone}" aria-label="${card.name}. Click to inspect; drag when the guide asks you to play or move it." title="${card.name}"><span class="it-card-fallback"><span class="it-card-name">${card.name}</span>${card.cost?`<span class="it-card-cost">${card.cost}</span>`:''}<span class="it-card-type">${card.type||''}</span><span class="it-card-text">${card.text||''}</span>${card.power!==undefined&&card.power!==''?`<span class="it-card-pt">${card.power}/${card.toughness}</span>`:''}</span><img class="it-card-image" src="${image}" alt="${card.name}" draggable="false" decoding="async" onerror="this.remove()"/><span class="it-art-name">${card.name}</span></button>`;
       }
       function renderHiddenHand(count){ return Array.from({length:Math.min(7,count||0)},(_,i)=>`<div class="it-card it-card-back" aria-label="Hidden opponent card ${i+1}"></div>`).join(''); }
       function renderItPlayer(side){
@@ -451,11 +543,12 @@
         const command=!opp&&p.commander?`<div class="it-command-wrap">${renderItCard(p.commander,'player','command')}<span class="it-command-tax">Tax +${Math.max(0,(p.commanderCasts||0)*2)}</span></div>`:'';
         const stats=`<div class="it-player-bar"><strong>${p.name}</strong><div class="it-stats"><span class="it-stat">Life ${p.life}</span>${!opp?`<span class="it-stat">Hand ${p.hand.length}</span><span class="it-stat">Mana ${Object.values(it.mana||{}).reduce((a,b)=>a+b,0)}</span>`:`<span class="it-stat">Hand ${p.handCount}</span>`}</div></div>`;
         const handZone=`<div class="it-table-zone it-hand-zone"><div class="it-zone-label">${opp?'Hidden opponent hand':'Your hand'}</div><div class="it-row">${hand}</div></div>`;
-        const battlefieldZone=`<div class="it-table-zone it-battlefield-zone"><div class="it-zone-label">Creatures & other permanents</div><div class="it-battlefield">${bf}</div></div>`;
-        const resourceZone=`<div class="it-table-zone it-resource-zone"><div class="it-resource-main"><div class="it-zone-label">Lands</div><div class="it-land-row">${lands}</div></div>${command?`<div class="it-command-side"><div class="it-zone-label">Command zone</div>${command}</div>`:''}</div>`;
+        const battlefieldZone=`<div class="it-table-zone it-battlefield-zone ${!opp?'it-drop-zone':''}" ${!opp?'data-it-drop-zone="battlefield"':''}><div class="it-zone-label">Creatures & other permanents</div><div class="it-battlefield">${bf}</div></div>`;
+        const resourceZone=`<div class="it-table-zone it-resource-zone"><div class="it-resource-main it-drop-zone" ${!opp?'data-it-drop-zone="lands"':''}><div class="it-zone-label">Lands</div><div class="it-land-row">${lands}</div></div>${command?`<div class="it-command-side"><div class="it-zone-label">Command zone</div>${command}</div>`:''}</div>`;
+        const bottomZone=!opp&&it.stage==='M2'?`<div class="it-bottom-zone it-drop-zone active" data-it-drop-zone="bottom"><strong>Bottom of library</strong><span>Drag 1 card here. It is not discarded.</span></div>`:'';
         return opp
           ? `<section class="it-player opponent">${stats}${handZone}${resourceZone}${battlefieldZone}</section>`
-          : `<section class="it-player you">${battlefieldZone}${resourceZone}${handZone}${stats}</section>`;
+          : `<section class="it-player you">${battlefieldZone}${resourceZone}${bottomZone}${handZone}${stats}</section>`;
       }
       function renderItGuide(){
         const g=itGuideData(), prog=itStageNumber(); const pct=((prog.index+1)/prog.total)*100;
@@ -476,13 +569,13 @@
         itBody.innerHTML=`<div class="it-board-layout"><div class="it-board">${it.busy&&it.aiMessage?`<div class="it-ai-banner">${it.aiMessage}</div>`:''}${renderItPlayer('opponent')}<div class="it-center-line"><span>Turn ${it.turn}</span><span class="it-phase-pill">${it.phase}</span><span>${it.screen==='guided'?'Guided game':'Training game'}</span></div>${renderItPlayer('player')}</div>${renderItGuide()}</div>`;
       }
       function renderTutorialComplete(){
-        itBody.innerHTML=`<div class="it-summary"><h3>Commander tutorial complete</h3><p>You learned these rules by taking the actions yourself:</p><ul><li>Evaluating an opening hand, mulligans, and the first-turn draw rule in 1v1</li><li>Land plays, tapping lands, mana, and casting costs</li><li>Summoning sickness and legal attackers</li><li>Blocking and combat damage</li><li>Instants and responding before combat damage</li><li>The command zone and commander tax</li><li>Targeted removal, flying, vigilance, and evaluating attacks</li><li>Reading the board and finding lethal damage</li></ul><div class="it-summary-actions"><button class="btn primary" data-it-action="open-solo">Open Solo Practice</button><button class="btn" data-it-action="restart-tutorial">Play again</button><button class="btn ghost" data-it-action="rules-reference">Rules reference</button></div></div>`;
+        itBody.innerHTML=`<div class="it-summary"><h3>Commander tutorial complete</h3><p>You learned these rules by taking the actions yourself:</p><ul><li>Evaluating opening hands, the free multiplayer Commander mulligan, and putting cards on the bottom after non-free mulligans</li><li>Land plays, tapping lands, mana, and casting costs</li><li>Summoning sickness and legal attackers</li><li>Blocking and combat damage</li><li>Instants and responding before combat damage</li><li>The command zone and commander tax</li><li>Targeted removal, flying, vigilance, and evaluating attacks</li><li>Reading the board and finding lethal damage</li></ul><div class="it-summary-actions"><button class="btn primary" data-it-action="open-solo">Open Solo Practice</button><button class="btn" data-it-action="restart-tutorial">Play again</button><button class="btn ghost" data-it-action="rules-reference">Rules reference</button></div></div>`;
       }
       function openInteractiveTutorial(){
         it={screen:'hub'}; it.feedback=''; renderInteractiveTutorial();
         interactiveTutorial.classList.add('open'); interactiveTutorial.setAttribute('aria-hidden','false'); renderInteractiveTutorial();
       }
-      function closeInteractiveTutorial(){ interactiveTutorial.classList.remove('open'); interactiveTutorial.setAttribute('aria-hidden','true'); it={screen:'hub'}; }
+      function closeInteractiveTutorial(){ closeItInspector(); interactiveTutorial.classList.remove('open'); interactiveTutorial.setAttribute('aria-hidden','true'); it={screen:'hub'}; }
       function untapSide(side){ [...it[side].lands,...it[side].battlefield].forEach(c=>{c.tapped=false;c.attacking=false;c.blocking=false;c.sick=false;}); it.mana={G:0,W:0}; }
       function tapFirstLand(preferred='Forest'){
         let c=it.player.lands.find(x=>!x.tapped&&x.name===preferred)||it.player.lands.find(x=>!x.tapped); if(c){c.tapped=true; if(c.name==='Forest')it.mana.G=(it.mana.G||0)+1; else if(c.name==='Plains')it.mana.W=(it.mana.W||0)+1;} return c;
@@ -571,10 +664,11 @@
         if(action==='start-basics'){buildBasicsState();return renderInteractiveTutorial();}
         if(action==='start-guided'){buildGuidedState();return renderInteractiveTutorial();}
         if(action==='rules-reference'){closeInteractiveTutorial();return openCommanderTutorial();}
-        if(action==='keep-bad'&&it.stage==='M0'){it.feedback=`You are allowed to keep it, but this is the kind of hand that often starts a game from behind. ${it.mulliganLesson?.reason||''} Try the Mulligan button so you can see a healthier hand.`;return renderInteractiveTutorial();}
-        if(action==='take-mulligan'&&it.stage==='M0'){it.player.hand=shuffled(it.goodOpeningHand||[]);it.mulligans=1;it.stage='M1';it.feedback='You shuffled the bad hand away and drew a fresh seven for this training mulligan.';return renderInteractiveTutorial();}
-        if(action==='mulligan-info'&&it.stage==='M1'){it.feedback='London mulligan: draw seven again each time, then when you finally keep, put one card on the bottom for each counted mulligan. Multiplayer Magic gives each player a free first mulligan; this training 1v1 also gives you one free mulligan so you can learn without starting down a card.';return renderInteractiveTutorial();}
-        if(action==='keep-good'&&it.stage==='M1'){it.stage='B0';it.phase='Main 1';it.feedback='Good keep: two lands, both colors, and early plays.';return renderInteractiveTutorial();}
+        if(action==='keep-bad'&&it.stage==='M0'){it.feedback=`You are allowed to keep it, but this is the kind of hand that often starts a game from behind. ${it.mulliganLesson?.reason||''} Try Mulligan so you can practice the free Commander mulligan.`;return renderInteractiveTutorial();}
+        if(action==='take-mulligan'&&it.stage==='M0'){it.player.hand=shuffled(it.practiceSecondHand||[]);it.mulligans=1;it.stage='M1';it.feedback='Free mulligan used: you shuffled the original hand back and drew a fresh seven. You still have seven cards.';return renderInteractiveTutorial();}
+        if(action==='keep-free-hand'&&it.stage==='M1'){it.feedback='This hand is absolutely keepable. For the tutorial, take one more mulligan so you can practice the rule that makes you put a card on the bottom.';return renderInteractiveTutorial();}
+        if(action==='take-second-mulligan'&&it.stage==='M1'){it.player.hand=shuffled(it.finalOpeningHand||[]);it.mulligans=2;it.nonFreeMulligans=1;it.stage='M2';it.feedback='You drew seven again. This mulligan is not free, so when you keep you must put one card on the bottom of your library.';return renderInteractiveTutorial();}
+        if(action==='keep-after-bottom'&&it.stage==='M3'){it.stage='B0';it.phase='Main 1';it.feedback='Opening hand kept. Click cards to inspect them; drag cards to play or move them.';return renderInteractiveTutorial();}
         if(action==='begin-basics'){it.stage='B1';return renderInteractiveTutorial();}
         if(action==='end-turn'&&it.stage==='B5'){await opponentTurnOne();return;}
         if(action==='end-turn'&&it.stage==='B9'){await opponentTurnTwo();return;}
@@ -597,20 +691,99 @@
         if(action==='open-solo'){closeInteractiveTutorial();hideTitle();return launch('solo');}
         if(action==='restart-tutorial'){buildBasicsState();return renderInteractiveTutorial();}
       }
+      function clearItDrag(){
+        if(itDrag?.ghost)itDrag.ghost.remove();
+        interactiveTutorial.querySelectorAll('.it-drop-zone.drag-target').forEach(el=>el.classList.remove('drag-target'));
+        document.body.classList.remove('it-dragging');
+        itDrag=null;
+      }
+      interactiveTutorial.addEventListener('pointerdown',(e)=>{
+        const card=e.target.closest?.('[data-it-card]'); if(!card||e.button>0||it.busy)return;
+        const found=findItCard(card.dataset.itCard); if(!found)return;
+        const expected=itExpectedDrop(found.card,found.side,found.zone); if(!expected)return;
+        itDrag={pointerId:e.pointerId,cardId:found.card.id,side:found.side,zone:found.zone,expected,startX:e.clientX,startY:e.clientY,dragging:false,sourceEl:card,ghost:null};
+      });
+      interactiveTutorial.addEventListener('pointermove',(e)=>{
+        if(!itDrag||itDrag.pointerId!==e.pointerId)return;
+        const dx=e.clientX-itDrag.startX,dy=e.clientY-itDrag.startY;
+        if(!itDrag.dragging&&Math.hypot(dx,dy)>9){
+          itDrag.dragging=true; itSuppressClickUntil=Date.now()+450; document.body.classList.add('it-dragging');
+          const ghost=itDrag.sourceEl.cloneNode(true); ghost.classList.add('it-drag-ghost'); ghost.removeAttribute('data-it-card'); document.body.appendChild(ghost); itDrag.ghost=ghost;
+          try{itDrag.sourceEl.setPointerCapture(e.pointerId);}catch{}
+          interactiveTutorial.querySelectorAll(`[data-it-drop-zone="${itDrag.expected}"]`).forEach(el=>el.classList.add('drag-target'));
+        }
+        if(itDrag.dragging&&itDrag.ghost){itDrag.ghost.style.left=`${e.clientX}px`;itDrag.ghost.style.top=`${e.clientY}px`;e.preventDefault();}
+      });
+      interactiveTutorial.addEventListener('pointerup',async(e)=>{
+        if(!itDrag||itDrag.pointerId!==e.pointerId)return;
+        const drag={...itDrag};
+        if(!drag.dragging){itDrag=null;return;}
+        const underneath=document.elementFromPoint(e.clientX,e.clientY);
+        const drop=underneath?.closest?.('[data-it-drop-zone]')?.dataset?.itDropZone||'';
+        clearItDrag();
+        await handleItDrop(drag.cardId,drag.side,drag.zone,drop);
+      });
+      interactiveTutorial.addEventListener('pointercancel',clearItDrag);
       interactiveTutorial.addEventListener('click',async(e)=>{
-        const card=e.target.closest?.('[data-it-card]');if(card){await handleItCard(card.dataset.itCard,card.dataset.itSide,card.dataset.itZone);return;}
+        if(Date.now()<itSuppressClickUntil){e.preventDefault();return;}
+        const card=e.target.closest?.('[data-it-card]');if(card){openItInspector(card.dataset.itCard);return;}
         const button=e.target.closest?.('[data-it-action]');if(button){await handleItAction(button.dataset.itAction);}
       });
-      document.addEventListener('keydown',(e)=>{if(e.key==='Escape'&&interactiveTutorial.classList.contains('open'))closeInteractiveTutorial();});
+      itCardInspector?.addEventListener('click',async(e)=>{
+        if(e.target===itCardInspector||e.target.closest?.('[data-it-inspector="close"]')){closeItInspector();return;}
+        const lesson=e.target.closest?.('[data-it-inspector="lesson"]');
+        if(lesson){const found=findItCard(lesson.dataset.cardId);closeItInspector();if(found)await handleItCard(found.card.id,found.side,found.zone);}
+      });
+
+      const cardZoom=document.getElementById('forge-card-zoom');
+      const cardZoomImage=document.getElementById('forge-card-zoom-image');
+      const cardZoomClose=document.getElementById('forge-card-zoom-close');
+      function openCardZoom(src,name='Magic card'){
+        if(!src||!cardZoom||!cardZoomImage)return;
+        let zoomSrc=String(src).replace('version=small','version=large').replace('version=normal','version=large');
+        cardZoomImage.src=zoomSrc;cardZoomImage.alt=name;cardZoom.classList.add('open');cardZoom.setAttribute('aria-hidden','false');
+      }
+      function closeCardZoom(){cardZoom?.classList.remove('open');cardZoom?.setAttribute('aria-hidden','true');if(cardZoomImage)cardZoomImage.removeAttribute('src');}
+      document.addEventListener('click',(e)=>{
+        const explicit=e.target.closest?.('[data-card-zoom-src]');
+        if(explicit){openCardZoom(explicit.dataset.cardZoomSrc,explicit.dataset.cardZoomName||'Magic card');return;}
+        const image=e.target.closest?.('.inspector-card-image');
+        if(image)openCardZoom(image.currentSrc||image.src,image.alt||'Magic card');
+      });
+      cardZoom?.addEventListener('click',(e)=>{if(e.target===cardZoom||e.target===cardZoomClose)closeCardZoom();});
+      document.addEventListener('keydown',(e)=>{
+        if(e.key!=='Escape')return;
+        if(cardZoom?.classList.contains('open')){closeCardZoom();e.stopImmediatePropagation();return;}
+        if(itCardInspector?.classList.contains('open')){closeItInspector();e.stopImmediatePropagation();return;}
+        if(interactiveTutorial.classList.contains('open'))closeInteractiveTutorial();
+      },true);
 
       const feedbackForm = document.getElementById('forge-feedback-form');
+      const feedbackStatus = document.getElementById('forge-feedback-status');
+      function setFeedbackStatus(message,state=''){if(feedbackStatus){feedbackStatus.textContent=message;feedbackStatus.dataset.state=state;}}
+      function submitFeedbackToSheet(endpoint,payload){
+        const post=document.createElement('form');post.method='POST';post.action=endpoint;post.target='forge-feedback-target';post.hidden=true;
+        Object.entries(payload).forEach(([name,value])=>{const input=document.createElement('input');input.type='hidden';input.name=name;input.value=String(value??'');post.appendChild(input);});
+        document.body.appendChild(post);post.submit();post.remove();
+      }
       feedbackForm?.addEventListener('submit', (e) => {
         e.preventDefault();
         const message = String(document.getElementById('forge-feedback-message')?.value || '').trim();
         const type = String(document.getElementById('forge-feedback-type')?.value || 'General feedback');
         if (!message) return document.getElementById('forge-feedback-message')?.focus();
+        const endpoint=String(window.CommanderForgeFeedback?.endpoint||'').trim();
+        if(/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec(?:\?.*)?$/i.test(endpoint)){
+          submitFeedbackToSheet(endpoint,{type,message,version:APP_VERSION,page:location.pathname||'/',website:''});
+          feedbackForm.reset();setFeedbackStatus('Sent — thank you! Your feedback was added to the Commander Forge feedback sheet.','success');
+          return;
+        }
+        setFeedbackStatus('Google Sheets is not connected yet, so the email fallback is opening. Follow GOOGLE_SHEETS_FEEDBACK_SETUP.md once to enable direct sending.','warning');
         const subject = `[Commander Forge] ${type}`;
-        const body = `${message}\n\n---\nWebsite version: ${APP_VERSION}\nSent from The Commander Forge feedback menu`;
+        const body = `${message}
+
+---
+Website version: ${APP_VERSION}
+Sent from The Commander Forge feedback menu`;
         window.location.href = `mailto:rinmefornoodles@gmail.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
       });
 
@@ -631,6 +804,6 @@
     })();
   </script>
   <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js" integrity="sha512-XEKeWX+mI3Ov+tg2evDlVQFzVOIp4T8J3cNcCEPaEUGpxJV3eZaN8rHuvnFPvQpGJBHPmrozJDMpm2xcDvtmyQ==" crossorigin="anonymous"></script>
-  <script defer src="./commander-forge-5.29.0.js" onerror="window.__forgeBootError('HTTP error while loading commander-forge-5.29.0.js')"></script>
+  <script defer src="./commander-forge-5.30.0.js" onerror="window.__forgeBootError('HTTP error while loading commander-forge-5.30.0.js')"></script>
 </body>
 </html>
