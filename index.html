@@ -8,7 +8,7 @@
   <title>The Commander Forge</title>
   <link rel="icon" href="./forge-mark.svg" type="image/svg+xml" />
   <link rel="manifest" href="./manifest.webmanifest" />
-  <link rel="stylesheet" href="./commander-forge-5.27.0.css" />
+  <link rel="stylesheet" href="./commander-forge-5.28.0.css" />
 </head>
 <body>
   <div id="title-screen" class="forge-title-screen" aria-label="The Commander Forge title screen">
@@ -22,7 +22,7 @@
             <div class="forge-title-main-actions">
               <button class="forge-title-btn primary" data-title-action="solo">Solo Practice</button>
               <button class="forge-title-btn secondary" data-title-action="online">Online Multiplayer</button>
-              <button class="forge-title-btn tutorial" data-title-action="tutorial">New to Magic? Learn Commander</button>
+              <button class="forge-title-btn tutorial" data-title-action="tutorial">New to Magic? Interactive Commander Tutorial</button>
             </div>
             <div class="forge-title-small-actions" style="margin-top:14px">
               <button class="forge-title-btn ghost" id="continue-game-btn" data-title-action="continue">Continue Game</button>
@@ -61,7 +61,7 @@
           </div>
         </div>
         <div class="forge-title-footer">
-          <div class="forge-title-version">Version 5.27 · Cards and rules data provided by Scryfall</div>
+          <div class="forge-title-version">Version 5.28 · Cards and rules data provided by Scryfall</div>
           <div class="forge-title-legal">The Commander Forge is not affiliated with Wizards of the Coast.<br/>Magic: The Gathering is a trademark of Wizards of the Coast LLC.</div>
         </div>
       </section>
@@ -83,7 +83,7 @@
   <div id="commander-tutorial" class="commander-tutorial" aria-hidden="true">
     <section class="commander-tutorial-shell" role="dialog" aria-modal="true" aria-labelledby="commander-tutorial-heading">
       <header class="commander-tutorial-header">
-        <div><h2 id="commander-tutorial-heading">Learn Magic: Commander</h2><p>A beginner course from your first land to commander damage and the stack.</p></div>
+        <div><h2 id="commander-tutorial-heading">Commander Rules Reference</h2><p>A readable reference for the rules you practice in the interactive tutorial.</p></div>
         <button class="icon-btn commander-tutorial-close" data-tutorial-action="close" aria-label="Close Commander tutorial">×</button>
       </header>
       <div class="commander-tutorial-main">
@@ -98,11 +98,22 @@
     </section>
   </div>
 
+
+  <div id="interactive-tutorial" class="interactive-tutorial" aria-hidden="true">
+    <section class="it-shell" role="dialog" aria-modal="true" aria-labelledby="interactive-tutorial-heading">
+      <header class="it-header">
+        <div class="it-header-title"><h2 id="interactive-tutorial-heading">Interactive Commander Tutorial</h2><p id="it-header-subtitle">Learn by actually playing the cards.</p></div>
+        <button class="icon-btn" data-it-action="close" aria-label="Close interactive tutorial">×</button>
+      </header>
+      <div id="it-body" class="it-body"></div>
+    </section>
+  </div>
+
   <div id="app" aria-live="polite"><div class="boot-loading">Loading The Commander Forge…</div></div>
   <div id="toast-root" aria-live="assertive"></div>
   <script>
     (() => {
-      const APP_VERSION='5.27.0';
+      const APP_VERSION='5.28.0';
       const STORAGE_KEY='commander-forge-state-v2';
       const app=document.getElementById('app');
       const title=document.getElementById('title-screen');
@@ -272,6 +283,297 @@
         if (action === 'practice') { closeCommanderTutorial(); launch('solo'); }
       });
 
+
+      // 5.28 interactive tutorial: a small deterministic rules trainer that does not alter saved games.
+      const interactiveTutorial = document.getElementById('interactive-tutorial');
+      const itBody = document.getElementById('it-body');
+      const itSubtitle = document.getElementById('it-header-subtitle');
+      const TUTORIAL_VARIANTS = [
+        { dork:['Elvish Mystic','{G}','Creature — Elf Druid','{T}: Add {G}.','1','1'], bear:['Grizzly Bears','{1}{G}','Creature — Bear','','2','2'], removal:['Pacifism','{1}{W}','Enchantment — Aura','Enchant creature. Enchanted creature can’t attack or block.','',''] },
+        { dork:['Llanowar Elves','{G}','Creature — Elf Druid','{T}: Add {G}.','1','1'], bear:['Runeclaw Bear','{1}{G}','Creature — Bear','','2','2'], removal:['Planar Disruption','{1}{W}','Enchantment — Aura','Enchant creature, planeswalker, or artifact. Enchanted permanent can’t attack or block, and its activated abilities can’t be activated.','',''] },
+        { dork:['Fyndhorn Elves','{G}','Creature — Elf Druid','{T}: Add {G}.','1','1'], bear:['Balduvian Bears','{1}{G}','Creature — Bear','','2','2'], removal:['Pacifism','{1}{W}','Enchantment — Aura','Enchant creature. Enchanted creature can’t attack or block.','',''] },
+      ];
+      const TC = {
+        forest:(id='forest')=>({id,name:'Forest',cost:'',type:'Basic Land — Forest',text:'{T}: Add {G}.',role:'forest'}),
+        plains:(id='plains')=>({id,name:'Plains',cost:'',type:'Basic Land — Plains',text:'{T}: Add {W}.',role:'plains'}),
+        mountain:(id='mountain')=>({id,name:'Mountain',cost:'',type:'Basic Land — Mountain',text:'{T}: Add {R}.',role:'mountain'}),
+        swamp:(id='swamp')=>({id,name:'Swamp',cost:'',type:'Basic Land — Swamp',text:'{T}: Add {B}.',role:'swamp'}),
+        fromTuple:(id,tuple,role)=>({id,name:tuple[0],cost:tuple[1],type:tuple[2],text:tuple[3],power:tuple[4],toughness:tuple[5],role}),
+        growth:(id='growth')=>({id,name:'Giant Growth',cost:'{G}',type:'Instant',text:'Target creature gets +3/+3 until end of turn.',role:'growth'}),
+        angel:(id='angel')=>({id,name:'Serra Angel',cost:'{3}{W}{W}',type:'Creature — Angel',text:'Flying, vigilance',power:'4',toughness:'4',role:'angel'}),
+        commander:()=>({id:'jasmine',name:'Jasmine Boreal',cost:'{3}{G}{W}',type:'Legendary Creature — Human',text:'A straightforward commander for training.',power:'4',toughness:'5',role:'commander'}),
+        arsonist:()=>({id:'arsonist',name:'Goblin Arsonist',cost:'{R}',type:'Creature — Goblin Shaman',text:'When this dies, it can deal 1 damage to any target.',power:'1',toughness:'1',role:'arsonist'}),
+        piker:()=>({id:'piker',name:'Goblin Piker',cost:'{1}{R}',type:'Creature — Goblin Warrior',text:'',power:'2',toughness:'1',role:'piker'}),
+        hill:()=>({id:'hill',name:'Hill Giant',cost:'{3}{R}',type:'Creature — Giant',text:'',power:'3',toughness:'3',role:'hill'}),
+        flyer:()=>({id:'flyer',name:'Air Elemental',cost:'{3}{U}{U}',type:'Creature — Elemental',text:'Flying',power:'4',toughness:'4',role:'flyer'}),
+        murder:()=>({id:'murder',name:'Murder',cost:'{1}{B}{B}',type:'Instant',text:'Destroy target creature.',role:'murder'}),
+        oppBear:()=>({id:'oppbear',name:'Bear Cub',cost:'{1}{G}',type:'Creature — Bear',text:'',power:'2',toughness:'2',role:'oppbear'}),
+      };
+      let it = {screen:'hub'};
+      const itDelay = (ms)=>new Promise(resolve=>setTimeout(resolve,ms));
+      function freshCard(card, extra={}) { return {...card,tapped:false,sick:false,attacking:false,blocking:false,pacified:false,...extra}; }
+      function shuffled(items){ const out=[...items]; for(let i=out.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[out[i],out[j]]=[out[j],out[i]];} return out; }
+      function tutorialVariant(){ return TUTORIAL_VARIANTS[Math.floor(Math.random()*TUTORIAL_VARIANTS.length)]; }
+      function tutorialToast(message){ it.feedback=message; renderInteractiveTutorial(); }
+      function findItCard(id){ for(const side of ['player','opponent']) for(const zone of ['hand','battlefield','lands','graveyard']){ const found=it[side]?.[zone]?.find(c=>c.id===id); if(found) return {side,zone,card:found}; } if(it.player?.commander?.id===id) return {side:'player',zone:'command',card:it.player.commander}; return null; }
+      function moveItCard(side,from,to,id,extra={}){ const source=it[side][from]; const index=source.findIndex(c=>c.id===id); if(index<0)return null; const [card]=source.splice(index,1); Object.assign(card,extra); it[side][to].push(card); return card; }
+      function itLand(id,name,role){ const c=name==='Plains'?TC.plains(id):name==='Mountain'?TC.mountain(id):name==='Swamp'?TC.swamp(id):TC.forest(id); c.role=role||c.role; return freshCard(c); }
+      function buildBasicsState(){
+        const v=tutorialVariant();
+        const baseHand=[
+          itLand('p-forest-1','Forest','first-land'),
+          itLand('p-plains-1','Plains','second-land'),
+          freshCard(TC.fromTuple('dork',v.dork,'dork')),
+          freshCard(TC.fromTuple('bear',v.bear,'bear')),
+          freshCard(TC.growth()),
+          freshCard(TC.fromTuple('removal',v.removal,'removal')),
+          freshCard(TC.angel()),
+        ];
+        it={screen:'basics',stage:'B0',variant:v,turn:1,phase:'Main 1',busy:false,feedback:'',flashCardId:'',mana:{G:0,W:0},player:{name:'You',life:40,hand:shuffled(baseHand),battlefield:[],lands:[],graveyard:[],commander:freshCard(TC.commander()),commanderCasts:0},opponent:{name:'Training Opponent',life:40,handCount:7,battlefield:[],lands:[],graveyard:[]}};
+      }
+      function buildGuidedState(){
+        const v=tutorialVariant();
+        it={screen:'guided',stage:'G0',variant:v,turn:5,phase:'Main 1',busy:false,feedback:'',flashCardId:'',mana:{G:0,W:0},player:{name:'You',life:30,hand:shuffled([
+          itLand('g-forest','Forest','guided-land'),
+          freshCard(TC.fromTuple('g-removal',v.removal,'guided-removal')),
+          freshCard(TC.growth('g-growth')),
+          freshCard(TC.angel('g-angel')),
+          freshCard({id:'g-flex',name:'Inspiring Overseer',cost:'{2}{W}',type:'Creature — Angel Cleric',text:'Flying. When this enters, you gain 1 life and draw a card.',power:'2',toughness:'1',role:'flex'}),
+        ]),battlefield:[freshCard(TC.fromTuple('g-dork',v.dork,'dork')),freshCard(TC.fromTuple('g-bear',v.bear,'guided-bear'))],lands:[1,2,3,4,5].map((n)=>itLand(`g-land-${n}`,n%3===0?'Plains':'Forest','guided-existing-land')),graveyard:[],commander:freshCard(TC.commander()),commanderCasts:0},opponent:{name:'Training Opponent',life:12,handCount:5,battlefield:[freshCard(TC.hill()),freshCard(TC.flyer())],lands:[1,2,3,4,5].map((n)=>itLand(`go-land-${n}`,n%3===0?'Swamp':'Mountain','opp-land')),graveyard:[]}};
+      }
+      function itStageNumber(){
+        const basics=['B0','B1','B2','B3','B4','B5','B6','B7','B8','B9','B10','B11','B12','B13','B14','B15','B16','B17','B18','B19','B20'];
+        const guided=['G0','G1','G1T','G2','G3','G4','G5','G6','G7','G8','G9','G10','G11','G12','G13','G14','G15'];
+        const list=it.screen==='guided'?guided:basics; return {index:Math.max(0,list.indexOf(it.stage)),total:list.length};
+      }
+      function itGuideData(){
+        const s=it.stage;
+        const guides={
+          B0:{eyebrow:'Basics · Opening hand',title:'You control this deck',text:'This training game starts like a 1v1 Commander game. You have seven cards, your commander begins in the command zone, and because you are going first you will skip the draw on turn 1.',why:'The hand is randomized from several curated versions, but each version teaches the same rules.',buttons:[['Begin your first turn','begin-basics','primary']]},
+          B1:{eyebrow:'Turn 1 · Main phase',title:'Play your first land',text:'Find the Forest in your hand and tap it. Playing a land does not use the stack, and you normally get one land play each turn.',why:'Lands are your main source of mana. You are allowed to play zero lands, but this hand has one you want to play.',hint:'The correct card is glowing.'},
+          B2:{eyebrow:'Mana',title:'Tap the Forest for green mana',text:'Tap the Forest you just played. Tapping turns it sideways and adds one green mana.',why:'Mana pays costs. The {G} symbol on your one-mana creature requires green mana.',hint:'Tap the glowing Forest on the battlefield.'},
+          B3:{eyebrow:'Casting a spell',title:`Cast ${it.variant?.dork?.[0]||'your mana creature'}`,text:'You now have {G} available. Tap the highlighted creature in your hand to cast it. The tutorial will resolve the spell immediately.',why:'Creature spells normally can be cast during your main phase while the stack is empty.'},
+          B4:{eyebrow:'Creatures',title:'Try to attack with it',text:'Tap your new creature as though you wanted to attack.',why:'It entered this turn, so summoning sickness prevents it from attacking or using a {T} ability unless it has haste.',hint:'Try it anyway—the tutorial will explain the rule.'},
+          B5:{eyebrow:'End of turn',title:'Pass the turn',text:'You have used your land and mana. End the turn and watch the opponent take its turn.',why:'The opponent is scripted, but it plays cards visibly so you can follow what is happening.',buttons:[['End turn','end-turn','primary']]},
+          B6:{eyebrow:'Turn 2',title:'Play a second land',text:'Your permanents untapped and you drew for turn. Play the Plains from your hand.',why:'You may normally play one land on each of your own turns.'},
+          B7:{eyebrow:'Paying a cost',title:'Make two mana',text:'Tap your Forest and Plains. The mana pool on this guide will show the mana you made.',why:'Your two-mana creature costs {1}{G}: one mana must be green and the other can be any type.',hint:'Tap two glowing lands.'},
+          B8:{eyebrow:'Casting a creature',title:`Cast ${it.variant?.bear?.[0]||'your 2/2'}`,text:'You have enough mana. Cast the highlighted 2/2 creature from your hand.',why:'The mana is spent as part of casting the spell, then the creature resolves onto the battlefield.'},
+          B9:{eyebrow:'Prepare to defend',title:'End your turn',text:'Your older mana creature can act now, but the 2/2 you just cast has summoning sickness. End the turn.',why:'On the opponent’s turn, you will get a chance to block.',buttons:[['End turn','end-turn','primary']]},
+          B10:{eyebrow:'Opponent combat',title:'Block the attacker',text:'The opponent attacked with a 1/1. Tap your highlighted 2/2 to block it.',why:'Blocked creatures deal combat damage to each other. Your 2/2 survives one damage and destroys the 1/1.'},
+          B11:{eyebrow:'Your combat',title:'Attack with your 2/2',text:'Your creature survived and all damage was removed at the end of the previous turn. Attack with it now.',why:'The opponent still has a 2/1 blocker, so watch what happens after blockers are declared.'},
+          B12:{eyebrow:'Instants & priority',title:'Use Giant Growth before damage',text:'The opponent blocked your 2/2 with a 2/1. Cast Giant Growth now.',why:'Instants can be cast during combat when you receive priority. Giant Growth makes your creature 5/5 for the turn, so it wins combat.'},
+          B13:{eyebrow:'Main phase 2',title:'Play the Forest you drew',text:'Combat is over, but you have not used your land play this turn. Play the new Forest during your second main phase.',why:'Your one land play is for the entire turn, not separately for each main phase.'},
+          B14:{eyebrow:'Fast-forward',title:'Move to the Commander lesson',text:'Real Commander games take time to develop. We will jump ahead a couple of turns so you can practice casting your commander without waiting.',why:'The tutorial keeps the important game state but skips repetitive land drops.',buttons:[['Fast-forward','fast-forward','primary']]},
+          B15:{eyebrow:'Commander',title:'Cast Jasmine Boreal',text:'Tap your commander in the command zone. The tutorial will auto-pay the five mana so you can focus on where commanders are cast from.',why:'Your commander starts in the command zone and can normally be cast from there.'},
+          B16:{eyebrow:'Opponent interaction',title:'End the turn',text:'Your commander is on the battlefield. Pass and watch the opponent respond.',why:'Commander does not make your creature immune to removal.',buttons:[['End turn','end-turn','primary']]},
+          B17:{eyebrow:'Commander zone choice',title:'Put your commander in the command zone',text:'Murder destroyed your commander. For this lesson, choose the command zone so you can practice commander tax.',why:'When your commander goes to the graveyard or exile, you get a chance to move it to the command zone.',buttons:[['Command Zone','commander-command','primary'],['Graveyard','commander-graveyard','ghost']]},
+          B18:{eyebrow:'Commander tax',title:'Move to your next turn',text:'Your commander has been cast from the command zone once. Its next command-zone cast costs an additional {2}.',why:'Commander tax counts previous times that commander was cast from the command zone.',buttons:[['Next turn','tax-next','primary']]},
+          B19:{eyebrow:'Commander tax',title:'Recast your commander for seven mana',text:'Jasmine normally costs five mana. The command-zone tax is now +{2}, so the tutorial has given you seven available lands.',why:'The extra cost increases by another {2} each time you cast that commander from the command zone.',hint:'Tap Jasmine in the command zone to cast it.'},
+          B20:{eyebrow:'Basics complete',title:'Now play a short guided game',text:'You have practiced lands, mana, casting, summoning sickness, combat, blocking, instants, the command zone, and commander tax.',why:'The next section gives you less direct instruction. The opponent still follows a short script so the game reaches interesting decisions quickly.',buttons:[['Start guided game','start-guided','primary'],['Rules reference','rules-reference','ghost']]},
+          G0:{eyebrow:'Guided game · Turn 5',title:'The game has been fast-forwarded',text:'Both players started at 40 life. A few turns have passed. You are at 30 and your opponent is at 12. Start by developing your mana for this turn.',why:'Play the land in your hand. From here, the guide will explain goals more than exact clicks.',hint:'Find the land yourself—nothing is highlighted this time.'},
+          G1:{eyebrow:'Read the battlefield',title:'Deal with the flying threat',text:'Your opponent has Air Elemental, a 4/4 with flying. Your ground creatures cannot block it. Use the Aura in your hand to stop it from attacking.',why:'Removal is often best saved for something that meaningfully threatens you.'},
+          G1T:{eyebrow:'Choose a target',title:'Target Air Elemental',text:'You cast the Aura. Now choose which opposing creature it should enchant.',why:'A spell or ability that uses the word “target” needs a legal target before it can resolve.',hint:'Tap Air Elemental.'},
+          G2:{eyebrow:'Combat decision',title:'Would you attack the 2/2?',text:'The opponent still has an untapped 3/3 ground creature. Attacking your 2/2 alone would let them block and destroy it for free.',why:'You do not have to attack every turn. Keeping a creature back can be the stronger play.',buttons:[['Attack anyway','bad-attack','ghost'],['Hold it back','hold-back','primary']]},
+          G3:{eyebrow:'Pass with a plan',title:'End your turn',text:'You used your removal and kept a blocker. Pass the turn.',why:'You also still have Giant Growth, so untapped mana can matter on defense.',buttons:[['End turn','guided-end-1','primary']]},
+          G4:{eyebrow:'Opponent combat',title:'Block the 3/3',text:'The opponent attacked with Hill Giant. Block it with your 2/2.',why:'Your creature would normally lose this combat, but you have an instant that can change the math.'},
+          G5:{eyebrow:'Combat trick',title:'Save your blocker with Giant Growth',text:'Before combat damage, cast Giant Growth on the creature that is blocking.',why:'Your 2/2 becomes 5/5 until end of turn and survives while destroying the 3/3 attacker.'},
+          G6:{eyebrow:'Your next turn',title:'Cast your commander',text:'Your lands untapped. Cast Jasmine Boreal from the command zone.',why:'Now that the dangerous flyer is disabled and the ground attacker is gone, developing your commander is much safer.'},
+          G7:{eyebrow:'Combat',title:'Attack with your 2/2',text:'Your commander has summoning sickness, but the 2/2 has been under your control since an earlier turn. Attack with the 2/2.',why:'The opponent has no creature that can legally block it right now.'},
+          G8:{eyebrow:'End the turn',title:'Pass to the opponent',text:'You dealt 2 damage and brought the opponent to 10.',why:'Your commander will be able to attack after you begin your next turn.',buttons:[['End turn','guided-end-2','primary']]},
+          G9:{eyebrow:'Turn 7',title:'Make another land drop',text:'You drew a Plains. Play it so you have seven lands available.',why:'Continuing to make land drops lets you cast a large spell while still developing your board.'},
+          G10:{eyebrow:'Flying & vigilance',title:'Cast Serra Angel',text:'Cast Serra Angel from your hand.',why:'Flying makes it difficult for ground creatures to block. Vigilance means it will not tap when it attacks.'},
+          G11:{eyebrow:'Multiple attackers',title:'Choose Jasmine and your 2/2 as attackers',text:'Tap both creatures to select them as attackers, then send the attack.',why:'Serra Angel just entered this turn, so it cannot attack yet. Jasmine and your older 2/2 can.',hint:'Select two attackers, then use the button below.',buttons:[['Send selected attackers','send-guided-attack','primary']]},
+          G12:{eyebrow:'Damage',title:'End the turn',text:'Your attack dealt 6 damage. The opponent is down to 4 life.',why:'You are one clean flying attack away from winning.',buttons:[['End turn','guided-end-3','primary']]},
+          G13:{eyebrow:'Opponent develops',title:'Your final turn begins',text:'The opponent played a 2/2 ground blocker. Your Serra Angel is now ready to attack.',why:'A normal ground creature cannot block a creature with flying unless it also has flying or reach.',buttons:[['Go to combat','go-final-combat','primary']]},
+          G14:{eyebrow:'Find lethal',title:'Attack with Serra Angel',text:'The opponent is at 4 life. Attack with Serra Angel to finish the game.',why:'Its 4 flying power is lethal, and the opponent’s ground blocker cannot block it.'},
+          G15:{eyebrow:'Victory',title:'You finished the guided game',text:'You just played through a shortened Commander game instead of only reading about one.',why:'You made land drops, managed mana, used removal, chose not to make a bad attack, blocked, used an instant, cast your commander, and found lethal through flying.',buttons:[['Practice in Commander Forge','open-solo','primary'],['Play tutorial again','restart-tutorial','ghost'],['Rules reference','rules-reference','ghost']]},
+        };
+        return guides[s]||guides.B0;
+      }
+      function cardIsValid(card,side,zone){
+        const s=it.stage;
+        if(it.busy)return false;
+        if(s==='B1')return side==='player'&&zone==='hand'&&card.role==='first-land';
+        if(s==='B2')return side==='player'&&zone==='lands'&&card.role==='first-land';
+        if(s==='B3')return side==='player'&&zone==='hand'&&card.role==='dork';
+        if(s==='B4')return side==='player'&&zone==='battlefield'&&card.role==='dork';
+        if(s==='B6')return side==='player'&&zone==='hand'&&card.role==='second-land';
+        if(s==='B7')return side==='player'&&zone==='lands'&&!card.tapped;
+        if(s==='B8')return side==='player'&&zone==='hand'&&card.role==='bear';
+        if(s==='B10')return side==='player'&&zone==='battlefield'&&card.role==='bear';
+        if(s==='B11')return side==='player'&&zone==='battlefield'&&card.role==='bear';
+        if(s==='B12')return side==='player'&&zone==='hand'&&card.role==='growth';
+        if(s==='B13')return side==='player'&&zone==='hand'&&card.role==='third-land';
+        if(s==='B15'||s==='B19')return side==='player'&&zone==='command'&&card.role==='commander';
+        if(s==='G0')return side==='player'&&zone==='hand'&&card.role==='guided-land';
+        if(s==='G1')return side==='player'&&zone==='hand'&&card.role==='guided-removal';
+        if(s==='G1T')return side==='opponent'&&zone==='battlefield'&&card.role==='flyer';
+        if(s==='G4')return side==='player'&&zone==='battlefield'&&card.role==='guided-bear';
+        if(s==='G5')return side==='player'&&zone==='hand'&&card.role==='growth';
+        if(s==='G6')return side==='player'&&zone==='command'&&card.role==='commander';
+        if(s==='G7')return side==='player'&&zone==='battlefield'&&card.role==='guided-bear';
+        if(s==='G9')return side==='player'&&zone==='hand'&&card.role==='guided-land-2';
+        if(s==='G10')return side==='player'&&zone==='hand'&&card.role==='angel';
+        if(s==='G11')return side==='player'&&zone==='battlefield'&&(card.role==='commander'||card.role==='guided-bear');
+        if(s==='G14')return side==='player'&&zone==='battlefield'&&card.role==='angel';
+        return false;
+      }
+      function renderItCard(card,side,zone){
+        const valid=cardIsValid(card,side,zone); const classes=['it-card'];
+        if(valid)classes.push('valid'); if(card.tapped)classes.push('tapped'); if(card.attacking)classes.push('attacking'); if(card.blocking)classes.push('blocking'); if(card.sick)classes.push('sick'); if(card.pacified)classes.push('pacified'); if(it.flashCardId===card.id)classes.push('entering');
+        return `<button type="button" class="${classes.join(' ')}" data-it-card="${card.id}" data-it-side="${side}" data-it-zone="${zone}" aria-label="${card.name}"><span class="it-card-name">${card.name}</span>${card.cost?`<span class="it-card-cost">${card.cost}</span>`:''}<span class="it-card-type">${card.type||''}</span><span class="it-card-text">${card.text||''}</span>${card.power!==undefined&&card.power!==''?`<span class="it-card-pt">${card.power}/${card.toughness}</span>`:''}</button>`;
+      }
+      function renderHiddenHand(count){ return Array.from({length:Math.min(7,count||0)},(_,i)=>`<div class="it-card it-card-back" aria-label="Hidden opponent card ${i+1}"></div>`).join(''); }
+      function renderItPlayer(side){
+        const p=it[side], opp=side==='opponent';
+        const hand=opp?renderHiddenHand(p.handCount):p.hand.map(c=>renderItCard(c,side,'hand')).join('');
+        const bf=p.battlefield.map(c=>renderItCard(c,side,'battlefield')).join('')||'<span class="it-zone-label">No creatures or permanents</span>';
+        const lands=p.lands.map(c=>renderItCard(c,side,'lands')).join('')||'<span class="it-zone-label">No lands</span>';
+        const command=!opp&&p.commander?`<div class="it-command-wrap">${renderItCard(p.commander,'player','command')}<span class="it-command-tax">Tax +${Math.max(0,(p.commanderCasts||0)*2)}</span></div>`:'';
+        return `<section class="it-player ${opp?'opponent':'you'}"><div class="it-player-bar"><strong>${p.name}</strong><div class="it-stats"><span class="it-stat">Life ${p.life}</span>${!opp?`<span class="it-stat">Hand ${p.hand.length}</span><span class="it-stat">Mana ${Object.values(it.mana||{}).reduce((a,b)=>a+b,0)}</span>`:`<span class="it-stat">Hand ${p.handCount}</span>`}</div></div><div><div class="it-zone-label">${opp?'Hidden hand':'Your hand'}</div><div class="it-row">${hand}</div></div><div><div class="it-zone-label">Battlefield</div><div class="it-battlefield">${bf}</div></div><div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end"><div><div class="it-zone-label">Lands</div><div class="it-land-row">${lands}</div></div>${command?`<div><div class="it-zone-label">Command zone</div>${command}</div>`:''}</div></section>`;
+      }
+      function renderItGuide(){
+        const g=itGuideData(), prog=itStageNumber(); const pct=((prog.index+1)/prog.total)*100;
+        const mana=Object.entries(it.mana||{}).filter(([,v])=>v>0).map(([k,v])=>Array.from({length:v},()=>`<span class="it-mana">${k}</span>`).join('')).join('');
+        const buttons=(g.buttons||[]).map(([label,action,kind])=>`<button class="btn ${kind==='primary'?'primary':kind==='ghost'?'ghost':''}" data-it-action="${action}" ${it.busy?'disabled':''}>${label}</button>`).join('');
+        return `<aside class="it-guide"><div class="it-guide-scroll"><div class="it-guide-eyebrow">${g.eyebrow}</div><h3>${g.title}</h3><div class="it-progress"><span style="width:${pct}%"></span></div><p>${g.text}</p><div class="it-why"><strong>Why this matters</strong>${g.why}</div>${mana?`<div style="margin-top:10px"><div class="it-zone-label">Your mana pool</div><div class="it-mana-pool">${mana}</div></div>`:''}${g.hint?`<div class="it-guide-hint">${g.hint}</div>`:''}${it.feedback?`<div class="it-feedback">${it.feedback}</div>`:''}</div>${buttons?`<div class="it-guide-actions ${(g.buttons||[]).length===2?'two':''}">${buttons}</div>`:''}</aside>`;
+      }
+      function renderTutorialHub(){
+        itSubtitle.textContent='Learn by actually playing the cards.';
+        const completed=localStorage.getItem('commander-forge-interactive-tutorial-complete')==='1';
+        itBody.innerHTML=`<div class="it-hub"><section class="it-hero"><h3>Learn Commander by playing it</h3><p>Instead of reading a wall of rules, you will control one deck while a scripted opponent plays the other side. The tutorial waits for you to make the important actions, explains what just happened, then finishes with a short guided practice game. Curated opening hands vary between runs so it does not feel exactly the same every time.</p></section><div class="it-course-grid"><article class="it-course-card"><strong>1. Interactive basics · ~5–8 min</strong><p>Play lands, make mana, cast creatures, learn summoning sickness, attack, block, use an instant, then practice the command zone and commander tax.</p><button class="btn primary" data-it-action="start-basics">${completed?'Replay interactive course':'Start interactive course'}</button></article><article class="it-course-card"><strong>2. Guided game · ~8 min</strong><p>Jump into a shortened game that began at 40 life. You control your deck while the opponent plays automatically and the guide asks you to make the decisions.</p><button class="btn" data-it-action="start-guided">Start guided game</button></article><article class="it-course-card"><strong>Rules reference</strong><p>Prefer reading, or need to look something up? Open the full Commander rules reference from the previous tutorial.</p><button class="btn ghost" data-it-action="rules-reference">Open rules reference</button></article></div></div>`;
+      }
+      function renderInteractiveTutorial(){
+        if(!interactiveTutorial.classList.contains('open'))return;
+        if(it.screen==='hub') return renderTutorialHub();
+        if(it.screen==='complete') return renderTutorialComplete();
+        itSubtitle.textContent=it.screen==='guided'?'Short guided practice game':'Interactive basics';
+        itBody.innerHTML=`<div class="it-board-layout"><div class="it-board">${it.busy&&it.aiMessage?`<div class="it-ai-banner">${it.aiMessage}</div>`:''}${renderItPlayer('opponent')}<div class="it-center-line"><span>Turn ${it.turn}</span><span class="it-phase-pill">${it.phase}</span><span>${it.screen==='guided'?'Guided game':'Training game'}</span></div>${renderItPlayer('player')}</div>${renderItGuide()}</div>`;
+      }
+      function renderTutorialComplete(){
+        itBody.innerHTML=`<div class="it-summary"><h3>Commander tutorial complete</h3><p>You learned these rules by taking the actions yourself:</p><ul><li>Opening hands and the first-turn draw rule in 1v1</li><li>Land plays, tapping lands, mana, and casting costs</li><li>Summoning sickness and legal attackers</li><li>Blocking and combat damage</li><li>Instants and responding before combat damage</li><li>The command zone and commander tax</li><li>Targeted removal, flying, vigilance, and evaluating attacks</li><li>Reading the board and finding lethal damage</li></ul><div class="it-summary-actions"><button class="btn primary" data-it-action="open-solo">Open Solo Practice</button><button class="btn" data-it-action="restart-tutorial">Play again</button><button class="btn ghost" data-it-action="rules-reference">Rules reference</button></div></div>`;
+      }
+      function openInteractiveTutorial(){
+        it={screen:'hub'}; it.feedback=''; renderInteractiveTutorial();
+        interactiveTutorial.classList.add('open'); interactiveTutorial.setAttribute('aria-hidden','false'); renderInteractiveTutorial();
+      }
+      function closeInteractiveTutorial(){ interactiveTutorial.classList.remove('open'); interactiveTutorial.setAttribute('aria-hidden','true'); it={screen:'hub'}; }
+      function untapSide(side){ [...it[side].lands,...it[side].battlefield].forEach(c=>{c.tapped=false;c.attacking=false;c.blocking=false;c.sick=false;}); it.mana={G:0,W:0}; }
+      function tapFirstLand(preferred='Forest'){
+        let c=it.player.lands.find(x=>!x.tapped&&x.name===preferred)||it.player.lands.find(x=>!x.tapped); if(c){c.tapped=true; if(c.name==='Forest')it.mana.G=(it.mana.G||0)+1; else if(c.name==='Plains')it.mana.W=(it.mana.W||0)+1;} return c;
+      }
+      function spendMana(){ it.mana={G:0,W:0}; }
+      async function aiMoment(message,ms=650){ it.busy=true;it.aiMessage=message;renderInteractiveTutorial();await itDelay(ms);it.busy=false;it.aiMessage='';renderInteractiveTutorial(); }
+      async function opponentTurnOne(){
+        it.turn=1;it.phase='Opponent · Main 1';await aiMoment('Opponent draws a card…',450);
+        const land=itLand('o-mountain-1','Mountain');it.opponent.lands.push(land);it.flashCardId=land.id;await aiMoment('Opponent plays Mountain.',650);it.flashCardId='';
+        land.tapped=true;await aiMoment('Opponent taps Mountain for {R}.',500);
+        const gob=freshCard(TC.arsonist(),{sick:true});it.opponent.battlefield.push(gob);it.opponent.handCount=6;it.flashCardId=gob.id;await aiMoment('Opponent casts Goblin Arsonist.',700);it.flashCardId='';
+        it.turn=2;it.phase='Main 1';untapSide('player');it.player.hand.push(itLand('p-forest-2','Forest','third-land'));it.stage='B6';it.feedback='You drew a Forest for turn.';renderInteractiveTutorial();
+      }
+      async function opponentTurnTwo(){
+        it.phase='Opponent · Main 1';untapSide('opponent');await aiMoment('Opponent untaps and draws.',450);
+        const land=itLand('o-mountain-2','Mountain');it.opponent.lands.push(land);it.flashCardId=land.id;await aiMoment('Opponent plays a second Mountain.',500);it.flashCardId='';
+        it.opponent.lands.forEach(c=>c.tapped=true);const piker=freshCard(TC.piker(),{sick:true});it.opponent.battlefield.push(piker);it.flashCardId=piker.id;await aiMoment('Opponent taps two lands and casts Goblin Piker.',650);it.flashCardId='';
+        const ar=it.opponent.battlefield.find(c=>c.role==='arsonist');if(ar){ar.attacking=true;ar.tapped=true;}it.phase='Opponent · Combat';it.stage='B10';it.feedback='The 1/1 is attacking you.';renderInteractiveTutorial();
+      }
+      async function finishOpponentAfterBlock(){
+        const ar=it.opponent.battlefield.find(c=>c.role==='arsonist');const bear=it.player.battlefield.find(c=>c.role==='bear');if(bear){bear.blocking=true;}renderInteractiveTutorial();await aiMoment('Combat damage: your 2/2 deals 2 to the 1/1.',700);
+        if(ar){moveItCard('opponent','battlefield','graveyard',ar.id);}if(bear){bear.blocking=false;}it.turn=3;it.phase='Main 1';untapSide('player');it.stage='B11';it.feedback='Your 2/2 survived. Damage marked on creatures wears off during cleanup.';renderInteractiveTutorial();
+      }
+      async function resolveGrowthCombat(){
+        const bear=it.player.battlefield.find(c=>c.role==='bear');const piker=it.opponent.battlefield.find(c=>c.role==='piker');tapFirstLand('Forest');moveItCard('player','hand','graveyard','growth');if(bear){bear.power='5';bear.toughness='5';}await aiMoment('Giant Growth resolves: your creature is 5/5 until end of turn.',700);if(piker)moveItCard('opponent','battlefield','graveyard',piker.id);if(bear){bear.power='2';bear.toughness='2';bear.attacking=false;}spendMana();it.phase='Main 2';it.stage='B13';it.feedback='The blocker was destroyed. Your creature survives, and Giant Growth goes to the graveyard after resolving.';renderInteractiveTutorial();
+      }
+      function fastForwardBasics(){
+        while(it.player.lands.length<5){const n=it.player.lands.length+1;it.player.lands.push(itLand(`ff-land-${n}`,n%3===0?'Plains':'Forest'));}
+        while(it.opponent.lands.length<5){const n=it.opponent.lands.length+1;it.opponent.lands.push(itLand(`off-land-${n}`,n%3===0?'Swamp':'Mountain'));}
+        it.turn=5;it.phase='Main 1';untapSide('player');untapSide('opponent');it.player.life=39;it.opponent.life=38;it.stage='B15';it.feedback='A couple of routine turns passed. You now have five lands.';renderInteractiveTutorial();
+      }
+      async function opponentMurderCommander(){
+        it.phase='Opponent · Main 1';untapSide('opponent');await aiMoment('Opponent untaps and draws.',450);it.opponent.lands.slice(0,3).forEach(c=>c.tapped=true);await aiMoment('Opponent casts Murder targeting Jasmine Boreal.',700);
+        const cmdIndex=it.player.battlefield.findIndex(c=>c.role==='commander');if(cmdIndex>=0){const [cmd]=it.player.battlefield.splice(cmdIndex,1);it.player.commander=cmd;}
+        it.stage='B17';it.feedback='Murder resolved and destroyed your commander.';renderInteractiveTutorial();
+      }
+      function prepareTaxRecast(){
+        while(it.player.lands.length<7){const n=it.player.lands.length+1;it.player.lands.push(itLand(`tax-land-${n}`,n%3===0?'Plains':'Forest'));}
+        it.turn=6;it.phase='Main 1';untapSide('player');it.stage='B19';it.feedback='Your commander now shows Tax +2. Seven lands are available.';renderInteractiveTutorial();
+      }
+      async function guidedOpponentAttack(){
+        it.phase='Opponent · Main 1';untapSide('opponent');await aiMoment('Opponent draws, then moves to combat.',550);const hill=it.opponent.battlefield.find(c=>c.role==='hill');if(hill){hill.attacking=true;hill.tapped=true;}it.phase='Opponent · Combat';it.stage='G4';it.feedback='Hill Giant is attacking you for 3.';renderInteractiveTutorial();
+      }
+      async function guidedResolveBlockAndGrowth(){
+        const bear=it.player.battlefield.find(c=>c.role==='guided-bear');const hill=it.opponent.battlefield.find(c=>c.role==='hill');tapFirstLand('Forest');moveItCard('player','hand','graveyard','g-growth');if(bear){bear.power='5';bear.toughness='5';}await aiMoment('Giant Growth resolves. Your blocker is 5/5 before combat damage.',650);if(hill)moveItCard('opponent','battlefield','graveyard',hill.id);if(bear){bear.power='2';bear.toughness='2';bear.blocking=false;}spendMana();it.turn=6;it.phase='Main 1';untapSide('player');it.stage='G6';it.feedback='You traded one instant for their 3/3 and kept your creature.';renderInteractiveTutorial();
+      }
+      async function guidedOpponentPass(){
+        it.phase='Opponent · Turn';untapSide('opponent');await aiMoment('Opponent draws, but the pacified flyer cannot attack. They pass the turn.',700);it.turn=7;it.phase='Main 1';untapSide('player');it.player.hand.push(itLand('g-plains-2','Plains','guided-land-2'));it.stage='G9';it.feedback='You drew a Plains.';renderInteractiveTutorial();
+      }
+      async function guidedOpponentFinal(){
+        it.phase='Opponent · Main 1';untapSide('opponent');await aiMoment('Opponent draws and casts one last ground blocker.',550);it.opponent.lands.slice(0,2).forEach(c=>c.tapped=true);const b=freshCard(TC.oppBear(),{sick:true});it.opponent.battlefield.push(b);it.flashCardId=b.id;await aiMoment('Opponent casts Bear Cub, a 2/2 ground creature.',650);it.flashCardId='';it.turn=8;it.phase='Main 1';untapSide('player');it.stage='G13';it.feedback='Serra Angel has been under your control since your previous turn, so it can attack now.';renderInteractiveTutorial();
+      }
+      function playItLand(card){
+        const found=findItCard(card.id);if(!found||found.zone!=='hand')return;moveItCard('player','hand','lands',card.id,{tapped:false});it.flashCardId=card.id;setTimeout(()=>{it.flashCardId='';renderInteractiveTutorial();},500);
+      }
+      async function handleItCard(cardId,side,zone){
+        const found=findItCard(cardId);if(!found||!cardIsValid(found.card,side,zone)){ if(!it.busy)tutorialToast('That is not the action this lesson is waiting for yet.'); return; }
+        const c=found.card;it.feedback='';
+        if(it.stage==='B1'){playItLand(c);it.stage='B2';return renderInteractiveTutorial();}
+        if(it.stage==='B2'){c.tapped=true;it.mana.G=1;it.stage='B3';return renderInteractiveTutorial();}
+        if(it.stage==='B3'){moveItCard('player','hand','battlefield',c.id,{sick:true});spendMana();it.stage='B4';it.flashCardId=c.id;setTimeout(()=>{it.flashCardId='';renderInteractiveTutorial();},500);return renderInteractiveTutorial();}
+        if(it.stage==='B4'){it.stage='B5';it.feedback='That attack is illegal because the creature has summoning sickness. It will be able to attack after your next turn begins.';return renderInteractiveTutorial();}
+        if(it.stage==='B6'){playItLand(c);it.stage='B7';return renderInteractiveTutorial();}
+        if(it.stage==='B7'){c.tapped=true;if(c.name==='Forest')it.mana.G=(it.mana.G||0)+1;else it.mana.W=(it.mana.W||0)+1;if(Object.values(it.mana).reduce((a,b)=>a+b,0)>=2)it.stage='B8';return renderInteractiveTutorial();}
+        if(it.stage==='B8'){moveItCard('player','hand','battlefield',c.id,{sick:true});spendMana();it.stage='B9';it.flashCardId=c.id;setTimeout(()=>{it.flashCardId='';renderInteractiveTutorial();},500);return renderInteractiveTutorial();}
+        if(it.stage==='B10'){await finishOpponentAfterBlock();return;}
+        if(it.stage==='B11'){c.attacking=true;c.tapped=true;renderInteractiveTutorial();await aiMoment('Opponent blocks your 2/2 with Goblin Piker.',650);const piker=it.opponent.battlefield.find(x=>x.role==='piker');if(piker)piker.blocking=true;it.stage='B12';it.feedback='Blockers are declared. You receive priority before combat damage.';return renderInteractiveTutorial();}
+        if(it.stage==='B12'){await resolveGrowthCombat();return;}
+        if(it.stage==='B13'){playItLand(c);it.stage='B14';return renderInteractiveTutorial();}
+        if(it.stage==='B15'){it.player.commander=null;it.player.battlefield.push({...c,sick:true});it.player.commanderCasts=1;it.player.lands.forEach((l,i)=>{if(i<5)l.tapped=true;});it.stage='B16';it.flashCardId=c.id;setTimeout(()=>{it.flashCardId='';renderInteractiveTutorial();},500);return renderInteractiveTutorial();}
+        if(it.stage==='B19'){it.player.commander=null;it.player.battlefield.push({...c,sick:true});it.player.commanderCasts=2;it.player.lands.forEach(l=>l.tapped=true);it.stage='B20';it.feedback='You paid five mana plus the {2} commander tax.';return renderInteractiveTutorial();}
+        if(it.stage==='G0'){playItLand(c);it.stage='G1';return renderInteractiveTutorial();}
+        if(it.stage==='G1'){it.pendingAura=c.id;it.stage='G1T';it.feedback='The Aura is on the stack. Choose its target.';return renderInteractiveTutorial();}
+        if(it.stage==='G1T'){const aura=it.player.hand.find(x=>x.id===it.pendingAura);if(aura){moveItCard('player','hand','battlefield',aura.id,{attachedTo:c.id});}c.pacified=true;it.pendingAura='';it.player.lands.slice(0,2).forEach(l=>l.tapped=true);it.stage='G2';it.feedback=`${c.name} can no longer attack or block.`;return renderInteractiveTutorial();}
+        if(it.stage==='G4'){c.blocking=true;it.stage='G5';it.feedback='Block declared. Combat damage has not happened yet, so you can still cast an instant.';return renderInteractiveTutorial();}
+        if(it.stage==='G5'){await guidedResolveBlockAndGrowth();return;}
+        if(it.stage==='G6'){it.player.commander=null;it.player.battlefield.push({...c,sick:true});it.player.commanderCasts=1;it.player.lands.slice(0,5).forEach(l=>l.tapped=true);it.stage='G7';return renderInteractiveTutorial();}
+        if(it.stage==='G7'){c.attacking=true;c.tapped=true;it.opponent.life-=2;await aiMoment('No legal blocker. Your 2/2 deals 2 damage.',550);c.attacking=false;it.stage='G8';return renderInteractiveTutorial();}
+        if(it.stage==='G9'){playItLand(c);it.stage='G10';return renderInteractiveTutorial();}
+        if(it.stage==='G10'){moveItCard('player','hand','battlefield',c.id,{sick:true});let need=5;for(const l of it.player.lands){if(!l.tapped&&need>0){l.tapped=true;need--;}}it.stage='G11';it.feedback='Serra Angel has flying and vigilance, but it still has summoning sickness this turn.';return renderInteractiveTutorial();}
+        if(it.stage==='G11'){c.attacking=!c.attacking;c.tapped=c.attacking;return renderInteractiveTutorial();}
+        if(it.stage==='G14'){c.attacking=true;/* vigilance: do not tap */await aiMoment('The opponent’s ground blocker cannot block a creature with flying.',550);it.opponent.life=0;it.stage='G15';localStorage.setItem('commander-forge-interactive-tutorial-complete','1');return renderInteractiveTutorial();}
+      }
+      async function handleItAction(action){
+        if(action==='close')return closeInteractiveTutorial();
+        if(action==='start-basics'){buildBasicsState();it.stage='B0';return renderInteractiveTutorial();}
+        if(action==='start-guided'){buildGuidedState();return renderInteractiveTutorial();}
+        if(action==='rules-reference'){closeInteractiveTutorial();return openCommanderTutorial();}
+        if(action==='begin-basics'){it.stage='B1';return renderInteractiveTutorial();}
+        if(action==='end-turn'&&it.stage==='B5'){await opponentTurnOne();return;}
+        if(action==='end-turn'&&it.stage==='B9'){await opponentTurnTwo();return;}
+        if(action==='fast-forward'&&it.stage==='B14')return fastForwardBasics();
+        if(action==='end-turn'&&it.stage==='B16'){await opponentMurderCommander();return;}
+        if(action==='commander-graveyard'&&it.stage==='B17'){it.feedback='That is legal, but for this lesson choose Command Zone so you can see how commander tax works.';return renderInteractiveTutorial();}
+        if(action==='commander-command'&&it.stage==='B17'){it.stage='B18';it.feedback='Jasmine is back in the command zone. The next cast has +{2} tax.';return renderInteractiveTutorial();}
+        if(action==='tax-next'&&it.stage==='B18')return prepareTaxRecast();
+        if(action==='start-guided'&&it.stage==='B20'){buildGuidedState();return renderInteractiveTutorial();}
+        if(action==='bad-attack'&&it.stage==='G2'){it.feedback='The opponent would block your 2/2 with their 3/3 and you would lose your creature without dealing damage. Try the safer choice.';return renderInteractiveTutorial();}
+        if(action==='hold-back'&&it.stage==='G2'){it.stage='G3';it.feedback='Good. You kept a blocker and did not throw away a creature.';return renderInteractiveTutorial();}
+        if(action==='guided-end-1'&&it.stage==='G3'){await guidedOpponentAttack();return;}
+        if(action==='guided-end-2'&&it.stage==='G8'){await guidedOpponentPass();return;}
+        if(action==='send-guided-attack'&&it.stage==='G11'){
+          const attackers=it.player.battlefield.filter(c=>c.attacking);const roles=new Set(attackers.map(c=>c.role));if(!(roles.has('commander')&&roles.has('guided-bear'))){it.feedback='Select both Jasmine Boreal and your 2/2 before sending the attack.';return renderInteractiveTutorial();}
+          it.opponent.life=Math.max(0,it.opponent.life-6);await aiMoment('Both attackers get through for 6 total damage.',600);attackers.forEach(c=>c.attacking=false);it.stage='G12';return renderInteractiveTutorial();
+        }
+        if(action==='guided-end-3'&&it.stage==='G12'){await guidedOpponentFinal();return;}
+        if(action==='go-final-combat'&&it.stage==='G13'){it.phase='Combat';it.stage='G14';return renderInteractiveTutorial();}
+        if(action==='open-solo'){closeInteractiveTutorial();hideTitle();return launch('solo');}
+        if(action==='restart-tutorial'){buildBasicsState();return renderInteractiveTutorial();}
+      }
+      interactiveTutorial.addEventListener('click',async(e)=>{
+        const card=e.target.closest?.('[data-it-card]');if(card){await handleItCard(card.dataset.itCard,card.dataset.itSide,card.dataset.itZone);return;}
+        const button=e.target.closest?.('[data-it-action]');if(button){await handleItAction(button.dataset.itAction);}
+      });
+      document.addEventListener('keydown',(e)=>{if(e.key==='Escape'&&interactiveTutorial.classList.contains('open'))closeInteractiveTutorial();});
+
       const feedbackForm = document.getElementById('forge-feedback-form');
       feedbackForm?.addEventListener('submit', (e) => {
         e.preventDefault();
@@ -293,13 +595,13 @@
         if (!btn) return;
         const action = btn.dataset.titleAction;
         if (action === 'howto') return openHelp();
-        if (action === 'tutorial') return openCommanderTutorial();
+        if (action === 'tutorial') return openInteractiveTutorial();
         if (action === 'close-help') return closeHelp();
         launch(action);
       });
     })();
   </script>
   <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js" integrity="sha512-XEKeWX+mI3Ov+tg2evDlVQFzVOIp4T8J3cNcCEPaEUGpxJV3eZaN8rHuvnFPvQpGJBHPmrozJDMpm2xcDvtmyQ==" crossorigin="anonymous"></script>
-  <script defer src="./commander-forge-5.27.0.js" onerror="window.__forgeBootError('HTTP error while loading commander-forge-5.27.0.js')"></script>
+  <script defer src="./commander-forge-5.28.0.js" onerror="window.__forgeBootError('HTTP error while loading commander-forge-5.28.0.js')"></script>
 </body>
 </html>

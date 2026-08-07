@@ -1,34 +1,25 @@
-THE COMMANDER FORGE 5.27 — BEGINNER TUTORIAL + FEEDBACK + MOBILE PRECON SCROLL FIX
+THE COMMANDER FORGE 5.28 — INTERACTIVE COMMANDER TUTORIAL
 
-Upload these four files to the TOP LEVEL of the GitHub repository:
+Upload these four website files to the TOP LEVEL of your GitHub repository:
 
 - index.html
-- commander-forge-5.27.0.js
-- commander-forge-5.27.0.css
+- commander-forge-5.28.0.js
+- commander-forge-5.28.0.css
 - sw.js
 
 Allow index.html and sw.js to replace the existing versions.
-Both online players should use version 5.27.0.
 
-FIXED: MOBILE PRECON SCROLL
-- The actual .setup-modal scroll position is now preserved on mobile.
-- The inner setup body scroll position is preserved too.
-- Each player's precon-results list keeps its own scroll position.
-- Searching for precons or loading a precon no longer intentionally resets the setup to the top.
+INTERACTIVE TUTORIAL
+- “New to Magic?” on the title screen now opens an actual playable tutorial instead of a reading-only lesson list.
+- The learner controls one deck; the opponent is scripted and plays its own cards visibly.
+- Opponent actions animate through draw, land play, tapping mana, casting, attacking, and blocking moments.
+- Several curated opening-hand variants are chosen randomly so repeat runs do not show exactly the same hand.
+- The tutorial waits for the learner to perform the requested action before advancing.
+- Interactive basics teach: first-turn draw rule, land plays, mana, casting, summoning sickness, attacking, blocking, combat damage, instants, command zone, removal, and commander tax.
+- The basics automatically lead into a short guided practice game.
+- Guided practice begins from a fast-forwarded Commander board so the complete experience stays short.
+- The learner must read the battlefield, target a flying threat, avoid a bad attack, block, use a combat trick, cast the commander, choose multiple attackers, understand summoning sickness, and finish with a flying lethal attack.
+- The previous 14-section reading tutorial remains available as “Rules reference.”
+- Tutorial progress is isolated from normal saved Commander Forge games and cannot overwrite a user’s table.
 
-ADDED: LEARN COMMANDER
-- The title screen has a prominent “New to Magic? Learn Commander” button.
-- 14 lessons cover goals, deck construction, color identity, zones, setup/mulligans, mana/lands, turn phases, stack/priority, combat, keywords, abilities/targets, commander tax/damage, tokens/counters/attachments, state-based actions, and a first-game strategy checklist.
-- Previous/Next navigation, lesson list, progress bar, mobile layout, Escape/close behavior, and a Practice button are included.
-- “How to Play” on the title screen is renamed “How to Use Forge” so the app tutorial and Magic tutorial are not confused.
-
-ADDED: WEBSITE FEEDBACK
-- Small feedback form on the public website title screen.
-- Formats a bug/idea/feedback email to rinmefornoodles@gmail.com.
-- Uses the visitor's configured email app (mailto), because GitHub Pages is static and cannot silently send mail without a backend/form service.
-- This change is only in the website package, not the MTG Codex/PWA handoff.
-
-After upload:
-1. Commit to main.
-2. Wait for GitHub Pages deployment to turn green.
-3. Open the site in a new Incognito/Private tab first.
+The mobile precon scroll preservation and title-screen feedback form from 5.27 remain included.
