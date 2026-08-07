@@ -1,12 +1,10 @@
 /*
   Commander Forge feedback configuration.
+  This Apps Script Web App endpoint receives feedback submissions and stores
+  them in the Commander Forge Feedback Google Sheet.
 
-  After deploying google-sheets-feedback/Code.gs as a Google Apps Script Web App,
-  paste its /exec URL between the quotes below and upload this file to GitHub.
-
-  The Web App URL is not a password or secret; it is the public receiver for the
-  feedback form. Do not put private API keys in this file.
+  This URL is the public form receiver, not a private API key.
 */
 window.CommanderForgeFeedback = Object.freeze({
-  endpoint: ''
+  endpoint: 'https://script.google.com/macros/s/AKfycbzkAQcapl7bTeNwa9o-_O9RALULdaRcp-zaPlLNdd1buCt1Rc9vpd2MvGqmZWcCs3fA/exec'
 });
