@@ -1,47 +1,34 @@
-THE COMMANDER FORGE 5.26
+THE COMMANDER FORGE 5.27 — BEGINNER TUTORIAL + FEEDBACK + MOBILE PRECON SCROLL FIX
 
-Upload these four website files to the TOP LEVEL of your GitHub repository:
+Upload these four files to the TOP LEVEL of the GitHub repository:
 
 - index.html
-- commander-forge-5.26.0.js
-- commander-forge-5.26.0.css
+- commander-forge-5.27.0.js
+- commander-forge-5.27.0.css
 - sw.js
 
 Allow index.html and sw.js to replace the existing versions.
-Both online players must use version 5.26.0.
+Both online players should use version 5.27.0.
 
-LAND-PLAY RULE
+FIXED: MOBILE PRECON SCROLL
+- The actual .setup-modal scroll position is now preserved on mobile.
+- The inner setup body scroll position is preserved too.
+- Each player's precon-results list keeps its own scroll position.
+- Searching for precons or loading a precon no longer intentionally resets the setup to the top.
 
-- A normal land play is limited to one during your turn.
-- Cards that say you may play additional lands increase the displayed allowance automatically.
-- Each player status panel shows “Land plays this turn: used/available.”
-- The normal Battlefield action uses and enforces a land play.
-- A second normal land is blocked even in Free Table mode while land-play enforcement is enabled.
-- Lands put onto the battlefield by a spell or ability use the separate:
-  “Put by card effect” or “Put tapped by card effect” action.
-- Putting a land onto the battlefield by an effect does not consume the normal land play.
-- Settings contains an “Enforce normal land-play limit” option.
+ADDED: LEARN COMMANDER
+- The title screen has a prominent “New to Magic? Learn Commander” button.
+- 14 lessons cover goals, deck construction, color identity, zones, setup/mulligans, mana/lands, turn phases, stack/priority, combat, keywords, abilities/targets, commander tax/damage, tokens/counters/attachments, state-based actions, and a first-game strategy checklist.
+- Previous/Next navigation, lesson list, progress bar, mobile layout, Escape/close behavior, and a Practice button are included.
+- “How to Play” on the title screen is renamed “How to Use Forge” so the app tutorial and Magic tutorial are not confused.
 
-MOBILE REPAIR
+ADDED: WEBSITE FEEDBACK
+- Small feedback form on the public website title screen.
+- Formats a bug/idea/feedback email to rinmefornoodles@gmail.com.
+- Uses the visitor's configured email app (mailto), because GitHub Pages is static and cannot silently send mail without a backend/form service.
+- This change is only in the website package, not the MTG Codex/PWA handoff.
 
-- Uses dynamic mobile viewport height instead of relying only on 100vh.
-- Respects top and bottom phone safe areas.
-- The title screen starts at the visible top instead of being vertically clipped.
-- Setup, Settings, How to Play, mulligan, token, Scry, and other modals fit inside the usable screen and scroll internally.
-- Header buttons and phases can scroll horizontally instead of extending beyond the screen.
-- Sidebars, deck fields, invite controls, resource lanes, and card rows stay inside the mobile width.
-- The right-side inspector becomes a larger scrollable bottom sheet.
-- Zone drawers stay between the top safe area and bottom navigation.
-- Toast messages appear above the mobile bottom bar.
-- Very narrow screens use fewer columns for controls to prevent text and buttons from being cut off.
-
-TESTING
-
-- JavaScript syntax passed.
-- Restored-save startup passed.
-- One normal land was allowed and a second was blocked.
-- A land put onto the battlefield by an effect did not use the land play.
-- A permanent granting two additional land plays correctly allowed three total lands.
-- A fourth land was blocked.
-- Keyword, counter, token, reveal, stacking, and predefined-token regression tests passed.
-- ZIP integrity was verified.
+After upload:
+1. Commit to main.
+2. Wait for GitHub Pages deployment to turn green.
+3. Open the site in a new Incognito/Private tab first.

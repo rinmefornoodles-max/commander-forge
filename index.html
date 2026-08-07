@@ -8,7 +8,7 @@
   <title>The Commander Forge</title>
   <link rel="icon" href="./forge-mark.svg" type="image/svg+xml" />
   <link rel="manifest" href="./manifest.webmanifest" />
-  <link rel="stylesheet" href="./commander-forge-5.26.0.css" />
+  <link rel="stylesheet" href="./commander-forge-5.27.0.css" />
 </head>
 <body>
   <div id="title-screen" class="forge-title-screen" aria-label="The Commander Forge title screen">
@@ -22,10 +22,11 @@
             <div class="forge-title-main-actions">
               <button class="forge-title-btn primary" data-title-action="solo">Solo Practice</button>
               <button class="forge-title-btn secondary" data-title-action="online">Online Multiplayer</button>
+              <button class="forge-title-btn tutorial" data-title-action="tutorial">New to Magic? Learn Commander</button>
             </div>
             <div class="forge-title-small-actions" style="margin-top:14px">
               <button class="forge-title-btn ghost" id="continue-game-btn" data-title-action="continue">Continue Game</button>
-              <button class="forge-title-btn ghost" data-title-action="howto">How to Play</button>
+              <button class="forge-title-btn ghost" data-title-action="howto">How to Use Forge</button>
               <button class="forge-title-btn ghost" data-title-action="settings">Settings</button>
             </div>
           </div>
@@ -40,13 +41,27 @@
               </ul>
             </div>
             <div class="forge-title-panel">
-              <h3>Forge tip</h3>
-              <p>Choose your mode here first. Solo shows only local deck setup, while Online shows only the host and invite-code connection tools.</p>
+              <h3>Send feedback</h3>
+              <form id="forge-feedback-form" class="forge-feedback">
+                <label for="forge-feedback-message">Bug, idea, or suggestion</label>
+                <textarea id="forge-feedback-message" maxlength="1600" placeholder="Tell Prince what happened or what you would like added…" required></textarea>
+                <div class="forge-feedback-row">
+                  <select id="forge-feedback-type" aria-label="Feedback type">
+                    <option>General feedback</option>
+                    <option>Bug report</option>
+                    <option>Feature idea</option>
+                    <option>Rules / coach issue</option>
+                    <option>Mobile issue</option>
+                  </select>
+                  <button class="forge-title-btn ghost" type="submit">Send feedback</button>
+                </div>
+                <p class="forge-feedback-note">Opens your email app addressed to rinmefornoodles@gmail.com.</p>
+              </form>
             </div>
           </div>
         </div>
         <div class="forge-title-footer">
-          <div class="forge-title-version">Version 5.26 · Cards and rules data provided by Scryfall</div>
+          <div class="forge-title-version">Version 5.27 · Cards and rules data provided by Scryfall</div>
           <div class="forge-title-legal">The Commander Forge is not affiliated with Wizards of the Coast.<br/>Magic: The Gathering is a trademark of Wizards of the Coast LLC.</div>
         </div>
       </section>
@@ -64,11 +79,30 @@
       <div class="forge-title-help-close"><button class="forge-title-btn primary" data-title-action="close-help">Close</button></div>
     </section>
   </div>
+
+  <div id="commander-tutorial" class="commander-tutorial" aria-hidden="true">
+    <section class="commander-tutorial-shell" role="dialog" aria-modal="true" aria-labelledby="commander-tutorial-heading">
+      <header class="commander-tutorial-header">
+        <div><h2 id="commander-tutorial-heading">Learn Magic: Commander</h2><p>A beginner course from your first land to commander damage and the stack.</p></div>
+        <button class="icon-btn commander-tutorial-close" data-tutorial-action="close" aria-label="Close Commander tutorial">×</button>
+      </header>
+      <div class="commander-tutorial-main">
+        <nav id="commander-tutorial-nav" class="commander-tutorial-nav" aria-label="Tutorial lessons"></nav>
+        <article id="commander-tutorial-content" class="commander-tutorial-content"></article>
+      </div>
+      <footer class="commander-tutorial-footer">
+        <button class="btn ghost" data-tutorial-action="previous">‹ Previous</button>
+        <div class="tutorial-progress-wrap"><div class="tutorial-progress"><span id="tutorial-progress-bar"></span></div><div id="tutorial-progress-label" class="tutorial-progress-label"></div></div>
+        <div class="commander-tutorial-footer-actions"><button class="btn" data-tutorial-action="next">Next ›</button><button class="btn primary" data-tutorial-action="practice">Practice</button></div>
+      </footer>
+    </section>
+  </div>
+
   <div id="app" aria-live="polite"><div class="boot-loading">Loading The Commander Forge…</div></div>
   <div id="toast-root" aria-live="assertive"></div>
   <script>
     (() => {
-      const APP_VERSION='5.26.0';
+      const APP_VERSION='5.27.0';
       const STORAGE_KEY='commander-forge-state-v2';
       const app=document.getElementById('app');
       const title=document.getElementById('title-screen');
@@ -106,7 +140,7 @@
         const closeButton = e.target.closest?.('[data-title-action="close-help"]');
         if (closeButton || e.target === help) closeHelp();
       });
-      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeHelp(); });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (tutorial?.classList.contains('open')) closeCommanderTutorial(); else closeHelp(); } });
 
       let titleLaunchId = 0;
       function waitFor(condition, callback, timeout=12000, launchId=null) {
@@ -139,6 +173,116 @@
         if (mode === 'settings') clickWhenReady('[data-action="open-settings"]', 6000);
       }
 
+
+      const tutorial = document.getElementById('commander-tutorial');
+      const tutorialNav = document.getElementById('commander-tutorial-nav');
+      const tutorialContent = document.getElementById('commander-tutorial-content');
+      const tutorialProgressBar = document.getElementById('tutorial-progress-bar');
+      const tutorialProgressLabel = document.getElementById('tutorial-progress-label');
+      const commanderLessons = [
+        {
+          title: 'Commander in 60 seconds',
+          html: `<h2>Commander in 60 seconds</h2><p class="tutorial-lead">Magic is a strategy card game. You spend mana to cast spells, build a battlefield, attack opponents, and react to what they do. Commander adds a legendary leader and special deck-building rules.</p><div class="tutorial-rule"><strong>Your basic goal</strong>Be the last player left in the game. Most often that means reducing opponents from 40 life to 0, but Commander has several other loss conditions.</div><div class="tutorial-grid"><div class="tutorial-mini-card"><h4>40 life</h4><p>Commander normally starts each player at 40 life.</p></div><div class="tutorial-mini-card"><h4>21 commander damage</h4><p>21 combat damage from the same commander causes that player to lose.</p></div><div class="tutorial-mini-card"><h4>10 poison</h4><p>Ten poison counters causes a player to lose.</p></div><div class="tutorial-mini-card"><h4>Empty library</h4><p>If you must draw a card from an empty library, you lose the game.</p></div></div><div class="tutorial-example"><strong>Think of Commander like this</strong>Your commander is the centerpiece of your deck, but you still win through normal Magic decisions: mana, cards, combat, timing, and knowing when to interact.</div>`
+        },
+        {
+          title: 'Build a Commander deck',
+          html: `<h2>Build a Commander deck</h2><p class="tutorial-lead">A normal Commander deck contains exactly <strong>100 cards including the commander</strong>.</p><ul><li>Usually you choose a legendary creature as your commander. Some cards specifically say they can be your commander.</li><li>The other 99 cards form your library.</li><li>Except for basic lands and cards that explicitly allow more copies, cards are singleton: normally only one card with a given English name.</li><li>Every card must fit your commander's <strong>color identity</strong>.</li></ul><h3>Color identity</h3><p>Look at colored mana symbols in the commander's mana cost and rules text, plus any color indicator. Those colors define what your deck may contain.</p><div class="tutorial-example"><strong>Example</strong>A blue-black commander can use blue cards, black cards, blue-black cards, and colorless cards. It cannot include a card whose color identity contains red, green, or white.</div><div class="tutorial-warning"><strong>Color is not always the same as color identity</strong>A colorless-looking card can still have a colored mana symbol in its rules text, which can matter for Commander deck construction.</div>`
+        },
+        {
+          title: 'Learn the zones',
+          html: `<h2>Learn the game zones</h2><div class="tutorial-grid"><div class="tutorial-mini-card"><h4>Library</h4><p>Your face-down deck. You normally draw from the top.</p></div><div class="tutorial-mini-card"><h4>Hand</h4><p>Your private cards. Opponents normally know how many cards you have, not what they are.</p></div><div class="tutorial-mini-card"><h4>Battlefield</h4><p>Where permanents such as creatures, lands, artifacts, enchantments, battles, and planeswalkers exist.</p></div><div class="tutorial-mini-card"><h4>Graveyard</h4><p>Your face-up discard pile. Instants and sorceries usually go here after resolving.</p></div><div class="tutorial-mini-card"><h4>Exile</h4><p>A separate public zone used by effects that exile cards.</p></div><div class="tutorial-mini-card"><h4>Command zone</h4><p>Your commander begins here and can normally be cast from here.</p></div><div class="tutorial-mini-card"><h4>Stack</h4><p>Where spells and most abilities wait to resolve. The newest object resolves first.</p></div></div><div class="tutorial-rule"><strong>Public vs. private information</strong>Battlefields, graveyards, exile, the stack, and most revealed cards are public. Hands and library order are normally private unless an effect reveals or lets a player look at them.</div>`
+        },
+        {
+          title: 'Start the game & mulligan',
+          html: `<h2>Start the game and mulligan</h2><ol><li>Put your commander face up in the command zone.</li><li>Shuffle your 99-card library.</li><li>Draw seven cards.</li><li>Decide whether to keep or mulligan.</li></ol><h3>Commander mulligans</h3><p>Commander commonly uses the London mulligan with a free first mulligan in multiplayer: you redraw seven, then after additional mulligans you put a number of cards on the bottom equal to the non-free mulligans you took.</p><div class="tutorial-example"><strong>Beginner keep guideline</strong>A hand with roughly 2–4 lands, something useful to cast early, and colors that let you cast your spells is usually much safer than a hand full of expensive cards.</div><h3>Who draws first?</h3><div class="tutorial-rule"><strong>Two-player game</strong>The starting player skips the draw step of their first turn. Commander Forge follows this in its 1v1 modes.</div><div class="tutorial-rule"><strong>Free-for-all multiplayer with 3+ players</strong>No player skips their first draw step.</div>`
+        },
+        {
+          title: 'Mana, lands & costs',
+          html: `<h2>Mana, lands, and paying costs</h2><p class="tutorial-lead">Mana is the resource you spend to cast spells and activate many abilities.</p><ul><li>You normally may <strong>play one land during your own turn</strong>, during a main phase while the stack is empty and you have priority.</li><li>Playing a land is a special action, not casting a spell. It does not use the stack.</li><li>You are never required to play a land.</li><li>Some cards let you play additional lands.</li><li>An effect that says “put a land onto the battlefield” is not the same as your normal land play and does not use that land-play allowance.</li></ul><h3>Reading a mana cost</h3><p>Colored symbols require that color. A number such as {3} means that much generic mana and can usually be paid with mana of any type. Some cards have hybrid, Phyrexian, X, or alternative costs.</p><div class="tutorial-example"><strong>Example</strong>A spell costing {2}{U}{B} needs four total mana: at least one blue, at least one black, and two additional mana.</div><div class="tutorial-check"><strong>Quick check</strong>If you played a land in your first main phase, can you normally play another in your second main phase? <em>No.</em> You already used your land play for the turn.</div>`
+        },
+        {
+          title: 'Your turn step by step',
+          html: `<h2>Your turn step by step</h2><div class="tutorial-sequence"><span>Untap</span><span>Upkeep</span><span>Draw</span><span>Main 1</span><span>Combat</span><span>Main 2</span><span>End</span><span>Cleanup</span></div><h3>Beginning phase</h3><p><strong>Untap:</strong> untap your permanents. Players normally do not get priority here. <strong>Upkeep:</strong> upkeep triggers happen. <strong>Draw:</strong> draw one card unless a rule or effect says otherwise.</p><h3>Main phases</h3><p>You can normally cast sorceries, creatures, artifacts, enchantments, planeswalkers, and battles during your own main phase when the stack is empty. You may also use your normal land play.</p><h3>Combat</h3><p>Choose attackers, opponents choose blockers, then combat damage is dealt. There are priority windows between the major combat steps.</p><h3>End and cleanup</h3><p>“At the beginning of the end step” triggers happen in the end step. During cleanup, damage marked on creatures is removed and the active player normally discards down to their maximum hand size, usually seven.</p>`
+        },
+        {
+          title: 'Casting, timing & the stack',
+          html: `<h2>Casting spells, timing, and the stack</h2><p class="tutorial-lead">Most spells and non-mana abilities do not happen immediately. They go onto the <strong>stack</strong>, giving players a chance to respond.</p><h3>Last in, first out</h3><div class="tutorial-example"><strong>Example</strong>You cast a creature. Your opponent casts a counterspell in response. The counterspell is above the creature on the stack, so the counterspell resolves first.</div><h3>Instants vs. sorcery timing</h3><ul><li><strong>Instant:</strong> can usually be cast whenever you have priority.</li><li><strong>Sorcery:</strong> normally only during your own main phase while the stack is empty.</li><li>Cards with <strong>flash</strong> can usually be cast with instant timing.</li></ul><h3>Priority</h3><p>Priority is the rules system that determines who may act. After someone acts, other players get opportunities to respond. If everyone passes in succession while something is on the stack, the top object resolves. If everyone passes with the stack empty, the game moves to the next step or phase.</p><div class="tutorial-rule"><strong>Mana abilities</strong>Most mana abilities resolve immediately and do not use the stack, which is why tapping a normal land for mana usually cannot be “responded to” as a separate stack object.</div>`
+        },
+        {
+          title: 'Combat from start to finish',
+          html: `<h2>Combat from start to finish</h2><ol><li><strong>Beginning of combat:</strong> players can act before attackers are chosen.</li><li><strong>Declare attackers:</strong> the active player chooses which eligible creatures attack and whom they attack.</li><li><strong>Declare blockers:</strong> defending players choose legal blockers.</li><li><strong>Combat damage:</strong> attacking and blocking creatures deal combat damage.</li><li><strong>End of combat:</strong> final combat triggers and responses happen.</li></ol><h3>Important basics</h3><ul><li>Attacking normally taps a creature.</li><li>A creature with summoning sickness normally cannot attack or use an ability with {T} or {Q} unless it has haste.</li><li>An unblocked attacker deals combat damage to the player, planeswalker, or battle it attacked.</li><li>A blocked creature normally deals damage to blockers rather than the defending player unless it has trample or another effect changes this.</li></ul><div class="tutorial-example"><strong>Trading creatures</strong>If your 2/2 blocks an attacking 2/2, both normally deal 2 damage to each other at the same time and both die from lethal damage.</div><div class="tutorial-warning"><strong>Commander damage</strong>Only combat damage dealt by a commander counts toward the special 21-damage loss rule. Ability damage from that commander does not.</div>`
+        },
+        {
+          title: 'Common keyword abilities',
+          html: `<h2>Common keyword abilities</h2><div class="tutorial-grid"><div class="tutorial-mini-card"><h4>Flying</h4><p>Can normally be blocked only by creatures with flying or reach.</p></div><div class="tutorial-mini-card"><h4>Reach</h4><p>Allows a creature to block creatures with flying.</p></div><div class="tutorial-mini-card"><h4>Trample</h4><p>After assigning lethal damage to blockers, excess combat damage can be assigned to what was attacked.</p></div><div class="tutorial-mini-card"><h4>Deathtouch</h4><p>Any amount of damage from that source is lethal to a creature for lethal-damage purposes.</p></div><div class="tutorial-mini-card"><h4>Lifelink</h4><p>Damage dealt by that source causes its controller to gain that much life at the same time.</p></div><div class="tutorial-mini-card"><h4>Vigilance</h4><p>Attacking does not cause the creature to tap.</p></div><div class="tutorial-mini-card"><h4>Haste</h4><p>Ignores the creature’s normal summoning-sickness restrictions for attacking and {T}/{Q} abilities.</p></div><div class="tutorial-mini-card"><h4>Menace</h4><p>Cannot be blocked except by two or more creatures.</p></div><div class="tutorial-mini-card"><h4>First strike</h4><p>Deals combat damage in the first-strike damage step before creatures without first/double strike.</p></div><div class="tutorial-mini-card"><h4>Double strike</h4><p>Deals combat damage in both the first-strike and regular combat-damage steps.</p></div><div class="tutorial-mini-card"><h4>Hexproof</h4><p>An opponent cannot target that permanent/player with spells or abilities they control.</p></div><div class="tutorial-mini-card"><h4>Ward</h4><p>When an opponent targets it, that spell or ability is countered unless the ward cost is paid.</p></div><div class="tutorial-mini-card"><h4>Indestructible</h4><p>Destroy effects and lethal damage do not destroy it. Sacrifice, exile, and toughness 0 or less can still remove it.</p></div><div class="tutorial-mini-card"><h4>Defender</h4><p>That creature normally cannot attack.</p></div></div><div class="tutorial-warning"><strong>Protection is broader</strong>Protection from a quality can stop damage, enchanting/equipping, blocking, and targeting from sources with that quality. Read the exact protection wording.</div>`
+        },
+        {
+          title: 'Abilities, triggers & targets',
+          html: `<h2>Abilities, triggers, and targets</h2><h3>Three common ability types</h3><ul><li><strong>Activated:</strong> written as “cost: effect.” You choose to activate it and pay the cost.</li><li><strong>Triggered:</strong> usually begins with “when,” “whenever,” or “at.” It triggers automatically when its event happens.</li><li><strong>Static:</strong> simply remains true while the ability functions, such as an anthem giving your creatures +1/+1.</li></ul><h3>Targets</h3><p>If a spell or ability uses the word <strong>target</strong>, you choose legal targets as it goes onto the stack. If all of its targets become illegal before it resolves, it does not resolve and none of its effects happen.</p><div class="tutorial-example"><strong>Example</strong>You cast “destroy target creature” at a creature. The opponent gives it hexproof in response. Your spell’s target is now illegal, so the destroy spell will not destroy it.</div><h3>Costs cannot normally be interrupted</h3><p>Once a player begins legally casting a spell or activating an ability, paying its costs—including tapping or sacrificing something required as a cost—happens before opponents get priority to respond.</p>`
+        },
+        {
+          title: 'Commander-specific rules',
+          html: `<h2>The rules that make Commander different</h2><h3>Command zone and commander tax</h3><p>You may normally cast your commander from the command zone. Each time you cast that same commander from the command zone after the first, it costs an additional <strong>{2}</strong> for each previous command-zone cast that game.</p><div class="tutorial-example"><strong>Example</strong>If your commander normally costs {2}{U}{B}, its first command-zone cast costs that. The next costs {4}{U}{B}; the next costs {6}{U}{B}, assuming no other cost changes.</div><h3>When your commander changes zones</h3><p>If your commander is put into your graveyard or exile, you get an opportunity to move it to the command zone as a state-based action. If it would go to your hand or library, you may put it into the command zone instead.</p><h3>Commander damage</h3><p>Track combat damage from each individual commander separately. A player who has been dealt 21 or more combat damage by the same commander over the game loses.</p><div class="tutorial-rule"><strong>Tax follows command-zone casts</strong>If you cast your commander from your hand or graveyard because another effect allows it, that cast does not itself add another commander tax. Tax counts previous times it was cast from the command zone.</div>`
+        },
+        {
+          title: 'Tokens, counters & attachments',
+          html: `<h2>Tokens, counters, Equipment, and Auras</h2><h3>Tokens</h3><p>Tokens are permanents created by effects. A token can die or be exiled, but once it leaves the battlefield it ceases to exist shortly afterward as a state-based action. It cannot remain in a graveyard or hand like a normal card.</p><h3>Counters</h3><p>Counters modify or track objects and players. Examples include +1/+1 counters, -1/-1 counters, loyalty, charge, page, stun, shield, poison, and many set-specific counters. A counter is not the same thing as a temporary “gets +1/+1 until end of turn” effect.</p><h3>Equipment</h3><p>Equipment is normally an artifact that stays on the battlefield. Its equip ability usually works only at sorcery speed unless something says otherwise. If the equipped creature leaves, the Equipment stays.</p><h3>Auras</h3><p>Auras enchant something specified by their “enchant” ability. If an Aura is on an illegal object or is no longer attached to anything it can enchant, state-based actions normally put it into its owner’s graveyard.</p><div class="tutorial-check"><strong>Commander Forge tip</strong>Use the counter/keyword controls for effects the app cannot infer automatically, and use predefined tokens when a card creates a named token.</div>`
+        },
+        {
+          title: 'State-based actions & dying',
+          html: `<h2>State-based actions: the automatic cleanup rules</h2><p>Magic repeatedly checks certain game conditions whenever a player would receive priority. These checks are called <strong>state-based actions</strong>.</p><p>Important beginner examples include:</p><ul><li>A creature with damage marked on it greater than or equal to its toughness is destroyed (unless indestructible applies).</li><li>A creature with toughness 0 or less is put into its owner’s graveyard. Indestructible does not save it.</li><li>A player with 0 or less life loses.</li><li>A player with 10 or more poison counters loses.</li><li>A token outside the battlefield ceases to exist.</li><li>+1/+1 and -1/-1 counters on the same permanent cancel each other in matching pairs.</li></ul><div class="tutorial-example"><strong>“Dies” has a precise meaning</strong>A creature dies when it is put into a graveyard from the battlefield. Exiling or returning a creature to hand does not count as dying.</div>`
+        },
+        {
+          title: 'Your first real game plan',
+          html: `<h2>A simple plan for your first Commander game</h2><ol><li><strong>Develop mana.</strong> Play lands when useful and cast ramp so you can do more later.</li><li><strong>Build your engine.</strong> Use cards that draw, make tokens, recur cards, or support your commander.</li><li><strong>Do not spend every resource immediately.</strong> Leaving mana or blockers available can protect you.</li><li><strong>Read the whole battlefield.</strong> Ask what can attack you, what can remove your important cards, and which permanent is generating the most value.</li><li><strong>Attack when it helps.</strong> You do not need to wait for a perfect lethal attack. Safe damage, profitable trades, and commander damage matter.</li><li><strong>Use interaction on things that matter.</strong> Saving removal for a true threat is often better than killing the first creature you see.</li></ol><div class="tutorial-rule"><strong>Before ending your turn, ask:</strong> Did I use my mana well? Did I play a land if I wanted to? Do I need blockers? Is there something I should hold mana to answer? Do I need to discard down to my maximum hand size?</div><div class="tutorial-example"><strong>You are ready to practice</strong>Load two decks in Solo Practice. Play both sides slowly. When something is unclear, select the card, read its Oracle text, and use the Coach as advice rather than as a substitute for reading the board.</div><div class="tutorial-warning"><strong>Rules note</strong>This tutorial teaches the core rules needed for normal Commander play. Magic has many card-specific exceptions; when a card directly contradicts a normal rule, the card usually wins. The official Comprehensive Rules are the final reference for edge cases.</div>`
+        }
+      ];
+      let tutorialStep = 0;
+      function renderCommanderTutorial() {
+        const total = commanderLessons.length;
+        tutorialStep = Math.max(0, Math.min(total - 1, tutorialStep));
+        tutorialNav.innerHTML = commanderLessons.map((lesson, index) => `<button type="button" class="${index === tutorialStep ? 'active' : ''}" data-tutorial-step="${index}"><span class="lesson-number">${index + 1}</span><span class="lesson-title">${lesson.title}</span></button>`).join('');
+        tutorialContent.innerHTML = commanderLessons[tutorialStep].html;
+        tutorialContent.scrollTop = 0;
+        tutorialProgressBar.style.width = `${((tutorialStep + 1) / total) * 100}%`;
+        tutorialProgressLabel.textContent = `Lesson ${tutorialStep + 1} of ${total} · ${commanderLessons[tutorialStep].title}`;
+        tutorial.querySelector('[data-tutorial-action="previous"]').disabled = tutorialStep === 0;
+        tutorial.querySelector('[data-tutorial-action="next"]').textContent = tutorialStep === total - 1 ? 'Start over' : 'Next ›';
+        requestAnimationFrame(() => tutorialNav.querySelector('.active')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' }));
+      }
+      function openCommanderTutorial() {
+        tutorialStep = Number(localStorage.getItem('commander-forge-tutorial-step') || 0);
+        renderCommanderTutorial();
+        tutorial.classList.add('open');
+        tutorial.setAttribute('aria-hidden','false');
+      }
+      function closeCommanderTutorial() {
+        localStorage.setItem('commander-forge-tutorial-step', String(tutorialStep));
+        tutorial.classList.remove('open');
+        tutorial.setAttribute('aria-hidden','true');
+      }
+      tutorial.addEventListener('click', (e) => {
+        const stepButton = e.target.closest?.('[data-tutorial-step]');
+        if (stepButton) { tutorialStep = Number(stepButton.dataset.tutorialStep || 0); renderCommanderTutorial(); return; }
+        const action = e.target.closest?.('[data-tutorial-action]')?.dataset.tutorialAction;
+        if (!action && e.target === tutorial) return closeCommanderTutorial();
+        if (action === 'close') return closeCommanderTutorial();
+        if (action === 'previous') { tutorialStep -= 1; renderCommanderTutorial(); return; }
+        if (action === 'next') { tutorialStep = tutorialStep === commanderLessons.length - 1 ? 0 : tutorialStep + 1; renderCommanderTutorial(); return; }
+        if (action === 'practice') { closeCommanderTutorial(); launch('solo'); }
+      });
+
+      const feedbackForm = document.getElementById('forge-feedback-form');
+      feedbackForm?.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const message = String(document.getElementById('forge-feedback-message')?.value || '').trim();
+        const type = String(document.getElementById('forge-feedback-type')?.value || 'General feedback');
+        if (!message) return document.getElementById('forge-feedback-message')?.focus();
+        const subject = `[Commander Forge] ${type}`;
+        const body = `${message}\n\n---\nWebsite version: ${APP_VERSION}\nSent from The Commander Forge feedback menu`;
+        window.location.href = `mailto:rinmefornoodles@gmail.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+      });
+
       const inviteFromUrl = new URLSearchParams(location.search).get('join');
       if (inviteFromUrl) {
         window.__forgeSetupModeLock = 'online';
@@ -149,12 +293,13 @@
         if (!btn) return;
         const action = btn.dataset.titleAction;
         if (action === 'howto') return openHelp();
+        if (action === 'tutorial') return openCommanderTutorial();
         if (action === 'close-help') return closeHelp();
         launch(action);
       });
     })();
   </script>
   <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js" integrity="sha512-XEKeWX+mI3Ov+tg2evDlVQFzVOIp4T8J3cNcCEPaEUGpxJV3eZaN8rHuvnFPvQpGJBHPmrozJDMpm2xcDvtmyQ==" crossorigin="anonymous"></script>
-  <script defer src="./commander-forge-5.26.0.js" onerror="window.__forgeBootError('HTTP error while loading commander-forge-5.26.0.js')"></script>
+  <script defer src="./commander-forge-5.27.0.js" onerror="window.__forgeBootError('HTTP error while loading commander-forge-5.27.0.js')"></script>
 </body>
 </html>
