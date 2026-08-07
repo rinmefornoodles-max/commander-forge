@@ -1,25 +1,28 @@
-THE COMMANDER FORGE 5.28 — INTERACTIVE COMMANDER TUTORIAL
+THE COMMANDER FORGE 5.29 — TUTORIAL CARD ART, MULLIGANS, TABLE LAYOUT
 
 Upload these four website files to the TOP LEVEL of your GitHub repository:
 
 - index.html
-- commander-forge-5.28.0.js
-- commander-forge-5.28.0.css
+- commander-forge-5.29.0.js
+- commander-forge-5.29.0.css
 - sw.js
 
 Allow index.html and sw.js to replace the existing versions.
+Both online players must use version 5.29.0.
 
-INTERACTIVE TUTORIAL
-- “New to Magic?” on the title screen now opens an actual playable tutorial instead of a reading-only lesson list.
-- The learner controls one deck; the opponent is scripted and plays its own cards visibly.
-- Opponent actions animate through draw, land play, tapping mana, casting, attacking, and blocking moments.
-- Several curated opening-hand variants are chosen randomly so repeat runs do not show exactly the same hand.
-- The tutorial waits for the learner to perform the requested action before advancing.
-- Interactive basics teach: first-turn draw rule, land plays, mana, casting, summoning sickness, attacking, blocking, combat damage, instants, command zone, removal, and commander tax.
-- The basics automatically lead into a short guided practice game.
-- Guided practice begins from a fast-forwarded Commander board so the complete experience stays short.
-- The learner must read the battlefield, target a flying threat, avoid a bad attack, block, use a combat trick, cast the commander, choose multiple attackers, understand summoning sickness, and finish with a flying lethal attack.
-- The previous 14-section reading tutorial remains available as “Rules reference.”
-- Tutorial progress is isolated from normal saved Commander Forge games and cannot overwrite a user’s table.
+TUTORIAL CHANGES
+- Tutorial cards now render real Magic card images through Scryfall, with a text fallback if an image cannot load.
+- The interactive basics course now begins with a real mulligan decision before turn 1.
+- The bad opening hand varies: too few lands, too many lands, or unusable colors.
+- Choosing Keep on the intentionally bad hand explains why the keep is risky and lets the learner reconsider.
+- Mulliganing gives a curated but variable playable hand and explains what makes it healthier.
+- A mulligan-rules explanation covers the London mulligan and the multiplayer free first mulligan.
+- The tutorial table now mirrors the normal Commander Forge playmat: opponent hand/stats are at the far top, opponent permanents face the center, your permanents face the center, and your hand/stats are at the bottom.
+- The guided game keeps the same short scripted opponent and visible card-play/tap animations.
 
-The mobile precon scroll preservation and title-screen feedback form from 5.27 remain included.
+TESTING
+- Main JavaScript syntax passed.
+- Inline title/tutorial JavaScript syntax passed.
+- Full interactive tutorial flow passed from mulligan through the guided-game lethal attack.
+- Real-card image URL rendering and mirrored tutorial table markup were verified.
+- ZIP integrity was verified.

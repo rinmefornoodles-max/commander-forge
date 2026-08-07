@@ -8,7 +8,7 @@
   <title>The Commander Forge</title>
   <link rel="icon" href="./forge-mark.svg" type="image/svg+xml" />
   <link rel="manifest" href="./manifest.webmanifest" />
-  <link rel="stylesheet" href="./commander-forge-5.28.0.css" />
+  <link rel="stylesheet" href="./commander-forge-5.29.0.css" />
 </head>
 <body>
   <div id="title-screen" class="forge-title-screen" aria-label="The Commander Forge title screen">
@@ -61,7 +61,7 @@
           </div>
         </div>
         <div class="forge-title-footer">
-          <div class="forge-title-version">Version 5.28 · Cards and rules data provided by Scryfall</div>
+          <div class="forge-title-version">Version 5.29 · Cards and rules data provided by Scryfall</div>
           <div class="forge-title-legal">The Commander Forge is not affiliated with Wizards of the Coast.<br/>Magic: The Gathering is a trademark of Wizards of the Coast LLC.</div>
         </div>
       </section>
@@ -113,7 +113,7 @@
   <div id="toast-root" aria-live="assertive"></div>
   <script>
     (() => {
-      const APP_VERSION='5.28.0';
+      const APP_VERSION='5.29.0';
       const STORAGE_KEY='commander-forge-state-v2';
       const app=document.getElementById('app');
       const title=document.getElementById('title-screen');
@@ -284,7 +284,7 @@
       });
 
 
-      // 5.28 interactive tutorial: a small deterministic rules trainer that does not alter saved games.
+      // 5.29 interactive tutorial: a small deterministic rules trainer that does not alter saved games.
       const interactiveTutorial = document.getElementById('interactive-tutorial');
       const itBody = document.getElementById('it-body');
       const itSubtitle = document.getElementById('it-header-subtitle');
@@ -318,6 +318,21 @@
       function findItCard(id){ for(const side of ['player','opponent']) for(const zone of ['hand','battlefield','lands','graveyard']){ const found=it[side]?.[zone]?.find(c=>c.id===id); if(found) return {side,zone,card:found}; } if(it.player?.commander?.id===id) return {side:'player',zone:'command',card:it.player.commander}; return null; }
       function moveItCard(side,from,to,id,extra={}){ const source=it[side][from]; const index=source.findIndex(c=>c.id===id); if(index<0)return null; const [card]=source.splice(index,1); Object.assign(card,extra); it[side][to].push(card); return card; }
       function itLand(id,name,role){ const c=name==='Plains'?TC.plains(id):name==='Mountain'?TC.mountain(id):name==='Swamp'?TC.swamp(id):TC.forest(id); c.role=role||c.role; return freshCard(c); }
+      function tutorialBadOpeningHand(){
+        const patterns=[
+          ()=>({label:'Too little mana',reason:'This hand has only one land and most of its spells cost three or more mana. You could easily spend several turns unable to cast anything.',hand:[
+            itLand('m1-forest','Forest','mulligan-land'),freshCard(TC.angel('m1-angel')),freshCard({id:'m1-dreadmaw',name:'Colossal Dreadmaw',cost:'{4}{G}{G}',type:'Creature — Dinosaur',text:'Trample',power:'6',toughness:'6',role:'mulligan-card'}),freshCard({id:'m1-wurm',name:'Siege Wurm',cost:'{5}{G}{G}',type:'Creature — Wurm',text:'Convoke. Trample',power:'5',toughness:'5',role:'mulligan-card'}),freshCard({id:'m1-overrun',name:'Overrun',cost:'{2}{G}{G}{G}',type:'Sorcery',text:'Creatures you control get +3/+3 and gain trample until end of turn.',role:'mulligan-card'}),freshCard({id:'m1-overseer',name:'Inspiring Overseer',cost:'{2}{W}',type:'Creature — Angel Cleric',text:'Flying. When this enters, you gain 1 life and draw a card.',power:'2',toughness:'1',role:'mulligan-card'}),freshCard({id:'m1-pacifism',name:'Pacifism',cost:'{1}{W}',type:'Enchantment — Aura',text:'Enchant creature. Enchanted creature can’t attack or block.',role:'mulligan-card'})]}),
+          ()=>({label:'Too many lands',reason:'Six lands gives you plenty of mana eventually, but this hand has almost nothing useful to do in the early turns. You are very likely to fall behind.',hand:[
+            itLand('m2-f1','Forest','mulligan-land'),itLand('m2-f2','Forest','mulligan-land'),itLand('m2-f3','Forest','mulligan-land'),itLand('m2-p1','Plains','mulligan-land'),itLand('m2-p2','Plains','mulligan-land'),itLand('m2-p3','Plains','mulligan-land'),freshCard(TC.angel('m2-angel'))]}),
+          ()=>({label:'Wrong colors',reason:'This hand has lands, but they only make green mana while almost every spell in the hand needs white mana. Having enough lands is not enough if they cannot cast your spells.',hand:[
+            itLand('m3-f1','Forest','mulligan-land'),itLand('m3-f2','Forest','mulligan-land'),itLand('m3-f3','Forest','mulligan-land'),freshCard({id:'m3-pacifism',name:'Pacifism',cost:'{1}{W}',type:'Enchantment — Aura',text:'Enchant creature. Enchanted creature can’t attack or block.',role:'mulligan-card'}),freshCard(TC.angel('m3-angel')),freshCard({id:'m3-overseer',name:'Inspiring Overseer',cost:'{2}{W}',type:'Creature — Angel Cleric',text:'Flying. When this enters, you gain 1 life and draw a card.',power:'2',toughness:'1',role:'mulligan-card'}),freshCard({id:'m3-light',name:'Banishing Light',cost:'{2}{W}',type:'Enchantment',text:'When this enters, exile target nonland permanent an opponent controls until this leaves the battlefield.',role:'mulligan-card'})]})
+        ];
+        return patterns[Math.floor(Math.random()*patterns.length)]();
+      }
+      function tutorialCardImageUrl(card){
+        const name=encodeURIComponent(String(card?.name||''));
+        return `https://api.scryfall.com/cards/named?exact=${name}&format=image&version=small`;
+      }
       function buildBasicsState(){
         const v=tutorialVariant();
         const baseHand=[
@@ -329,7 +344,8 @@
           freshCard(TC.fromTuple('removal',v.removal,'removal')),
           freshCard(TC.angel()),
         ];
-        it={screen:'basics',stage:'B0',variant:v,turn:1,phase:'Main 1',busy:false,feedback:'',flashCardId:'',mana:{G:0,W:0},player:{name:'You',life:40,hand:shuffled(baseHand),battlefield:[],lands:[],graveyard:[],commander:freshCard(TC.commander()),commanderCasts:0},opponent:{name:'Training Opponent',life:40,handCount:7,battlefield:[],lands:[],graveyard:[]}};
+        const bad=tutorialBadOpeningHand();
+        it={screen:'basics',stage:'M0',variant:v,mulliganLesson:bad,goodOpeningHand:shuffled(baseHand),mulligans:0,turn:1,phase:'Pregame',busy:false,feedback:'',flashCardId:'',mana:{G:0,W:0},player:{name:'You',life:40,hand:shuffled(bad.hand),battlefield:[],lands:[],graveyard:[],commander:freshCard(TC.commander()),commanderCasts:0},opponent:{name:'Training Opponent',life:40,handCount:7,battlefield:[],lands:[],graveyard:[]}};
       }
       function buildGuidedState(){
         const v=tutorialVariant();
@@ -342,14 +358,16 @@
         ]),battlefield:[freshCard(TC.fromTuple('g-dork',v.dork,'dork')),freshCard(TC.fromTuple('g-bear',v.bear,'guided-bear'))],lands:[1,2,3,4,5].map((n)=>itLand(`g-land-${n}`,n%3===0?'Plains':'Forest','guided-existing-land')),graveyard:[],commander:freshCard(TC.commander()),commanderCasts:0},opponent:{name:'Training Opponent',life:12,handCount:5,battlefield:[freshCard(TC.hill()),freshCard(TC.flyer())],lands:[1,2,3,4,5].map((n)=>itLand(`go-land-${n}`,n%3===0?'Swamp':'Mountain','opp-land')),graveyard:[]}};
       }
       function itStageNumber(){
-        const basics=['B0','B1','B2','B3','B4','B5','B6','B7','B8','B9','B10','B11','B12','B13','B14','B15','B16','B17','B18','B19','B20'];
+        const basics=['M0','M1','B0','B1','B2','B3','B4','B5','B6','B7','B8','B9','B10','B11','B12','B13','B14','B15','B16','B17','B18','B19','B20'];
         const guided=['G0','G1','G1T','G2','G3','G4','G5','G6','G7','G8','G9','G10','G11','G12','G13','G14','G15'];
         const list=it.screen==='guided'?guided:basics; return {index:Math.max(0,list.indexOf(it.stage)),total:list.length};
       }
       function itGuideData(){
         const s=it.stage;
         const guides={
-          B0:{eyebrow:'Basics · Opening hand',title:'You control this deck',text:'This training game starts like a 1v1 Commander game. You have seven cards, your commander begins in the command zone, and because you are going first you will skip the draw on turn 1.',why:'The hand is randomized from several curated versions, but each version teaches the same rules.',buttons:[['Begin your first turn','begin-basics','primary']]},
+          M0:{eyebrow:'Pregame · Mulligan',title:'Would you keep this opening hand?',text:`Before turn 1, look at all seven cards. This example is a <strong>${it.mulliganLesson?.label||'risky hand'}</strong>. Decide whether you would keep it or take a mulligan.`,why:`${it.mulliganLesson?.reason||'This hand does not have a reliable early plan.'} For a new player, a useful first check is: do I have roughly 2–4 lands, the colors I need, and at least one useful early play?`,hint:'The tutorial intentionally gives you a bad hand first so you can practice the decision.',buttons:[['Keep it','keep-bad','ghost'],['Mulligan','take-mulligan','primary']]},
+          M1:{eyebrow:'Pregame · New seven',title:'This hand has a real plan',text:'Your new hand has two lands, an early one-mana creature, a two-mana creature, interaction, and spells you can grow into. That does not guarantee a win, but it gives you things to do in the first few turns.',why:'Mulligan decisions depend on the deck, but beginners should usually prefer hands that can make their colors, develop mana, and cast something early instead of hoping to draw perfectly.',buttons:[['Keep this hand','keep-good','primary'],['Explain another mulligan','mulligan-info','ghost']]},
+          B0:{eyebrow:'Basics · Opening hand kept',title:'You are ready to start',text:'You kept your seven-card hand. Your commander begins in the command zone. Because this training game is a 1v1 and you are going first, you will skip the draw on turn 1.',why:'The opening-hand lesson used a deliberately bad hand followed by a playable hand. The rest of the cards still vary between curated versions so the tutorial is not identical every time.',buttons:[['Begin your first turn','begin-basics','primary']]},
           B1:{eyebrow:'Turn 1 · Main phase',title:'Play your first land',text:'Find the Forest in your hand and tap it. Playing a land does not use the stack, and you normally get one land play each turn.',why:'Lands are your main source of mana. You are allowed to play zero lands, but this hand has one you want to play.',hint:'The correct card is glowing.'},
           B2:{eyebrow:'Mana',title:'Tap the Forest for green mana',text:'Tap the Forest you just played. Tapping turns it sideways and adds one green mana.',why:'Mana pays costs. The {G} symbol on your one-mana creature requires green mana.',hint:'Tap the glowing Forest on the battlefield.'},
           B3:{eyebrow:'Casting a spell',title:`Cast ${it.variant?.dork?.[0]||'your mana creature'}`,text:'You now have {G} available. Tap the highlighted creature in your hand to cast it. The tutorial will resolve the spell immediately.',why:'Creature spells normally can be cast during your main phase while the stack is empty.'},
@@ -421,7 +439,8 @@
       function renderItCard(card,side,zone){
         const valid=cardIsValid(card,side,zone); const classes=['it-card'];
         if(valid)classes.push('valid'); if(card.tapped)classes.push('tapped'); if(card.attacking)classes.push('attacking'); if(card.blocking)classes.push('blocking'); if(card.sick)classes.push('sick'); if(card.pacified)classes.push('pacified'); if(it.flashCardId===card.id)classes.push('entering');
-        return `<button type="button" class="${classes.join(' ')}" data-it-card="${card.id}" data-it-side="${side}" data-it-zone="${zone}" aria-label="${card.name}"><span class="it-card-name">${card.name}</span>${card.cost?`<span class="it-card-cost">${card.cost}</span>`:''}<span class="it-card-type">${card.type||''}</span><span class="it-card-text">${card.text||''}</span>${card.power!==undefined&&card.power!==''?`<span class="it-card-pt">${card.power}/${card.toughness}</span>`:''}</button>`;
+        const image=tutorialCardImageUrl(card);
+        return `<button type="button" class="${classes.join(' ')}" data-it-card="${card.id}" data-it-side="${side}" data-it-zone="${zone}" aria-label="${card.name}" title="${card.name}"><span class="it-card-fallback"><span class="it-card-name">${card.name}</span>${card.cost?`<span class="it-card-cost">${card.cost}</span>`:''}<span class="it-card-type">${card.type||''}</span><span class="it-card-text">${card.text||''}</span>${card.power!==undefined&&card.power!==''?`<span class="it-card-pt">${card.power}/${card.toughness}</span>`:''}</span><img class="it-card-image" src="${image}" alt="${card.name}" draggable="false" decoding="async" onerror="this.remove()"/><span class="it-art-name">${card.name}</span></button>`;
       }
       function renderHiddenHand(count){ return Array.from({length:Math.min(7,count||0)},(_,i)=>`<div class="it-card it-card-back" aria-label="Hidden opponent card ${i+1}"></div>`).join(''); }
       function renderItPlayer(side){
@@ -430,7 +449,13 @@
         const bf=p.battlefield.map(c=>renderItCard(c,side,'battlefield')).join('')||'<span class="it-zone-label">No creatures or permanents</span>';
         const lands=p.lands.map(c=>renderItCard(c,side,'lands')).join('')||'<span class="it-zone-label">No lands</span>';
         const command=!opp&&p.commander?`<div class="it-command-wrap">${renderItCard(p.commander,'player','command')}<span class="it-command-tax">Tax +${Math.max(0,(p.commanderCasts||0)*2)}</span></div>`:'';
-        return `<section class="it-player ${opp?'opponent':'you'}"><div class="it-player-bar"><strong>${p.name}</strong><div class="it-stats"><span class="it-stat">Life ${p.life}</span>${!opp?`<span class="it-stat">Hand ${p.hand.length}</span><span class="it-stat">Mana ${Object.values(it.mana||{}).reduce((a,b)=>a+b,0)}</span>`:`<span class="it-stat">Hand ${p.handCount}</span>`}</div></div><div><div class="it-zone-label">${opp?'Hidden hand':'Your hand'}</div><div class="it-row">${hand}</div></div><div><div class="it-zone-label">Battlefield</div><div class="it-battlefield">${bf}</div></div><div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end"><div><div class="it-zone-label">Lands</div><div class="it-land-row">${lands}</div></div>${command?`<div><div class="it-zone-label">Command zone</div>${command}</div>`:''}</div></section>`;
+        const stats=`<div class="it-player-bar"><strong>${p.name}</strong><div class="it-stats"><span class="it-stat">Life ${p.life}</span>${!opp?`<span class="it-stat">Hand ${p.hand.length}</span><span class="it-stat">Mana ${Object.values(it.mana||{}).reduce((a,b)=>a+b,0)}</span>`:`<span class="it-stat">Hand ${p.handCount}</span>`}</div></div>`;
+        const handZone=`<div class="it-table-zone it-hand-zone"><div class="it-zone-label">${opp?'Hidden opponent hand':'Your hand'}</div><div class="it-row">${hand}</div></div>`;
+        const battlefieldZone=`<div class="it-table-zone it-battlefield-zone"><div class="it-zone-label">Creatures & other permanents</div><div class="it-battlefield">${bf}</div></div>`;
+        const resourceZone=`<div class="it-table-zone it-resource-zone"><div class="it-resource-main"><div class="it-zone-label">Lands</div><div class="it-land-row">${lands}</div></div>${command?`<div class="it-command-side"><div class="it-zone-label">Command zone</div>${command}</div>`:''}</div>`;
+        return opp
+          ? `<section class="it-player opponent">${stats}${handZone}${resourceZone}${battlefieldZone}</section>`
+          : `<section class="it-player you">${battlefieldZone}${resourceZone}${handZone}${stats}</section>`;
       }
       function renderItGuide(){
         const g=itGuideData(), prog=itStageNumber(); const pct=((prog.index+1)/prog.total)*100;
@@ -441,7 +466,7 @@
       function renderTutorialHub(){
         itSubtitle.textContent='Learn by actually playing the cards.';
         const completed=localStorage.getItem('commander-forge-interactive-tutorial-complete')==='1';
-        itBody.innerHTML=`<div class="it-hub"><section class="it-hero"><h3>Learn Commander by playing it</h3><p>Instead of reading a wall of rules, you will control one deck while a scripted opponent plays the other side. The tutorial waits for you to make the important actions, explains what just happened, then finishes with a short guided practice game. Curated opening hands vary between runs so it does not feel exactly the same every time.</p></section><div class="it-course-grid"><article class="it-course-card"><strong>1. Interactive basics · ~5–8 min</strong><p>Play lands, make mana, cast creatures, learn summoning sickness, attack, block, use an instant, then practice the command zone and commander tax.</p><button class="btn primary" data-it-action="start-basics">${completed?'Replay interactive course':'Start interactive course'}</button></article><article class="it-course-card"><strong>2. Guided game · ~8 min</strong><p>Jump into a shortened game that began at 40 life. You control your deck while the opponent plays automatically and the guide asks you to make the decisions.</p><button class="btn" data-it-action="start-guided">Start guided game</button></article><article class="it-course-card"><strong>Rules reference</strong><p>Prefer reading, or need to look something up? Open the full Commander rules reference from the previous tutorial.</p><button class="btn ghost" data-it-action="rules-reference">Open rules reference</button></article></div></div>`;
+        itBody.innerHTML=`<div class="it-hub"><section class="it-hero"><h3>Learn Commander by playing it</h3><p>Instead of reading a wall of rules, you will control one deck while a scripted opponent plays the other side. The tutorial waits for you to make the important actions, explains what just happened, then finishes with a short guided practice game. Curated opening hands vary between runs so it does not feel exactly the same every time.</p></section><div class="it-course-grid"><article class="it-course-card"><strong>1. Interactive basics · ~6–9 min</strong><p>Start by judging an opening hand and taking a mulligan, then play lands, make mana, cast creatures, learn combat, use an instant, and practice the command zone and commander tax with real card images.</p><button class="btn primary" data-it-action="start-basics">${completed?'Replay interactive course':'Start interactive course'}</button></article><article class="it-course-card"><strong>2. Guided game · ~8 min</strong><p>Jump into a shortened game that began at 40 life. You control your deck while the opponent plays automatically and the guide asks you to make the decisions.</p><button class="btn" data-it-action="start-guided">Start guided game</button></article><article class="it-course-card"><strong>Rules reference</strong><p>Prefer reading, or need to look something up? Open the full Commander rules reference from the previous tutorial.</p><button class="btn ghost" data-it-action="rules-reference">Open rules reference</button></article></div></div>`;
       }
       function renderInteractiveTutorial(){
         if(!interactiveTutorial.classList.contains('open'))return;
@@ -451,7 +476,7 @@
         itBody.innerHTML=`<div class="it-board-layout"><div class="it-board">${it.busy&&it.aiMessage?`<div class="it-ai-banner">${it.aiMessage}</div>`:''}${renderItPlayer('opponent')}<div class="it-center-line"><span>Turn ${it.turn}</span><span class="it-phase-pill">${it.phase}</span><span>${it.screen==='guided'?'Guided game':'Training game'}</span></div>${renderItPlayer('player')}</div>${renderItGuide()}</div>`;
       }
       function renderTutorialComplete(){
-        itBody.innerHTML=`<div class="it-summary"><h3>Commander tutorial complete</h3><p>You learned these rules by taking the actions yourself:</p><ul><li>Opening hands and the first-turn draw rule in 1v1</li><li>Land plays, tapping lands, mana, and casting costs</li><li>Summoning sickness and legal attackers</li><li>Blocking and combat damage</li><li>Instants and responding before combat damage</li><li>The command zone and commander tax</li><li>Targeted removal, flying, vigilance, and evaluating attacks</li><li>Reading the board and finding lethal damage</li></ul><div class="it-summary-actions"><button class="btn primary" data-it-action="open-solo">Open Solo Practice</button><button class="btn" data-it-action="restart-tutorial">Play again</button><button class="btn ghost" data-it-action="rules-reference">Rules reference</button></div></div>`;
+        itBody.innerHTML=`<div class="it-summary"><h3>Commander tutorial complete</h3><p>You learned these rules by taking the actions yourself:</p><ul><li>Evaluating an opening hand, mulligans, and the first-turn draw rule in 1v1</li><li>Land plays, tapping lands, mana, and casting costs</li><li>Summoning sickness and legal attackers</li><li>Blocking and combat damage</li><li>Instants and responding before combat damage</li><li>The command zone and commander tax</li><li>Targeted removal, flying, vigilance, and evaluating attacks</li><li>Reading the board and finding lethal damage</li></ul><div class="it-summary-actions"><button class="btn primary" data-it-action="open-solo">Open Solo Practice</button><button class="btn" data-it-action="restart-tutorial">Play again</button><button class="btn ghost" data-it-action="rules-reference">Rules reference</button></div></div>`;
       }
       function openInteractiveTutorial(){
         it={screen:'hub'}; it.feedback=''; renderInteractiveTutorial();
@@ -543,9 +568,13 @@
       }
       async function handleItAction(action){
         if(action==='close')return closeInteractiveTutorial();
-        if(action==='start-basics'){buildBasicsState();it.stage='B0';return renderInteractiveTutorial();}
+        if(action==='start-basics'){buildBasicsState();return renderInteractiveTutorial();}
         if(action==='start-guided'){buildGuidedState();return renderInteractiveTutorial();}
         if(action==='rules-reference'){closeInteractiveTutorial();return openCommanderTutorial();}
+        if(action==='keep-bad'&&it.stage==='M0'){it.feedback=`You are allowed to keep it, but this is the kind of hand that often starts a game from behind. ${it.mulliganLesson?.reason||''} Try the Mulligan button so you can see a healthier hand.`;return renderInteractiveTutorial();}
+        if(action==='take-mulligan'&&it.stage==='M0'){it.player.hand=shuffled(it.goodOpeningHand||[]);it.mulligans=1;it.stage='M1';it.feedback='You shuffled the bad hand away and drew a fresh seven for this training mulligan.';return renderInteractiveTutorial();}
+        if(action==='mulligan-info'&&it.stage==='M1'){it.feedback='London mulligan: draw seven again each time, then when you finally keep, put one card on the bottom for each counted mulligan. Multiplayer Magic gives each player a free first mulligan; this training 1v1 also gives you one free mulligan so you can learn without starting down a card.';return renderInteractiveTutorial();}
+        if(action==='keep-good'&&it.stage==='M1'){it.stage='B0';it.phase='Main 1';it.feedback='Good keep: two lands, both colors, and early plays.';return renderInteractiveTutorial();}
         if(action==='begin-basics'){it.stage='B1';return renderInteractiveTutorial();}
         if(action==='end-turn'&&it.stage==='B5'){await opponentTurnOne();return;}
         if(action==='end-turn'&&it.stage==='B9'){await opponentTurnTwo();return;}
@@ -602,6 +631,6 @@
     })();
   </script>
   <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js" integrity="sha512-XEKeWX+mI3Ov+tg2evDlVQFzVOIp4T8J3cNcCEPaEUGpxJV3eZaN8rHuvnFPvQpGJBHPmrozJDMpm2xcDvtmyQ==" crossorigin="anonymous"></script>
-  <script defer src="./commander-forge-5.28.0.js" onerror="window.__forgeBootError('HTTP error while loading commander-forge-5.28.0.js')"></script>
+  <script defer src="./commander-forge-5.29.0.js" onerror="window.__forgeBootError('HTTP error while loading commander-forge-5.29.0.js')"></script>
 </body>
 </html>
