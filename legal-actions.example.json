@@ -1,0 +1,32 @@
+{
+  "gameId": "game-123",
+  "revision": 41,
+  "turn": 5,
+  "phase": "PRECOMBAT_MAIN",
+  "activePlayerId": "p1",
+  "priorityPlayerId": "p1",
+  "stack": [],
+  "players": [
+    {
+      "id": "p1",
+      "name": "Player 1",
+      "life": 40,
+      "hand": [{"objectId":"card-17","name":"Nethroi, Apex of Death"}],
+      "libraryCount": 82,
+      "graveyard": [],
+      "battlefield": [],
+      "command": []
+    },
+    {
+      "id": "p2",
+      "name": "Player 2",
+      "life": 40,
+      "handCount": 6,
+      "libraryCount": 83,
+      "graveyard": [],
+      "battlefield": [],
+      "command": []
+    }
+  ],
+  "pendingChoice": null
+}
