@@ -1,0 +1,11 @@
+Commander Forge 6.0 Alpha 6.3 validation
+
+PASS — host handles already-open incoming PeerJS connection
+PASS — guest handles already-open outbound connection
+PASS — automatic guest seat retry
+PASS — host resends seat on request
+PASS — seat retry clears after assignment
+PASS — manual seat retry button
+PASS — Alpha 6.3 multiplayer protocol
+PASS — Alpha 6.3 index asset
+PASS — all JavaScript bundles pass node --check
