@@ -1,17 +1,23 @@
-COMMANDER FORGE 6.0 ALPHA 6.7 — GITHUB UPLOAD
+COMMANDER FORGE 6.0 ALPHA 6.8 — GITHUB UPLOAD
 
-Upload EVERY file in this folder to the ROOT of:
+Upload EVERY file from this folder to the ROOT of:
 rinmefornoodles-max/commander-forge
 
 Replace index.html.
 
 IMPORTANT:
-Host and every guest should all show Version 6.0 Alpha 6.7.
+Every player in the room must show:
+Version 6.0 Alpha 6.8
 
-Test:
-1. Hard refresh all devices.
-2. Create a 3-player room.
-3. Join Player 2 and Player 3.
-4. Everyone loads a deck and presses Ready.
-5. Host presses Start game & roll D20.
-6. The game should create all player seats and open the D20 screen instead of showing `createPlayer is not defined`.
+MULTIPLAYER TEST
+1. Create a 3- or 4-player room.
+2. Join all seats, load decks, Ready Up, and start.
+3. After the D20 roll, confirm the header shows the complete turn order.
+4. Advance through several full turns and confirm P1 → P2 → P3 → P4 → P1.
+5. Have one non-host player request Test Override.
+6. Confirm every other active player receives an approval popup.
+7. Approve on all but one player: the action must remain pending.
+8. Approve on the final player: the action should apply.
+9. Repeat and have one player Deny: the action must not apply.
+10. Test Undo the same way.
+11. If practical, disconnect the active player and confirm the host gets an Advance-for-player button instead of the table locking.

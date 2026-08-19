@@ -1,0 +1,22 @@
+Commander Forge 6.0 Alpha 6.8 validation
+
+PASS — 2–6 player turn-order tracker UI
+PASS — turn advancement uses state.turnOrder and skips eliminated players
+PASS — host can advance for a disconnected active player
+PASS — multiplayer winner detection waits for one player remaining
+PASS — table-wide approval session exists
+PASS — all connected active players become required approvers
+PASS — one denial ends an approval
+PASS — unanimous approvals complete an approval
+PASS — undo uses table approval
+PASS — Test Override uses table approval
+PASS — approval request/vote/status/result/cancel messages handled
+PASS — disconnect removes a missing approver instead of deadlocking
+PASS — pending card effects are resolved by the correct multiplayer player
+PASS — target-opponent sacrifice/discard can choose among multiple opponents
+PASS — opponent-graveyard effects see every opponent graveyard
+PASS — Alpha 6.8 assets are loaded
+PASS — Alpha 6.8 multiplayer protocol
+PASS — all JavaScript bundles pass node --check
+PASS — 4-player unanimous approval logic smoke test
+PASS — disconnected-approver reconciliation smoke test

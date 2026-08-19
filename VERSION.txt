@@ -1,1 +1,1 @@
-6.0.0-alpha.6.7-create-player-start-game-hotfix
+6.0.0-alpha.6.8-multiplayer-core-overhaul
