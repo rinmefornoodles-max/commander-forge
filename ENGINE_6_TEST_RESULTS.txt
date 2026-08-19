@@ -1,0 +1,22 @@
+Commander Forge Engine 6 alpha test run
+
+PASS - creature ETB creates Soul Warden trigger on stack
+PASS - resolving trigger gains life
+PASS - instant spell uses stack and resolves damage
+PASS - command-zone commander cast count increments
+PASS - commander tax can be calculated for later casts
+PASS - Mutate works from command zone in rules core
+PASS - mutation object combines component abilities/keywords
+PASS - Nethroi-style graveyard target aggregate rejects >10 total power
+PASS - selected legal graveyard creature returns on mutate trigger resolution
+PASS - Ninjutsu returns unblocked attacker and puts Ninja tapped/attacking
+PASS - 21 commander combat damage produces state-based loss
+PASS - conservative Oracle compiler recognizes common ETB trigger
+PASS - conservative Oracle compiler recognizes Ninjutsu and Flying
+
+Node syntax checks also passed for:
+- commander-forge-engine-v6.js
+- commander-forge-engine-worker-v6.js
+- commander-forge-engine-client-v6.js
+- commander-forge-oracle-compiler-v6.js
+- commander-forge-6.0.0-alpha.1.js
