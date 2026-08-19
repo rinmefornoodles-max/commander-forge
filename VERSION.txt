@@ -1,1 +1,1 @@
-5.35.3-engine-level-override-modal-fix
+6.0.0-alpha.1-browser-rules-core

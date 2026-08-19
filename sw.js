@@ -1,3 +1,3 @@
-const CACHE='commander-forge-5.35.3';
+const CACHE='commander-forge-6.0.0-alpha.1';
 self.addEventListener('install',()=>self.skipWaiting());
 self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
