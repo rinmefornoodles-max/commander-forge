@@ -1,0 +1,12 @@
+Commander Forge 6.0 Alpha 6.9.1 validation
+
+PASS — heartbeat paused during D20 and mulligans
+PASS — guest turn sync ignored during D20 and mulligans
+PASS — D20 runtime has stable session key
+PASS — D20 canvas includes session key
+PASS — same-session canvas replacement preserves physics
+PASS — drag replacement becomes throw instead of center reset
+PASS — D20 position clamped in arena
+PASS — Alpha 6.9.1 multiplayer protocol
+PASS — Alpha 6.9.1 asset loaded
+PASS — all JavaScript bundles pass node --check
