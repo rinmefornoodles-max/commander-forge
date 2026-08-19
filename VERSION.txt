@@ -1,1 +1,1 @@
-6.0.0-alpha.6-multiplayer-2-6-ready-d20
+6.0.0-alpha.6.1-d20-startup-hotfix

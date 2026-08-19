@@ -1,23 +1,12 @@
-COMMANDER FORGE 6.0 ALPHA 6 — GITHUB UPLOAD
+COMMANDER FORGE 6.0 ALPHA 6.1 — D20 STARTUP HOTFIX
 
-1. Extract this ZIP.
-2. Open the ROOT of rinmefornoodles-max/commander-forge on GitHub.
-3. Upload EVERY file from this extracted folder.
-4. Replace index.html when GitHub asks.
-5. Wait for GitHub Pages to redeploy.
-6. Hard refresh with Ctrl + Shift + R.
+Upload EVERY file in this folder to the ROOT of:
+rinmefornoodles-max/commander-forge
 
-The title screen should say:
-Version 6.0 Alpha 6
+Replace index.html.
 
-QUICK MULTIPLAYER TEST
-1. Open Online Multiplayer.
-2. Host chooses 3, 4, 5, or 6 players and creates a room.
-3. Every guest joins with the same invite code.
-4. Each player loads/validates a deck and presses Ready.
-5. Confirm Start game & roll D20 stays disabled until every seat is ready.
-6. Start the game.
-7. Each player throws the D20 by holding, dragging, and releasing it.
-8. Confirm a tie rerolls only the tied players and the highest roll becomes first player.
-9. Confirm all opponent battlefields appear.
-10. In a 3+ player game, confirm the starting player draws on the first draw step.
+After GitHub Pages deploys:
+1. Hard refresh with Ctrl + Shift + R.
+2. Confirm the title says Version 6.0 Alpha 6.1.
+3. Open Solo and Online Multiplayer once to confirm normal startup.
+4. In multiplayer, confirm the Ready-up and D20 flow still appears.

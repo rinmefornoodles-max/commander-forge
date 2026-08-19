@@ -1,0 +1,7 @@
+Commander Forge 6.0 Alpha 6.1 validation
+
+PASS — all JavaScript syntax checks
+PASS — exactly one d20Runtime declaration
+PASS — d20Runtime initializes before restore/subscription/first render
+PASS — D20 render guard retained
+PASS — Alpha 6.1 unique asset names referenced by index.html
