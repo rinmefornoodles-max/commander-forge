@@ -1,0 +1,25 @@
+Commander Forge 6.0 Alpha 4 validation
+
+PASS — main app JavaScript syntax
+PASS — Engine 6 JavaScript syntax
+PASS — effect parser smoke tests
+       • Entomb-style search -> graveyard
+       • Rampant Growth-style basic land -> battlefield tapped
+       • Farseek-style land subtype filter
+       • tutor -> hand
+       • Vampiric Tutor-style search -> top of library
+       • sacrifice imperative
+       • discard multiple cards
+       • hand -> graveyard
+       • old mill wording
+PASS — trigger matcher smoke tests
+       • cast trigger does not fire on draw event merely because effect says "draw"
+       • life-gain trigger does not fire on draw event
+       • opponent perspective respected
+       • ordinal triggers skipped rather than guessed
+PASS — Ninjutsu zone-integrity helper smoke test
+       • stale same-ID duplicates removed
+       • exactly one physical card restored
+PASS — Autoplay bot tactical tests
+PASS — Engine 6 alpha tests
+PASS — Oracle compiler alpha tests

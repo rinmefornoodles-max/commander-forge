@@ -1,16 +1,18 @@
-COMMANDER FORGE 6.0 ALPHA 3.1 — PREDEFINED TOKEN HOTFIX
+COMMANDER FORGE 6.0 ALPHA 4 — GITHUB UPLOAD
 
-Upload EVERY file in this folder to the ROOT of:
-rinmefornoodles-max/commander-forge
+1. Extract this ZIP.
+2. Open the root of rinmefornoodles-max/commander-forge on GitHub.
+3. Upload EVERY file from the extracted folder.
+4. Replace index.html when prompted.
+5. Wait for GitHub Pages to redeploy.
+6. Hard refresh with Ctrl + Shift + R.
 
-Replace index.html when GitHub asks.
+The title screen should say:
+Version 6.0 Alpha 4
 
-After deployment, the title screen should say:
-Version 6.0 Alpha 3.1
-
-Test:
-1. Start or continue a game.
-2. Open Table Tools.
-3. Click Predefined tokens.
-4. The token browser should open instead of showing the startup error screen.
-5. Search "Zombie", "Treasure", etc. and test the Type filters.
+Quick checks:
+- Mulligan screen: cards should be large and wrap with no horizontal strip.
+- Right-click a table card: Counters / Keyword abilities menu should appear.
+- Try a Rampant Growth/Farseek/Entomb/Demonic Tutor/Vampiric Tutor-style search.
+- Try a sacrifice effect or activated sacrifice cost.
+- Ninjutsu one attacker, then verify the returned attacker exists once in hand and the Ninja exists once after resolution.
