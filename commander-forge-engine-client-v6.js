@@ -3,7 +3,7 @@
   const listeners = new Set();
   let requestId = 0;
   let worker = null;
-  let status = { state: 'starting', version: '6.0.0-alpha.1', lastSyncAt: null, error: null };
+  let status = { state: 'starting', version: '6.0.0-alpha.3', lastSyncAt: null, error: null };
   const pending = new Map();
 
   function notify() { for (const fn of listeners) { try { fn({ ...status }); } catch (_) {} } }

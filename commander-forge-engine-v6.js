@@ -11,7 +11,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  const ENGINE_VERSION = '6.0.0-alpha.1';
+  const ENGINE_VERSION = '6.0.0-alpha.3';
   const ZONES = Object.freeze({
     LIBRARY: 'library', HAND: 'hand', BATTLEFIELD: 'battlefield',
     GRAVEYARD: 'graveyard', EXILE: 'exile', COMMAND: 'command', STACK: 'stack'

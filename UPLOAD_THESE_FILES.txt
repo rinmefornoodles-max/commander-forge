@@ -1,28 +1,16 @@
-THE COMMANDER FORGE 5.29 — TUTORIAL CARD ART, MULLIGANS, TABLE LAYOUT
+COMMANDER FORGE 6.0 ALPHA 3 — AUTOPLAY BOT
 
-Upload these four website files to the TOP LEVEL of your GitHub repository:
+Extract the GitHub Upload ZIP, then upload EVERY file to the ROOT of the commander-forge GitHub repository.
+Replace index.html when GitHub asks.
 
-- index.html
-- commander-forge-5.29.0.js
-- commander-forge-5.29.0.css
-- sw.js
+The title screen should show: Version 6.0 Alpha 3
 
-Allow index.html and sw.js to replace the existing versions.
-Both online players must use version 5.29.0.
+To use the bot:
+1. Open Solo Practice.
+2. Under Opponent control choose Autoplay Bot.
+3. Choose Strong (recommended), Average, Casual, or Best Available.
+4. Load any valid deck for Player 2 — official precon or pasted custom deck.
+5. Start the game. The bot handles its mulligan and Player 2 turns.
 
-TUTORIAL CHANGES
-- Tutorial cards now render real Magic card images through Scryfall, with a text fallback if an image cannot load.
-- The interactive basics course now begins with a real mulligan decision before turn 1.
-- The bad opening hand varies: too few lands, too many lands, or unusable colors.
-- Choosing Keep on the intentionally bad hand explains why the keep is risky and lets the learner reconsider.
-- Mulliganing gives a curated but variable playable hand and explains what makes it healthier.
-- A mulligan-rules explanation covers the London mulligan and the multiplayer free first mulligan.
-- The tutorial table now mirrors the normal Commander Forge playmat: opponent hand/stats are at the far top, opponent permanents face the center, your permanents face the center, and your hand/stats are at the bottom.
-- The guided game keeps the same short scripted opponent and visible card-play/tap animations.
-
-TESTING
-- Main JavaScript syntax passed.
-- Inline title/tutorial JavaScript syntax passed.
-- Full interactive tutorial flow passed from mulligan through the guided-game lethal attack.
-- Real-card image URL rendering and mirrored tutorial table markup were verified.
-- ZIP integrity was verified.
+During a bot spell, use the gold bot bar to pass/resolve after responding.
+During combat, assign your blockers and choose Resolve combat & continue.

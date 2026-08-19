@@ -1,0 +1,13 @@
+Commander Forge 6.0 Alpha 3 validation
+
+PASS — main browser bundle JavaScript syntax
+PASS — Engine 6 core/client/worker/compiler syntax
+PASS — Engine 6 baseline tests
+PASS — Oracle compiler baseline tests
+PASS — autoplay tactical tests
+  - counterspell resolves against the spell below it
+  - marked combat respects declared blockers
+  - custom-deck library signals affect bot strategy profile
+  - human exact hidden hand/library identities are omitted from bot information set
+PASS — old external Rules engine migration UI absent
+PASS — Alpha 3 index loads unique Alpha 3 JS/CSS assets
