@@ -1,0 +1,20 @@
+Commander Forge 6.10.0 validation
+
+PASS — Guests no longer send full-state proposals
+PASS — Guest gameplay changes use state-delta actions
+PASS — Host applies guest deltas to the latest authoritative state
+PASS — Host remains the authoritative full-state broadcaster
+PASS — Pending guest actions are overlaid while waiting for host confirmation
+PASS — Host acknowledgements remove pending guest actions
+PASS — Public card arrays merge by stable ID
+PASS — Numeric changes merge as deltas
+PASS — Private hand/library identities remain hidden
+PASS — Only the acting player can change their private-zone counts
+PASS — Remote actions enter host undo history
+PASS — Guest mutations are captured before unrelated incoming events
+PASS — Turn advancement remains host-authoritative
+PASS — 6.10.0 multiplayer protocol active
+PASS — Index loads 6.10.0
+PASS — all JavaScript bundles pass node --check
+PASS — independent 3-player card-placement concurrency smoke test
+PASS — concurrent numeric-delta smoke test

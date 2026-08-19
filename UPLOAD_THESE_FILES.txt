@@ -1,18 +1,24 @@
-COMMANDER FORGE 6.0 ALPHA 6.9.1 — GITHUB UPLOAD
+COMMANDER FORGE 6.10.0 — GITHUB UPLOAD
 
-Upload EVERY file in this folder to the ROOT of:
-rinmefornoodles-max/commander-forge
+1. Extract this ZIP.
+2. Upload EVERY file to the ROOT of:
+   rinmefornoodles-max/commander-forge
+3. Replace index.html.
+4. Wait for GitHub Pages to deploy.
+5. Hard refresh every device with Ctrl + Shift + R.
 
-Replace index.html.
+EVERY PLAYER MUST SHOW:
+Version 6.10.0
 
-All multiplayer players should show:
-Version 6.0 Alpha 6.9.1
+Do not mix 6.10.0 with Alpha 6.9.x clients.
 
-D20 TEST
-1. Start a multiplayer game.
-2. Click and hold your D20.
-3. Drag it around for a few seconds.
-4. It should stay with the pointer and NOT jump back to the middle.
-5. Release it.
-6. It should keep moving/spinning, bounce off the edges, settle, and record the roll.
-7. After mulligans, verify normal turn syncing still works.
+RECOMMENDED 3-PLAYER TEST
+1. Start a 3-player room and finish D20 + mulligans.
+2. Player 2 plays a land.
+3. Immediately afterward Player 3 plays a land.
+4. Both cards should remain on every screen.
+5. Have Player 2 tap a card while Player 3 changes life/counters.
+6. Neither action should erase/revert the other.
+7. Test battlefield → graveyard → hand, token creation, counters, and a tutor.
+8. A guest may briefly show `Syncing 1`; it should clear after host acknowledgement.
+9. Cycle P1 → P2 → P3 → P1 and confirm turn sync still stays aligned.
