@@ -1,4 +1,4 @@
-COMMANDER FORGE 6.0 ALPHA 6.5 — GITHUB UPLOAD
+COMMANDER FORGE 6.0 ALPHA 6.6 — GITHUB UPLOAD
 
 Upload EVERY file in this folder to the ROOT of:
 rinmefornoodles-max/commander-forge
@@ -6,12 +6,12 @@ rinmefornoodles-max/commander-forge
 Replace index.html.
 
 IMPORTANT:
-Host and every guest must all be on Version 6.0 Alpha 6.5.
+Host and every guest must all show Version 6.0 Alpha 6.6.
 
 Test:
-1. Hard refresh every device.
-2. Host creates a room and WAIT until the host panel says the room is ready/waiting.
-3. Guest joins using the same code.
-4. Forge will retry signaling/peer connection automatically if the first attempt misses.
-5. Once connected, guest should receive Player 2/3/etc.
-6. If anything still fails, the toast now prints the real error text instead of hiding it, so the exact remaining issue can be fixed.
+1. Hard refresh all devices.
+2. Create a 3-player room.
+3. Join Player 2 and Player 3.
+4. Player 3 should now reach their deck setup without a `reading 'zones'` runtime error.
+5. Everyone loads decks and presses Ready.
+6. Start the game; gameplay state synchronization begins only after the online game is created.

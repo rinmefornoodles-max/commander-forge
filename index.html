@@ -8,7 +8,7 @@
   <title>The Commander Forge</title>
   <link rel="icon" href="./forge-mark.svg" type="image/svg+xml" />
   <link rel="manifest" href="./manifest.webmanifest" />
-  <link rel="stylesheet" href="./commander-forge-6.0.0-alpha.6.5.css?v=6.0.0-alpha.6.5" />
+  <link rel="stylesheet" href="./commander-forge-6.0.0-alpha.6.6.css?v=6.0.0-alpha.6.6" />
   <script src="./feedback-config.js"></script>
 </head>
 <body>
@@ -62,7 +62,7 @@
           </div>
         </div>
         <div class="forge-title-footer">
-          <div class="forge-title-version">Version 6.0 Alpha 6.5 · Cards and rules data provided by Scryfall</div>
+          <div class="forge-title-version">Version 6.0 Alpha 6.6 · Cards and rules data provided by Scryfall</div>
           <div class="forge-title-legal">The Commander Forge is not affiliated with Wizards of the Coast.<br/>Magic: The Gathering is a trademark of Wizards of the Coast LLC.</div>
         </div>
       </section>
@@ -128,7 +128,7 @@
   <div id="toast-root" aria-live="assertive"></div>
   <script>
     (() => {
-      const APP_VERSION='6.0.0-alpha.6.5';
+      const APP_VERSION='6.0.0-alpha.6.6';
       const STORAGE_KEY='commander-forge-state-v2';
       const app=document.getElementById('app');
       const title=document.getElementById('title-screen');
@@ -153,7 +153,7 @@
         }
       };
       window.__forgeBootError=show;
-      window.addEventListener('error',(e)=>reportRuntimeError(e.error?.stack||e.message||'Runtime error'));
+      window.addEventListener('error',(e)=>reportRuntimeError(e.error?.stack||`${e.message||'Runtime error'}${e.filename ? ` · ${e.filename}:${e.lineno||'?'}:${e.colno||'?'}` : ''}`));
       window.addEventListener('unhandledrejection',(e)=>reportRuntimeError(e.reason?.stack||e.reason||'Unhandled promise rejection'));
       if('serviceWorker' in navigator) navigator.serviceWorker.getRegistrations().then(rs=>Promise.all(rs.map(r=>r.unregister()))).catch(()=>{});
       if('caches' in window) caches.keys().then(keys=>Promise.all(keys.map(k=>caches.delete(k)))).catch(()=>{});
@@ -842,6 +842,6 @@
   </script>
   <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js" integrity="sha512-XEKeWX+mI3Ov+tg2evDlVQFzVOIp4T8J3cNcCEPaEUGpxJV3eZaN8rHuvnFPvQpGJBHPmrozJDMpm2xcDvtmyQ==" crossorigin="anonymous"></script>
   <script src="./commander-forge-engine-client-v6.js"></script>
-  <script defer src="./commander-forge-6.0.0-alpha.6.5.js?v=6.0.0-alpha.6.5" onerror="window.__forgeBootError('HTTP error while loading commander-forge-6.0.0-alpha.6.5.js?v=6.0.0-alpha.6.5')"></script>
+  <script defer src="./commander-forge-6.0.0-alpha.6.6.js?v=6.0.0-alpha.6.6" onerror="window.__forgeBootError('HTTP error while loading commander-forge-6.0.0-alpha.6.6.js?v=6.0.0-alpha.6.6')"></script>
 </body>
 </html>

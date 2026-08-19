@@ -1,0 +1,13 @@
+Commander Forge 6.0 Alpha 6.6 validation
+
+PASS — old solo state blocked from multiplayer sync
+PASS — network fingerprint requires online game
+PASS — guest ignores early gameplay state
+PASS — serializer normalizes zones
+PASS — merge normalizes missing zones
+PASS — render table safe for absent p3-p6
+PASS — full player mat safe
+PASS — compact player mat safe
+PASS — Alpha 6.6 protocol
+PASS — Alpha 6.6 index asset
+PASS — all JavaScript bundles pass node --check
