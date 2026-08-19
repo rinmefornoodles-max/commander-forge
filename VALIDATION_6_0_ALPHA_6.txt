@@ -1,0 +1,18 @@
+Commander Forge 6.0 Alpha 6 validation
+
+PASS — 2–6 seat selector
+PASS — ready-up control
+PASS — host start gated by readiness
+PASS — multi-peer host connection map
+PASS — D20 arena
+PASS — D20 velocity cap
+PASS — D20 edge bounce
+PASS — D20 tie rerolls
+PASS — turn-order rotation from winner
+PASS — 3+ starting player draws
+PASS — per-attacker target player
+PASS — Alpha 6 assets loaded
+PASS — all JavaScript bundles pass node --check
+PASS — generated icosahedron contains exactly 20 triangular faces
+PASS — room-size logic clamps the table to 2–6 seats
+PASS — 1v1 opening draw skip is separate from 3+ player opening draw

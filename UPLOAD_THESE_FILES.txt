@@ -1,4 +1,4 @@
-COMMANDER FORGE 6.0 ALPHA 5 — GITHUB UPLOAD
+COMMANDER FORGE 6.0 ALPHA 6 — GITHUB UPLOAD
 
 1. Extract this ZIP.
 2. Open the ROOT of rinmefornoodles-max/commander-forge on GitHub.
@@ -7,13 +7,17 @@ COMMANDER FORGE 6.0 ALPHA 5 — GITHUB UPLOAD
 5. Wait for GitHub Pages to redeploy.
 6. Hard refresh with Ctrl + Shift + R.
 
-You should see:
-Version 6.0 Alpha 5
+The title screen should say:
+Version 6.0 Alpha 6
 
-Recommended checks:
-1. Thieves' Tools: resolve/create its Treasure once; the old ETB prompt should not keep coming back.
-2. Ninjutsu: attacker returns to hand and Ninja enters tapped/attacking immediately; no Ninjutsu object on the visual stack.
-3. Mutate: choose target/top-or-under and the merged permanent updates immediately; no Mutate object on the visual stack.
-4. Tutor/search: use the built-in search picker, or manually move a matching single searched card from the library. The table should not get stuck afterward.
-5. Graveyard recursion: pending return/reanimate effects should offer matching graveyard cards and allow the move without Test Override.
-6. If Forge misunderstands an unusual pending effect, it no longer locks phases; use Dismiss stale effects and continue.
+QUICK MULTIPLAYER TEST
+1. Open Online Multiplayer.
+2. Host chooses 3, 4, 5, or 6 players and creates a room.
+3. Every guest joins with the same invite code.
+4. Each player loads/validates a deck and presses Ready.
+5. Confirm Start game & roll D20 stays disabled until every seat is ready.
+6. Start the game.
+7. Each player throws the D20 by holding, dragging, and releasing it.
+8. Confirm a tie rerolls only the tied players and the highest roll becomes first player.
+9. Confirm all opponent battlefields appear.
+10. In a 3+ player game, confirm the starting player draws on the first draw step.
