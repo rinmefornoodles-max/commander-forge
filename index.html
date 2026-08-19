@@ -8,7 +8,7 @@
   <title>The Commander Forge</title>
   <link rel="icon" href="./forge-mark.svg" type="image/svg+xml" />
   <link rel="manifest" href="./manifest.webmanifest" />
-  <link rel="stylesheet" href="./commander-forge-6.0.0-alpha.3.css?v=6.0.0-alpha.3" />
+  <link rel="stylesheet" href="./commander-forge-6.0.0-alpha.3.1.css?v=6.0.0-alpha.3.1" />
   <script src="./feedback-config.js"></script>
 </head>
 <body>
@@ -62,7 +62,7 @@
           </div>
         </div>
         <div class="forge-title-footer">
-          <div class="forge-title-version">Version 6.0 Alpha 3 · Cards and rules data provided by Scryfall</div>
+          <div class="forge-title-version">Version 6.0 Alpha 3.1 · Cards and rules data provided by Scryfall</div>
           <div class="forge-title-legal">The Commander Forge is not affiliated with Wizards of the Coast.<br/>Magic: The Gathering is a trademark of Wizards of the Coast LLC.</div>
         </div>
       </section>
@@ -128,20 +128,36 @@
   <div id="toast-root" aria-live="assertive"></div>
   <script>
     (() => {
-      const APP_VERSION='6.0.0-alpha.3';
+      const APP_VERSION='6.0.0-alpha.3.1';
       const STORAGE_KEY='commander-forge-state-v2';
       const app=document.getElementById('app');
       const title=document.getElementById('title-screen');
       const help=document.getElementById('title-help');
       const continueBtn=document.getElementById('continue-game-btn');
       window.__forgeStarted=false;
-      const show=(message)=>{app.innerHTML=`<div style="min-height:100vh;display:grid;place-items:center;padding:24px;background:#071015;color:#eef3ee;font-family:system-ui,sans-serif"><div style="max-width:760px;background:#101c22;border:1px solid #a85151;border-radius:16px;padding:22px"><h1 style="margin-top:0">The Commander Forge could not start</h1><p>The single app bundle did not load. Make sure the Commander Forge ${APP_VERSION} JavaScript bundle was uploaded beside index.html.</p><pre style="white-space:pre-wrap;overflow:auto;background:#071015;padding:12px;border-radius:10px;color:#ffb4b4">${String(message||'Unknown startup error')}</pre><button onclick="location.reload()" style="padding:10px 16px;border-radius:10px;border:0;cursor:pointer">Reload</button></div></div>`};
+      let forgeBootFailed=false;
+      const show=(message)=>{
+        forgeBootFailed=true;
+        app.innerHTML=`<div style="min-height:100vh;display:grid;place-items:center;padding:24px;background:#071015;color:#eef3ee;font-family:system-ui,sans-serif"><div style="max-width:760px;background:#101c22;border:1px solid #a85151;border-radius:16px;padding:22px"><h1 style="margin-top:0">The Commander Forge could not start</h1><p>The single app bundle did not load. Make sure the Commander Forge ${APP_VERSION} JavaScript bundle was uploaded beside index.html.</p><pre style="white-space:pre-wrap;overflow:auto;background:#071015;padding:12px;border-radius:10px;color:#ffb4b4">${String(message||'Unknown startup error')}</pre><button onclick="location.reload()" style="padding:10px 16px;border-radius:10px;border:0;cursor:pointer">Reload</button></div></div>`;
+      };
+      const reportRuntimeError=(message)=>{
+        if(!window.__forgeStarted)return show(message);
+        console.error('[Commander Forge runtime error]',message);
+        const root=document.getElementById('toast-root');
+        if(root){
+          const node=document.createElement('div');
+          node.className='toast error';
+          node.textContent='Something went wrong in that tool. The table was kept open.';
+          root.appendChild(node);
+          setTimeout(()=>node.remove(),5000);
+        }
+      };
       window.__forgeBootError=show;
-      window.addEventListener('error',(e)=>show(e.error?.stack||e.message));
-      window.addEventListener('unhandledrejection',(e)=>show(e.reason?.stack||e.reason));
+      window.addEventListener('error',(e)=>reportRuntimeError(e.error?.stack||e.message||'Runtime error'));
+      window.addEventListener('unhandledrejection',(e)=>reportRuntimeError(e.reason?.stack||e.reason||'Unhandled promise rejection'));
       if('serviceWorker' in navigator) navigator.serviceWorker.getRegistrations().then(rs=>Promise.all(rs.map(r=>r.unregister()))).catch(()=>{});
       if('caches' in window) caches.keys().then(keys=>Promise.all(keys.map(k=>caches.delete(k)))).catch(()=>{});
-      setTimeout(()=>{if(!document.querySelector('.app-header')&&!document.querySelector('.setup-modal')) show('The app file loaded too slowly or did not execute.');},10000);
+      setTimeout(()=>{if(!window.__forgeStarted&&!forgeBootFailed) show('The app file loaded too slowly or did not execute.');},10000);
 
       const hasSave = () => {
         try { const saved=JSON.parse(localStorage.getItem(STORAGE_KEY)||'null'); return Boolean(saved?.started); } catch { return false; }
@@ -826,6 +842,6 @@
   </script>
   <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js" integrity="sha512-XEKeWX+mI3Ov+tg2evDlVQFzVOIp4T8J3cNcCEPaEUGpxJV3eZaN8rHuvnFPvQpGJBHPmrozJDMpm2xcDvtmyQ==" crossorigin="anonymous"></script>
   <script src="./commander-forge-engine-client-v6.js"></script>
-  <script defer src="./commander-forge-6.0.0-alpha.3.js?v=6.0.0-alpha.3" onerror="window.__forgeBootError('HTTP error while loading commander-forge-6.0.0-alpha.3.js?v=6.0.0-alpha.3')"></script>
+  <script defer src="./commander-forge-6.0.0-alpha.3.1.js?v=6.0.0-alpha.3.1" onerror="window.__forgeBootError('HTTP error while loading commander-forge-6.0.0-alpha.3.1.js?v=6.0.0-alpha.3.1')"></script>
 </body>
 </html>

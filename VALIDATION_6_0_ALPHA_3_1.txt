@@ -1,0 +1,8 @@
+Commander Forge 6.0 Alpha 3.1 validation
+- Main bundle JavaScript syntax: PASS
+- Missing predefinedTokenMatches helper restored: PASS
+- Token search/filter smoke test: PASS
+- Startup watchdog cannot overwrite runtime error after successful render: PASS
+- Unique Alpha 3.1 asset names/cache busting: PASS
+
+predefined token matcher smoke test: PASS

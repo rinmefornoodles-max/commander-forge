@@ -1,16 +1,16 @@
-COMMANDER FORGE 6.0 ALPHA 3 — AUTOPLAY BOT
+COMMANDER FORGE 6.0 ALPHA 3.1 — PREDEFINED TOKEN HOTFIX
 
-Extract the GitHub Upload ZIP, then upload EVERY file to the ROOT of the commander-forge GitHub repository.
+Upload EVERY file in this folder to the ROOT of:
+rinmefornoodles-max/commander-forge
+
 Replace index.html when GitHub asks.
 
-The title screen should show: Version 6.0 Alpha 3
+After deployment, the title screen should say:
+Version 6.0 Alpha 3.1
 
-To use the bot:
-1. Open Solo Practice.
-2. Under Opponent control choose Autoplay Bot.
-3. Choose Strong (recommended), Average, Casual, or Best Available.
-4. Load any valid deck for Player 2 — official precon or pasted custom deck.
-5. Start the game. The bot handles its mulligan and Player 2 turns.
-
-During a bot spell, use the gold bot bar to pass/resolve after responding.
-During combat, assign your blockers and choose Resolve combat & continue.
+Test:
+1. Start or continue a game.
+2. Open Table Tools.
+3. Click Predefined tokens.
+4. The token browser should open instead of showing the startup error screen.
+5. Search "Zombie", "Treasure", etc. and test the Type filters.
