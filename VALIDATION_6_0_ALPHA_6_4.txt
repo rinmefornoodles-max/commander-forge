@@ -1,0 +1,12 @@
+Commander Forge 6.0 Alpha 6.4 validation
+
+PASS — peer unavailable detection
+PASS — guest host reconnect scheduler
+PASS — guest reconnect function
+PASS — peer-level unavailable errors retry
+PASS — connection-level unavailable errors retry
+PASS — manual retry reconnects when disconnected
+PASS — seat success clears connect retry
+PASS — 6.4 multiplayer protocol
+PASS — 6.4 asset in index
+PASS — all JavaScript bundles pass node --check

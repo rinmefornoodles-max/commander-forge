@@ -1,4 +1,4 @@
-COMMANDER FORGE 6.0 ALPHA 6.3 — GITHUB UPLOAD
+COMMANDER FORGE 6.0 ALPHA 6.4 — GITHUB UPLOAD
 
 Upload EVERY file in this folder to the ROOT of:
 rinmefornoodles-max/commander-forge
@@ -6,12 +6,11 @@ rinmefornoodles-max/commander-forge
 Replace index.html.
 
 IMPORTANT:
-Everyone joining the same multiplayer room must be on Version 6.0 Alpha 6.3.
+Host and all guests must be on Version 6.0 Alpha 6.4.
 
-After deployment:
-1. Hard refresh all devices with Ctrl + Shift + R.
-2. Host creates a room.
-3. Guest enters the same invite code.
-4. Guest should automatically become Player 2 (then Player 3, etc.).
-5. The guest should immediately get their own deck setup instead of being stuck at "Waiting for the host to assign your seat".
-6. If a connection is unusually slow, the waiting screen now retries automatically and also has Request seat again.
+Test:
+1. Hard refresh every device.
+2. Host creates the room and waits until its lobby says it is hosting/waiting.
+3. Guest joins with that room code.
+4. If the first PeerJS attempt misses the host, Forge should say it is retrying instead of failing permanently.
+5. Once connected, the guest should be assigned Player 2/3/4/etc. automatically.
