@@ -1,4 +1,4 @@
-COMMANDER FORGE 6.0 ALPHA 6.4 — GITHUB UPLOAD
+COMMANDER FORGE 6.0 ALPHA 6.5 — GITHUB UPLOAD
 
 Upload EVERY file in this folder to the ROOT of:
 rinmefornoodles-max/commander-forge
@@ -6,11 +6,12 @@ rinmefornoodles-max/commander-forge
 Replace index.html.
 
 IMPORTANT:
-Host and all guests must be on Version 6.0 Alpha 6.4.
+Host and every guest must all be on Version 6.0 Alpha 6.5.
 
 Test:
 1. Hard refresh every device.
-2. Host creates the room and waits until its lobby says it is hosting/waiting.
-3. Guest joins with that room code.
-4. If the first PeerJS attempt misses the host, Forge should say it is retrying instead of failing permanently.
-5. Once connected, the guest should be assigned Player 2/3/4/etc. automatically.
+2. Host creates a room and WAIT until the host panel says the room is ready/waiting.
+3. Guest joins using the same code.
+4. Forge will retry signaling/peer connection automatically if the first attempt misses.
+5. Once connected, guest should receive Player 2/3/etc.
+6. If anything still fails, the toast now prints the real error text instead of hiding it, so the exact remaining issue can be fixed.

@@ -1,1 +1,1 @@
-6.0.0-alpha.6.4-peer-connect-retry-hotfix
+6.0.0-alpha.6.5-multiplayer-connection-hardening

@@ -1,0 +1,11 @@
+Commander Forge 6.0 Alpha 6.5 validation
+
+PASS — explicit PeerJS cloud config
+PASS — TURN fallback included
+PASS — JSON data serialization
+PASS — safe network callbacks
+PASS — fresh guest peer retry
+PASS — peer.connect null guard
+PASS — actual runtime message exposed
+PASS — alpha 6.5 asset
+PASS — all JavaScript bundles pass node --check
