@@ -1,23 +1,18 @@
-COMMANDER FORGE 6.0 ALPHA 6.8 — GITHUB UPLOAD
+COMMANDER FORGE 6.0 ALPHA 6.9 — GITHUB UPLOAD
 
-Upload EVERY file from this folder to the ROOT of:
+Upload EVERY file in this folder to the ROOT of:
 rinmefornoodles-max/commander-forge
 
 Replace index.html.
 
 IMPORTANT:
-Every player in the room must show:
-Version 6.0 Alpha 6.8
+Every player in the room must show Version 6.0 Alpha 6.9.
 
-MULTIPLAYER TEST
-1. Create a 3- or 4-player room.
-2. Join all seats, load decks, Ready Up, and start.
-3. After the D20 roll, confirm the header shows the complete turn order.
-4. Advance through several full turns and confirm P1 → P2 → P3 → P4 → P1.
-5. Have one non-host player request Test Override.
-6. Confirm every other active player receives an approval popup.
-7. Approve on all but one player: the action must remain pending.
-8. Approve on the final player: the action should apply.
-9. Repeat and have one player Deny: the action must not apply.
-10. Test Undo the same way.
-11. If practical, disconnect the active player and confirm the host gets an Advance-for-player button instead of the table locking.
+TURN SYNC TEST
+1. Make a 3-player room.
+2. Start the game and finish the D20/mulligans.
+3. On Player 1's device, click through a complete turn.
+4. Watch Player 2 and Player 3: every phase and the active-player marker should update.
+5. End Player 1's turn. All three devices should show Player 2 active.
+6. Repeat through Player 2 → Player 3 → Player 1.
+7. The active player should briefly see Syncing… after clicking Next until the host confirms the action.

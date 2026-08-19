@@ -1,0 +1,14 @@
+Commander Forge 6.0 Alpha 6.9 validation
+
+PASS — host-authoritative next-phase request
+PASS — guest no longer advances online phase optimistically
+PASS — host handles next-phase action
+PASS — turn sync payload includes turn/phase/active/order
+PASS — guest applies turn sync
+PASS — host heartbeat exists
+PASS — authoritative broadcast also sends turn sync
+PASS — revision conflict pushes turn sync
+PASS — pending turn action disables button
+PASS — Alpha 6.9 protocol
+PASS — Alpha 6.9 asset
+PASS — all JavaScript bundles pass node --check
