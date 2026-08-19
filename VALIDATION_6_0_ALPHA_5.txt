@@ -1,0 +1,21 @@
+Commander Forge 6.0 Alpha 5 validation
+
+PASS — main application JavaScript syntax
+PASS — Engine 6 / worker / client / Oracle compiler JavaScript syntax
+PASS — prior effect-parser smoke tests
+PASS — prior trigger-matcher smoke tests
+PASS — prior Ninjutsu zone-integrity smoke tests
+PASS — Alpha 5 parser regression tests:
+       • Rampant Growth-style basic land -> battlefield tapped + shuffle
+       • Vampiric Tutor-style search -> top of library
+       • own graveyard -> hand
+       • opponent graveyard -> battlefield
+       • Thieves' Tools -> Treasure token descriptor
+       • 2/2 Zombie token descriptor
+PASS — Alpha 5 structural tests:
+       • Ninjutsu no longer pushes a special object to the stack
+       • Mutate no longer pushes a special object to the stack
+       • pending effects do not block phase advancement
+       • token creation can consume matching pending effects
+       • pending card effects can authorize library/graveyard/sacrifice moves
+       • library picker is cleared before search resolution state update

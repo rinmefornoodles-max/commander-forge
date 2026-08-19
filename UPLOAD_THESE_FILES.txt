@@ -1,18 +1,19 @@
-COMMANDER FORGE 6.0 ALPHA 4 — GITHUB UPLOAD
+COMMANDER FORGE 6.0 ALPHA 5 — GITHUB UPLOAD
 
 1. Extract this ZIP.
-2. Open the root of rinmefornoodles-max/commander-forge on GitHub.
-3. Upload EVERY file from the extracted folder.
-4. Replace index.html when prompted.
+2. Open the ROOT of rinmefornoodles-max/commander-forge on GitHub.
+3. Upload EVERY file from this extracted folder.
+4. Replace index.html when GitHub asks.
 5. Wait for GitHub Pages to redeploy.
 6. Hard refresh with Ctrl + Shift + R.
 
-The title screen should say:
-Version 6.0 Alpha 4
+You should see:
+Version 6.0 Alpha 5
 
-Quick checks:
-- Mulligan screen: cards should be large and wrap with no horizontal strip.
-- Right-click a table card: Counters / Keyword abilities menu should appear.
-- Try a Rampant Growth/Farseek/Entomb/Demonic Tutor/Vampiric Tutor-style search.
-- Try a sacrifice effect or activated sacrifice cost.
-- Ninjutsu one attacker, then verify the returned attacker exists once in hand and the Ninja exists once after resolution.
+Recommended checks:
+1. Thieves' Tools: resolve/create its Treasure once; the old ETB prompt should not keep coming back.
+2. Ninjutsu: attacker returns to hand and Ninja enters tapped/attacking immediately; no Ninjutsu object on the visual stack.
+3. Mutate: choose target/top-or-under and the merged permanent updates immediately; no Mutate object on the visual stack.
+4. Tutor/search: use the built-in search picker, or manually move a matching single searched card from the library. The table should not get stuck afterward.
+5. Graveyard recursion: pending return/reanimate effects should offer matching graveyard cards and allow the move without Test Override.
+6. If Forge misunderstands an unusual pending effect, it no longer locks phases; use Dismiss stale effects and continue.
