@@ -1,24 +1,17 @@
-COMMANDER FORGE 6.10.0 — GITHUB UPLOAD
+COMMANDER FORGE 6.10.1 — GITHUB UPLOAD
 
-1. Extract this ZIP.
+1. Extract the ZIP.
 2. Upload EVERY file to the ROOT of:
    rinmefornoodles-max/commander-forge
 3. Replace index.html.
-4. Wait for GitHub Pages to deploy.
-5. Hard refresh every device with Ctrl + Shift + R.
+4. Hard refresh with Ctrl + Shift + R.
 
-EVERY PLAYER MUST SHOW:
-Version 6.10.0
+You should see:
+Version 6.10.1
 
-Do not mix 6.10.0 with Alpha 6.9.x clients.
-
-RECOMMENDED 3-PLAYER TEST
-1. Start a 3-player room and finish D20 + mulligans.
-2. Player 2 plays a land.
-3. Immediately afterward Player 3 plays a land.
-4. Both cards should remain on every screen.
-5. Have Player 2 tap a card while Player 3 changes life/counters.
-6. Neither action should erase/revert the other.
-7. Test battlefield → graveyard → hand, token creation, counters, and a tutor.
-8. A guest may briefly show `Syncing 1`; it should clear after host acknowledgement.
-9. Cycle P1 → P2 → P3 → P1 and confirm turn sync still stays aligned.
+TEST
+1. Start Solo Practice with Autoplay Bot.
+2. Let the bot cast Three Visits.
+3. Press `Pass · let bot spell resolve`.
+4. The `reading 'virtual'` error should be gone.
+5. Three Visits should actually fetch a legal Forest from the bot's library, put it onto the battlefield, and shuffle.

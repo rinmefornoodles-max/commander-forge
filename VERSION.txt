@@ -1,1 +1,1 @@
-6.10.0-host-authoritative-state-deltas
+6.10.1-autoplay-stack-tutor-hotfix

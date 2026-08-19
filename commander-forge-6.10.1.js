@@ -1,0 +1,14353 @@
+'use strict';
+const __modules = Object.create(null);
+
+// ---- constants.js ----
+__modules["./constants.js"] = (() => {
+const PHASES = [
+  { id: 'untap', label: 'Untap' },
+  { id: 'upkeep', label: 'Upkeep' },
+  { id: 'draw', label: 'Draw' },
+  { id: 'main1', label: 'Main 1' },
+  { id: 'combat', label: 'Combat' },
+  { id: 'main2', label: 'Main 2' },
+  { id: 'end', label: 'End' },
+];
+
+const ZONES = ['library', 'hand', 'battlefield', 'graveyard', 'exile', 'command'];
+const COLORS = ['W', 'U', 'B', 'R', 'G', 'C'];
+const COLOR_NAMES = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green', C: 'Colorless' };
+const ZONE_LABELS = {
+  library: 'Library',
+  hand: 'Hand',
+  battlefield: 'Battlefield',
+  graveyard: 'Graveyard',
+  exile: 'Exile',
+  command: 'Command Zone',
+  stack: 'Stack',
+};
+
+const SCRYFALL_COLLECTION_URL = 'https://api.scryfall.com/cards/collection';
+const LOCAL_PRECON_INDEX_URL = './data/precons/index.json';
+const LOCAL_PRECON_BASE_URL = './data/precons';
+const MTGJSON_DECK_LIST_URLS = [
+  'https://mtgjson.com/api/v5/DeckList.json',
+  'https://www.mtgjson.com/api/v5/DeckList.json',
+  'https://mtgjson.net/api/v5/DeckList.json',
+];
+const MTGJSON_DECK_BASE_URLS = [
+  'https://mtgjson.com/api/v5/decks',
+  'https://www.mtgjson.com/api/v5/decks',
+  'https://mtgjson.net/api/v5/decks',
+];
+
+const STORAGE_KEY = 'commander-forge-state-v2';
+const DECK_CACHE_KEY = 'commander-forge-deck-cache-v5-card-ids';
+const DECK_PAYLOAD_CACHE_KEY = 'commander-forge-precon-payload-cache-v3-card-ids';
+const CARD_CACHE_KEY = 'commander-forge-card-cache-v3-split-fix';
+
+const DEFAULT_SETTINGS = {
+  rulesMode: 'learning',
+  hideOpponentHand: false,
+  autoDraw: true,
+  coachRollouts: 80,
+  coachInformationSetV4: true,
+  coachTacticalV5: true,
+  confirmCommanderMoves: true,
+  showCardNames: true,
+  manaMode: 'auto',
+  manaAutomationV3: true,
+  enforceLandPlays: true,
+  phaseSafetyV6: true,
+  tabletopUXV7: true,
+  tokenPeekV8: true,
+  testOverrides: true,
+};
+
+
+return { PHASES, ZONES, COLORS, COLOR_NAMES, ZONE_LABELS, SCRYFALL_COLLECTION_URL, LOCAL_PRECON_INDEX_URL, LOCAL_PRECON_BASE_URL, MTGJSON_DECK_LIST_URLS, MTGJSON_DECK_BASE_URLS, STORAGE_KEY, DECK_CACHE_KEY, DECK_PAYLOAD_CACHE_KEY, CARD_CACHE_KEY, DEFAULT_SETTINGS };
+})();
+
+// ---- utils.js ----
+__modules["./utils.js"] = (() => {
+function uid(prefix = 'id') {
+  if (globalThis.crypto?.randomUUID) return `${prefix}-${crypto.randomUUID()}`;
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function deepClone(value) {
+  return globalThis.structuredClone ? structuredClone(value) : JSON.parse(JSON.stringify(value));
+}
+
+function shuffle(array) {
+  const out = [...array];
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function escapeHtml(value = '') {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function normalizeName(name = '') {
+  return name
+    .replace(/\s+\([A-Z0-9]+\)\s+\d+[a-z]?$/i, '')
+    .replace(/\s+\*[A-Za-z0-9-]+\*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function parseDecklist(text = '') {
+  const entries = [];
+  const errors = [];
+  const lines = text.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    let line = lines[index].trim();
+    if (!line || line.startsWith('#') || line.startsWith('//')) continue;
+    line = line.replace(/^[-*]\s*/, '');
+    const match = line.match(/^(\d+)\s*(?:x\s*)?(.+)$/i);
+    if (!match) {
+      errors.push(`Line ${index + 1}: use a quantity followed by a card name.`);
+      continue;
+    }
+    const count = Number(match[1]);
+    const name = normalizeName(match[2]);
+    if (!Number.isInteger(count) || count < 1 || count > 100) {
+      errors.push(`Line ${index + 1}: invalid quantity.`);
+      continue;
+    }
+    if (!name) {
+      errors.push(`Line ${index + 1}: missing card name.`);
+      continue;
+    }
+    entries.push({ count, name });
+  }
+  const merged = new Map();
+  entries.forEach(({ count, name }) => {
+    const key = name.toLocaleLowerCase();
+    const prior = merged.get(key) || { name, count: 0 };
+    prior.count += count;
+    merged.set(key, prior);
+  });
+  return { entries: [...merged.values()], errors };
+}
+
+function manaSymbols(cost = '') {
+  return [...cost.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
+}
+
+function manaRequirement(cost = '', tax = 0, xValue = 0) {
+  const requirement = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0, generic: tax, flexible: [] };
+  const chosenX = Math.max(0, Math.floor(Number(xValue || 0)));
+  for (const symbol of manaSymbols(cost)) {
+    if (/^\d+$/.test(symbol)) requirement.generic += Number(symbol);
+    else if (Object.hasOwn(requirement, symbol)) requirement[symbol] += 1;
+    else if (symbol.includes('/')) requirement.flexible.push(symbol.split('/').filter((s) => COLORS_SET.has(s)));
+    else if (symbol === 'X') requirement.generic += chosenX;
+  }
+  return requirement;
+}
+const COLORS_SET = new Set(['W', 'U', 'B', 'R', 'G', 'C']);
+const MANA_COLORS = ['W', 'U', 'B', 'R', 'G', 'C'];
+const WORD_NUMBERS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6 };
+
+function emptyManaBundle() {
+  return { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+}
+
+function bundleFromSymbols(symbols) {
+  const mana = emptyManaBundle();
+  for (const symbol of symbols) {
+    if (MANA_COLORS.includes(symbol)) mana[symbol] += 1;
+  }
+  return mana;
+}
+
+function manaBundleAmount(mana = {}) {
+  return MANA_COLORS.reduce((sum, color) => sum + Number(mana[color] || 0), 0);
+}
+
+function formatManaBundle(mana = {}) {
+  return MANA_COLORS
+    .flatMap((color) => Array.from({ length: Number(mana[color] || 0) }, () => color))
+    .join('') || '0';
+}
+
+function choiceKey(choice) {
+  return [
+    ...MANA_COLORS.map((color) => Number(choice.mana?.[color] || 0)),
+    choice.activationManaCost || '',
+    choice.requiresTap ? 'T' : '',
+    choice.sacrificeSource ? 'S' : '',
+    (choice.restrictions || []).join(','),
+  ].join(':');
+}
+
+function dedupeChoices(choices) {
+  const seen = new Set();
+  return choices.filter((choice) => {
+    if (!manaBundleAmount(choice.mana)) return false;
+    const key = choiceKey(choice);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    choice.label = choice.label || formatManaBundle(choice.mana);
+    choice.restrictions ||= [];
+    return true;
+  });
+}
+
+function manaRestrictions(text = '') {
+  const clean = String(text).toLocaleLowerCase();
+  return [
+    /only to cast (?:a )?creature spell/.test(clean) && 'creature-spells-only',
+    /only to cast (?:an )?artifact spell/.test(clean) && 'artifact-spells-only',
+    /only to cast (?:an )?enchantment spell/.test(clean) && 'enchantment-spells-only',
+    /only to cast (?:an )?instant or sorcery spell/.test(clean) && 'instant-sorcery-only',
+    /only to cast (?:a spell that is )?colorless/.test(clean) && 'colorless-spells-only',
+    /only to cast your commander|only to cast commander spells?/.test(clean) && 'commander-only',
+    /only to activate abilities/.test(clean) && 'abilities-only',
+    /only to cast spells from your graveyard/.test(clean) && 'graveyard-spells-only',
+  ].filter(Boolean);
+}
+
+function activationMetadata(prefix = '', fullText = '') {
+  const manaCost = [...String(prefix).matchAll(/\{([^}]+)\}/g)]
+    .map((match) => match[1])
+    .filter((symbol) => /^\d+$|^[WUBRGC](?:\/[WUBRGC])?$/.test(symbol))
+    .map((symbol) => `{${symbol}}`)
+    .join('');
+  return {
+    requiresTap: /\{T\}/i.test(prefix),
+    activationManaCost: manaCost,
+    lifeCost: Number(String(prefix).match(/pay (\d+) life/i)?.[1] || 0),
+    sacrificeSource: /sacrifice (?:this artifact|this permanent|~|treasure|clue|food|this land)/i.test(prefix),
+    discardCost: /discard a card/i.test(prefix),
+    restrictions: manaRestrictions(fullText),
+  };
+}
+
+function dynamicManaAmount(text, player) {
+  const battlefield = player?.zones?.battlefield || [];
+  if (/equal to the number of creatures you control/i.test(text)) return battlefield.filter(isCreature).length;
+  if (/equal to the number of lands you control/i.test(text)) return battlefield.filter(isLand).length;
+  if (/equal to the number of artifacts you control/i.test(text)) return battlefield.filter((card) => /\bArtifact\b/.test(card.typeLine || card.type_line || '')).length;
+  if (/equal to the number of enchantments you control/i.test(text)) return battlefield.filter((card) => /\bEnchantment\b/.test(card.typeLine || card.type_line || '')).length;
+  return 1;
+}
+
+function anyColorChoices(amount, metadata, colors = ['W', 'U', 'B', 'R', 'G']) {
+  return colors.map((color) => {
+    const mana = emptyManaBundle();
+    mana[color] = Math.max(1, Number(amount || 1));
+    return { mana, label: amount > 1 ? `${amount}${color}` : color, ...metadata };
+  });
+}
+
+/**
+ * Returns each distinct mana ability as an executable choice. Besides the
+ * produced bundle, a choice records tap/life/sacrifice/activation costs and
+ * spending restrictions so the coach cannot treat every land as generic mana.
+ */
+function manaProductionChoices(card, context = {}) {
+  if (!card) return [];
+  const text = String(card.oracleText || card.oracle_text || '').replace(/[−–—]/g, '-');
+  const type = String(card.typeLine || card.type_line || '');
+  const player = context.player || null;
+  const choices = [];
+
+  const lines = text.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  for (const line of lines) {
+    if (!/\badd\b/i.test(line)) continue;
+    const colon = line.indexOf(':');
+    const prefix = colon >= 0 ? line.slice(0, colon) : '';
+    const instruction = colon >= 0 ? line.slice(colon + 1) : line;
+    const metadata = activationMetadata(prefix, line);
+
+    const identity = instruction.match(/add (?:one )?mana of any color in your commander's color identity/i);
+    if (identity) {
+      const identityColors = (player?.colorIdentity || []).filter((color) => ['W', 'U', 'B', 'R', 'G'].includes(color));
+      choices.push(...anyColorChoices(1, metadata, identityColors.length ? identityColors : ['C']));
+      continue;
+    }
+
+    const anyColor = instruction.match(/add\s+(?:(one|two|three|four|five|six|\d+)\s+)?mana\s+of\s+any(?:\s+one)?\s+color/i);
+    if (anyColor) {
+      const amount = /^\d+$/.test(anyColor[1] || '') ? Number(anyColor[1]) : (WORD_NUMBERS[(anyColor[1] || 'one').toLowerCase()] || dynamicManaAmount(instruction, player));
+      choices.push(...anyColorChoices(amount, metadata));
+      continue;
+    }
+
+    const symbols = manaSymbols(instruction).filter((symbol) => MANA_COLORS.includes(symbol));
+    if (!symbols.length) continue;
+    if (/\bor\b/i.test(instruction)) {
+      const groups = instruction
+        .replace(/,/g, ' ')
+        .split(/\s+or\s+/i)
+        .map((group) => manaSymbols(group).filter((symbol) => MANA_COLORS.includes(symbol)))
+        .filter((group) => group.length);
+      if (groups.length > 1) {
+        groups.forEach((group) => choices.push({ mana: bundleFromSymbols(group), ...metadata }));
+        continue;
+      }
+    }
+    if (symbols.length > 1 && /,/.test(instruction) && !/\}\s*\{/i.test(instruction.replace(/\s/g, ''))) {
+      symbols.forEach((symbol) => choices.push({ mana: bundleFromSymbols([symbol]), ...metadata }));
+      continue;
+    }
+    choices.push({ mana: bundleFromSymbols(symbols), ...metadata });
+  }
+
+  if (!choices.length) {
+    const basics = [
+      ['Plains', 'W'], ['Island', 'U'], ['Swamp', 'B'],
+      ['Mountain', 'R'], ['Forest', 'G'], ['Wastes', 'C'],
+    ];
+    for (const [landType, color] of basics) {
+      if (!type.includes(landType)) continue;
+      const mana = emptyManaBundle();
+      mana[color] = 1;
+      choices.push({ mana, label: color, requiresTap: true, activationManaCost: '', lifeCost: 0, sacrificeSource: false, restrictions: [] });
+    }
+  }
+
+  if (!choices.length) {
+    const colors = [...new Set((card.producedMana || card.produced_mana || []).filter((color) => MANA_COLORS.includes(color)))];
+    for (const color of colors) {
+      const mana = emptyManaBundle();
+      mana[color] = 1;
+      choices.push({ mana, label: color, requiresTap: true, activationManaCost: '', lifeCost: 0, sacrificeSource: false, restrictions: [] });
+    }
+  }
+
+  return dedupeChoices(choices);
+}
+
+function manaProductionOptions(card, context = {}) {
+  return manaProductionChoices(card, context).flatMap((choice, choiceIndex) =>
+    MANA_COLORS
+      .filter((color) => Number(choice.mana[color] || 0) > 0)
+      .map((color) => ({ color, amount: Number(choice.mana[color] || 0), choiceIndex, mana: choice.mana, label: choice.label, choice })),
+  );
+}
+
+function manaSourceLabel(card, context = {}) {
+  const choices = manaProductionChoices(card, context);
+  return choices.map((choice) => choice.label).join(' / ');
+}
+
+function canActivateManaChoice(card, choice, player = null) {
+  if (!card || card.tapped) return false;
+  const creature = isCreature(card);
+  const haste = [...(card.keywords || []), ...(card.manualKeywords || [])].some((value) => /^haste$/i.test(String(value).trim())) || /\bhaste\b/i.test(card.oracleText || '');
+  if (choice?.requiresTap && creature && card.summoningSick && !haste) return false;
+  if (choice?.lifeCost && Number(player?.life || 0) <= Number(choice.lifeCost)) return false;
+  if (choice?.discardCost && !(player?.zones?.hand || []).length) return false;
+  return true;
+}
+
+function untappedManaSources(player) {
+  return (player?.zones?.battlefield || [])
+    .filter((card) => !card.tapped)
+    .map((card) => ({ card, choices: manaProductionChoices(card, { player }).filter((choice) => canActivateManaChoice(card, choice, player)) }))
+    .filter((source) => source.choices.length);
+}
+
+function totalMana(pool) {
+  return Object.values(pool || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+}
+
+function cardImage(card) {
+  if (!card) return './card-back.svg';
+  return card.image || card.image_uris?.normal || card.card_faces?.[0]?.image_uris?.normal || './card-back.svg';
+}
+
+function cardSmallImage(card) {
+  if (!card) return './card-back.svg';
+  return card.imageSmall || card.image_uris?.small || card.card_faces?.[0]?.image_uris?.small || cardImage(card);
+}
+
+function isCreature(card) {
+  return card?.typeLine?.includes('Creature') || card?.type_line?.includes('Creature');
+}
+
+function isLand(card) {
+  return card?.typeLine?.includes('Land') || card?.type_line?.includes('Land');
+}
+
+function isPermanent(card) {
+  const type = card?.typeLine || card?.type_line || '';
+  return ['Artifact', 'Battle', 'Creature', 'Enchantment', 'Land', 'Planeswalker'].some((word) => type.includes(word));
+}
+
+function hasFlash(card) {
+  return [...(card?.keywords || []), ...(card?.manualKeywords || [])].some((value) => /^flash$/i.test(String(value).trim())) || /flash/i.test(card?.oracleText || card?.oracle_text || '');
+}
+
+function numericStat(value, fallback = 0) {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function downloadJson(filename, data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function formatZone(zone) {
+  return zone ? zone[0].toUpperCase() + zone.slice(1) : '';
+}
+
+function debounce(fn, delay = 180) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), delay);
+  };
+}
+
+
+return { uid, deepClone, shuffle, clamp, escapeHtml, normalizeName, parseDecklist, manaSymbols, manaRequirement, manaBundleAmount, formatManaBundle, manaProductionChoices, manaProductionOptions, manaSourceLabel, canActivateManaChoice, untappedManaSources, totalMana, cardImage, cardSmallImage, isCreature, isLand, isPermanent, hasFlash, numericStat, downloadJson, formatZone, debounce };
+})();
+
+// ---- api.js ----
+__modules["./api.js"] = (() => {
+const { CARD_CACHE_KEY, DECK_CACHE_KEY, DECK_PAYLOAD_CACHE_KEY, LOCAL_PRECON_BASE_URL, LOCAL_PRECON_INDEX_URL, MTGJSON_DECK_BASE_URLS, MTGJSON_DECK_LIST_URLS, SCRYFALL_COLLECTION_URL } = __modules["./constants.js"];
+const { normalizeName } = __modules["./utils.js"];
+
+function readCache(key) {
+  try { return JSON.parse(localStorage.getItem(key) || '{}'); } catch { return {}; }
+}
+function writeCache(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* cache is optional */ }
+}
+
+function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 15_000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/json',
+        'Cache-Control': 'no-cache',
+        ...(options.headers || {}),
+      },
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchLocalJson(url) {
+  const response = await fetch(url, { cache: 'no-cache', headers: { Accept: 'application/json' } });
+  if (!response.ok) throw new Error(`Local precon catalog returned ${response.status}.`);
+  return response.json();
+}
+
+async function fetchJsonFromCandidates(urls, { attempts = 2 } = {}) {
+  const errors = [];
+  for (const url of [...new Set(urls)]) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        const response = await fetchWithTimeout(url);
+        if (!response.ok) {
+          errors.push(`${response.status} ${url}`);
+          // A missing file will not improve by retrying this exact URL.
+          if (response.status === 404) break;
+        } else {
+          const text = await response.text();
+          try {
+            return { payload: JSON.parse(text), url };
+          } catch {
+            errors.push(`Invalid JSON from ${url}`);
+            break;
+          }
+        }
+      } catch (error) {
+        errors.push(`${error?.name === 'AbortError' ? 'Timed out' : error?.message || 'Network error'}: ${url}`);
+      }
+      if (attempt + 1 < attempts) await delay(350 * (attempt + 1));
+    }
+  }
+  throw new Error(`The precon service could not return readable deck data. ${errors.slice(-3).join(' | ')}`);
+}
+
+function normalizeCardRequest(item) {
+  const source = typeof item === 'string' ? { name: item } : (item || {});
+  return {
+    name: normalizeName(source.name || ''),
+    scryfallId: String(source.scryfallId || source.scryfall_id || source.identifiers?.scryfallId || '').trim(),
+    oracleId: String(source.scryfallOracleId || source.oracleId || source.oracle_id || source.identifiers?.scryfallOracleId || '').trim(),
+  };
+}
+
+function canonicalCardName(name = '') {
+  return normalizeName(name).replace(/\s*\/\/\s*/g, ' // ').toLocaleLowerCase();
+}
+
+function cardAliases(raw) {
+  const aliases = new Set();
+  if (raw?.name) aliases.add(canonicalCardName(raw.name));
+  for (const face of raw?.card_faces || []) {
+    if (face?.name) aliases.add(canonicalCardName(face.name));
+  }
+  return aliases;
+}
+
+function requestMatchesRaw(request, raw) {
+  if (request.scryfallId && request.scryfallId === raw?.id) return true;
+  if (request.oracleId && request.oracleId === raw?.oracle_id) return true;
+  return cardAliases(raw).has(canonicalCardName(request.name));
+}
+
+function cacheRawCard(cache, raw, compact, request = null) {
+  if (compact?.name) cache[canonicalCardName(compact.name)] = compact;
+  for (const face of raw?.card_faces || []) {
+    if (face?.name) cache[canonicalCardName(face.name)] = compact;
+  }
+  if (request?.name) cache[canonicalCardName(request.name)] = compact;
+}
+
+async function fetchNamedFallback(request) {
+  const normalized = normalizeName(request.name).replace(/\s*\/\/\s*/g, ' // ');
+  const queries = [
+    ['exact', normalized],
+    ['fuzzy', normalized.replace(/\s*\/\/\s*/g, ' ')],
+  ];
+  if (normalized.includes(' // ')) {
+    queries.push(['fuzzy', normalized.split(' // ')[0]]);
+  }
+
+  for (const [mode, value] of queries) {
+    if (!value) continue;
+    const url = `https://api.scryfall.com/cards/named?${mode}=${encodeURIComponent(value)}`;
+    try {
+      const response = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 12_000);
+      if (response.ok) return response.json();
+      if (response.status !== 404) throw new Error(`Scryfall returned ${response.status}.`);
+    } catch (error) {
+      if (error?.name === 'AbortError') continue;
+    }
+    await delay(90);
+  }
+  return null;
+}
+
+async function fetchCardsByNames(items, onProgress = () => {}) {
+  const requests = (items || [])
+    .map(normalizeCardRequest)
+    .filter((request) => request.name);
+  const uniqueRequests = [];
+  const seen = new Set();
+  for (const request of requests) {
+    const key = request.scryfallId || request.oracleId || canonicalCardName(request.name);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniqueRequests.push(request);
+  }
+
+  const cache = readCache(CARD_CACHE_KEY);
+  const missing = uniqueRequests.filter((request) => !cache[canonicalCardName(request.name)]);
+  const unresolved = [];
+
+  for (let start = 0; start < missing.length; start += 75) {
+    const batch = missing.slice(start, start + 75);
+    onProgress({ loaded: start, total: missing.length, message: `Loading cards ${start + 1}-${Math.min(start + 75, missing.length)}…` });
+    const response = await fetch(SCRYFALL_COLLECTION_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        identifiers: batch.map((request) => {
+          if (request.scryfallId) return { id: request.scryfallId };
+          if (request.oracleId) return { oracle_id: request.oracleId };
+          return { name: request.name };
+        }),
+      }),
+    });
+    if (!response.ok) throw new Error(`Scryfall returned ${response.status}. Try again in a moment.`);
+    const payload = await response.json();
+    const raws = payload.data || [];
+
+    for (const raw of raws) {
+      const compact = compactScryfallCard(raw);
+      cacheRawCard(cache, raw, compact);
+    }
+
+    for (const request of batch) {
+      const raw = raws.find((candidate) => requestMatchesRaw(request, candidate));
+      if (raw) {
+        const compact = compactScryfallCard(raw);
+        cacheRawCard(cache, raw, compact, request);
+      } else {
+        unresolved.push(request);
+      }
+    }
+    await delay(90);
+  }
+
+  const notFound = [];
+  for (let index = 0; index < unresolved.length; index += 1) {
+    const request = unresolved[index];
+    onProgress({ loaded: missing.length + index, total: missing.length + unresolved.length, message: `Resolving ${request.name}…` });
+    const raw = await fetchNamedFallback(request);
+    if (raw?.object === 'card') {
+      const compact = compactScryfallCard(raw);
+      cacheRawCard(cache, raw, compact, request);
+    } else {
+      notFound.push(request.name);
+    }
+    await delay(90);
+  }
+
+  writeCache(CARD_CACHE_KEY, cache);
+  onProgress({ loaded: missing.length + unresolved.length, total: missing.length + unresolved.length, message: 'Cards loaded.' });
+  return {
+    cards: uniqueRequests.map((request) => cache[canonicalCardName(request.name)]).filter(Boolean),
+    byName: Object.fromEntries(uniqueRequests.map((request) => [canonicalCardName(request.name), cache[canonicalCardName(request.name)]])),
+    notFound,
+  };
+}
+
+function compactScryfallCard(raw) {
+  const face = raw.card_faces?.[0];
+  return {
+    scryfallId: raw.id,
+    oracleId: raw.oracle_id,
+    name: raw.name,
+    manaCost: raw.mana_cost || face?.mana_cost || '',
+    manaValue: Number(raw.cmc || 0),
+    typeLine: raw.type_line || face?.type_line || '',
+    oracleText: raw.oracle_text || raw.card_faces?.map((f) => `${f.name}: ${f.oracle_text || ''}`).join('\n\n') || '',
+    power: raw.power || face?.power || '',
+    toughness: raw.toughness || face?.toughness || '',
+    loyalty: raw.loyalty || face?.loyalty || '',
+    keywords: raw.keywords || [],
+    colors: raw.colors || face?.colors || [],
+    colorIdentity: raw.color_identity || [],
+    legalities: raw.legalities || {},
+    layout: raw.layout,
+    image: raw.image_uris?.normal || face?.image_uris?.normal || './card-back.svg',
+    imageSmall: raw.image_uris?.small || face?.image_uris?.small || raw.image_uris?.normal || './card-back.svg',
+    backImage: raw.card_faces?.[1]?.image_uris?.normal || null,
+    producedMana: raw.produced_mana || [],
+  };
+}
+
+function normalizeDeckIndex(payload) {
+  const data = Array.isArray(payload) ? payload : payload?.data || [];
+  return data
+    .filter((deck) => deck?.name && deck?.fileName)
+    .map((deck) => ({
+      name: deck.name,
+      fileName: deck.fileName,
+      code: deck.code || '',
+      releaseDate: deck.releaseDate || '',
+      type: deck.type || '',
+      cardCount: Number(deck.cardCount || 0),
+      localFile: deck.localFile || '',
+    }));
+}
+
+async function fetchPreconIndex(force = false) {
+  const cached = readCache(DECK_CACHE_KEY);
+  if (!force && cached.index?.length && Date.now() - cached.updatedAt < 21_600_000) return cached.index;
+
+  // Preferred path: GitHub Actions bundles MTGJSON deck data into this site.
+  // This avoids browser CORS failures and makes the catalog same-origin.
+  try {
+    const payload = await fetchLocalJson(`${LOCAL_PRECON_INDEX_URL}?v=5`);
+    const index = normalizeDeckIndex(payload);
+    if (!index.length) throw new Error('The bundled precon index was empty.');
+    writeCache(DECK_CACHE_KEY, { index, updatedAt: Date.now(), source: 'local' });
+    return index;
+  } catch (localError) {
+    // Local development may not have run scripts/build_precons.py yet. Keep the
+    // older direct-download path as a fallback, though some browsers block it.
+    try {
+      const { payload } = await fetchJsonFromCandidates(MTGJSON_DECK_LIST_URLS, { attempts: 2 });
+      const index = normalizeDeckIndex(payload);
+      if (!index.length) throw new Error('The deck index was empty.');
+      writeCache(DECK_CACHE_KEY, { index, updatedAt: Date.now(), source: 'remote' });
+      return index;
+    } catch (remoteError) {
+      if (cached.index?.length) return cached.index;
+      throw new Error(`The deployed precon catalog is missing and the browser could not read MTGJSON directly. Re-run the GitHub Pages workflow. ${localError.message}`);
+    }
+  }
+}
+
+function deckFileCandidates(fileName) {
+  const clean = String(fileName || '').trim().replace(/^\/+/, '');
+  const withExtension = clean.toLowerCase().endsWith('.json') ? clean : `${clean}.json`;
+  const encoded = withExtension.split('/').map(encodeURIComponent).join('/');
+  return MTGJSON_DECK_BASE_URLS.flatMap((base) => [
+    `${base}/${encoded}`,
+    `${base}/${withExtension}`,
+  ]);
+}
+
+function normalizeDeckPayload(payload, entry) {
+  const deck = payload?.data || payload;
+  if (!deck || typeof deck !== 'object') throw new Error('The deck response had an unsupported format.');
+
+  // GitHub Actions publishes already-normalized same-origin deck files.
+  if (Array.isArray(deck.entries) && deck.entries.some((card) => card?.name)) {
+    return {
+      name: deck.name || entry.name,
+      entries: deck.entries
+        .filter((card) => card?.name)
+        .map((card) => ({
+          name: card.name,
+          count: Math.max(1, Number(card.count || 1)),
+          ...(card.scryfallId ? { scryfallId: card.scryfallId } : {}),
+          ...(card.scryfallOracleId ? { scryfallOracleId: card.scryfallOracleId } : {}),
+          ...(card.faceName ? { faceName: card.faceName } : {}),
+        })),
+      commanderNames: Array.isArray(deck.commanderNames) ? deck.commanderNames.filter(Boolean) : [],
+      releaseDate: deck.releaseDate || entry.releaseDate || '',
+      type: deck.type || entry.type || '',
+    };
+  }
+
+  const commanderBoard = deck.commander || deck.commanders || [];
+  const mainBoard = deck.mainBoard || deck.mainboard || deck.main || deck.cards || [];
+  const sideBoard = deck.sideBoard || deck.sideboard || [];
+  const commanderNames = commanderBoard
+    .filter((card) => card?.name)
+    .flatMap((card) => Array(Math.max(1, Number(card.count ?? card.quantity ?? card.qty ?? 1))).fill(card.name));
+
+  const cardsByName = new Map();
+  // Some MTGJSON products place relevant cards in sideBoard, so use it only if
+  // the main board is unexpectedly empty.
+  const board = mainBoard.length ? mainBoard : sideBoard;
+  for (const card of board) {
+    if (!card?.name) continue;
+    const count = Math.max(1, Number(card.count ?? card.quantity ?? card.qty ?? 1));
+    const key = canonicalCardName(card.name);
+    const identifiers = card.identifiers || {};
+    const prior = cardsByName.get(key) || {
+      name: card.name,
+      count: 0,
+      scryfallId: identifiers.scryfallId || '',
+      scryfallOracleId: identifiers.scryfallOracleId || '',
+      faceName: card.faceName || '',
+    };
+    prior.count += count;
+    prior.scryfallId ||= identifiers.scryfallId || '';
+    prior.scryfallOracleId ||= identifiers.scryfallOracleId || '';
+    prior.faceName ||= card.faceName || '';
+    cardsByName.set(key, prior);
+  }
+  for (const commander of commanderNames) {
+    const key = canonicalCardName(commander);
+    if (!cardsByName.has(key)) cardsByName.set(key, { name: commander, count: 1 });
+  }
+  if (!cardsByName.size) throw new Error('The deck file contained no readable cards.');
+
+  return {
+    name: deck.name || entry.name,
+    entries: [...cardsByName.values()].map((card) => ({
+      name: card.name,
+      count: card.count,
+      ...(card.scryfallId ? { scryfallId: card.scryfallId } : {}),
+      ...(card.scryfallOracleId ? { scryfallOracleId: card.scryfallOracleId } : {}),
+      ...(card.faceName ? { faceName: card.faceName } : {}),
+    })),
+    commanderNames,
+    releaseDate: deck.releaseDate || entry.releaseDate || '',
+    type: deck.type || entry.type || '',
+  };
+}
+
+function matchingFreshEntry(index, entry) {
+  const code = String(entry.code || '').toLocaleLowerCase();
+  const name = String(entry.name || '').toLocaleLowerCase();
+  return index.find((item) => code && String(item.code || '').toLocaleLowerCase() === code && String(item.name || '').toLocaleLowerCase() === name)
+    || index.find((item) => String(item.name || '').toLocaleLowerCase() === name)
+    || null;
+}
+
+async function fetchPreconDeck(entry) {
+  const payloadCache = readCache(DECK_PAYLOAD_CACHE_KEY);
+  const cacheKey = `${entry.code || ''}|${entry.name || ''}`.toLocaleLowerCase();
+
+  if (entry.localFile) {
+    try {
+      const payload = await fetchLocalJson(`${LOCAL_PRECON_BASE_URL}/${encodeURIComponent(entry.localFile)}?v=5`);
+      const normalized = normalizeDeckPayload(payload, entry);
+      payloadCache[cacheKey] = { deck: normalized, updatedAt: Date.now(), fileName: entry.fileName, source: 'local' };
+      writeCache(DECK_PAYLOAD_CACHE_KEY, payloadCache);
+      return normalized;
+    } catch (localError) {
+      const cachedDeck = payloadCache[cacheKey]?.deck;
+      if (cachedDeck?.entries?.length) return cachedDeck;
+      throw new Error(`The bundled deck file for ${entry.name} could not be read. Re-run the GitHub Pages workflow. ${localError.message}`);
+    }
+  }
+
+  const attemptEntry = async (candidateEntry) => {
+    const { payload } = await fetchJsonFromCandidates(deckFileCandidates(candidateEntry.fileName), { attempts: 2 });
+    const normalized = normalizeDeckPayload(payload, candidateEntry);
+    payloadCache[cacheKey] = { deck: normalized, updatedAt: Date.now(), fileName: candidateEntry.fileName, source: 'remote' };
+    writeCache(DECK_PAYLOAD_CACHE_KEY, payloadCache);
+    return normalized;
+  };
+
+  try {
+    return await attemptEntry(entry);
+  } catch (firstError) {
+    try {
+      const freshIndex = await fetchPreconIndex(true);
+      const freshEntry = matchingFreshEntry(freshIndex, entry);
+      if (freshEntry?.localFile) return fetchPreconDeck(freshEntry);
+      if (freshEntry) return await attemptEntry(freshEntry);
+    } catch { /* use cached deck or original error below */ }
+
+    const cachedDeck = payloadCache[cacheKey]?.deck;
+    if (cachedDeck?.entries?.length) return cachedDeck;
+    throw new Error(`${firstError.message} Try Search again to refresh the precon list, or paste the decklist manually.`);
+  }
+}
+
+
+const PREDEFINED_TOKEN_CACHE_KEY = 'commander-forge-predefined-tokens-v1';
+const PREDEFINED_TOKEN_CACHE_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
+
+function compactTokenFace(face = {}) {
+  return {
+    name: face.name || 'Token',
+    manaCost: face.mana_cost || '',
+    typeLine: face.type_line || '',
+    oracleText: face.oracle_text || '',
+    power: face.power ?? '',
+    toughness: face.toughness ?? '',
+    loyalty: face.loyalty ?? '',
+    colors: [...(face.colors || [])],
+    image: face.image_uris?.normal || null,
+    imageSmall: face.image_uris?.small || face.image_uris?.normal || null,
+  };
+}
+
+function compactPredefinedToken(raw) {
+  const compact = compactScryfallCard(raw);
+  const faces = (raw.card_faces || []).map(compactTokenFace).filter((face) => face.name);
+  return {
+    ...compact,
+    tokenFaces: faces,
+    setCode: raw.set || '',
+    collectorNumber: raw.collector_number || '',
+    releasedAt: raw.released_at || '',
+  };
+}
+
+function predefinedTokenSignature(card) {
+  return [
+    card.name, card.typeLine, card.oracleText, card.power, card.toughness,
+    (card.colors || []).join(''), card.layout,
+    (card.tokenFaces || []).map((face) => `${face.name}|${face.typeLine}|${face.oracleText}|${face.power}|${face.toughness}`).join('||'),
+  ].join('::').toLocaleLowerCase();
+}
+
+async function fetchPredefinedTokens(force = false, onProgress = () => {}) {
+  const cached = readCache(PREDEFINED_TOKEN_CACHE_KEY);
+  if (!force && cached.cards?.length && Date.now() - Number(cached.updatedAt || 0) < PREDEFINED_TOKEN_CACHE_MAX_AGE) {
+    onProgress({ loaded: cached.cards.length, total: cached.cards.length, message: `${cached.cards.length} predefined tokens ready.` });
+    return cached.cards;
+  }
+
+  const query = '(layout:token OR layout:double_faced_token) lang:en';
+  let url = `https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}&unique=cards&order=name&include_extras=true`;
+  const cards = [];
+  let page = 0;
+  let estimatedTotal = 0;
+  while (url) {
+    page += 1;
+    onProgress({ loaded: cards.length, total: estimatedTotal, message: `Loading official token definitions · page ${page}…` });
+    const response = await fetchWithTimeout(url, { headers: { Accept: 'application/json;q=0.9,*/*;q=0.8' } }, 20_000);
+    if (!response.ok) throw new Error(`Scryfall token search returned ${response.status}.`);
+    const payload = await response.json();
+    estimatedTotal = Number(payload.total_cards || estimatedTotal || 0);
+    for (const raw of payload.data || []) cards.push(compactPredefinedToken(raw));
+    url = payload.has_more ? payload.next_page : null;
+    if (url) await delay(110);
+  }
+
+  const unique = [];
+  const seen = new Set();
+  for (const card of cards) {
+    const signature = predefinedTokenSignature(card);
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    unique.push(card);
+  }
+  unique.sort((a, b) => a.name.localeCompare(b.name) || a.typeLine.localeCompare(b.typeLine));
+  writeCache(PREDEFINED_TOKEN_CACHE_KEY, { cards: unique, updatedAt: Date.now() });
+  onProgress({ loaded: unique.length, total: unique.length, message: `${unique.length} predefined tokens ready.` });
+  return unique;
+}
+
+
+return { fetchCardsByNames, fetchPreconIndex, fetchPreconDeck, fetchPredefinedTokens };
+})();
+
+// ---- card-rules-model.js ----
+__modules["./card-rules-model.js"] = (() => {
+const NUMBER_WORDS = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5,
+  six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  eleven: 11, twelve: 12, thirteen: 13, fourteen: 14,
+  fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18,
+  nineteen: 19, twenty: 20,
+};
+
+const KEYWORD_NAMES = [
+  'Absorb', 'Afflict', 'Afterlife', 'Annihilator', 'Battle cry', 'Bushido',
+  'Cascade', 'Changeling', 'Convoke', 'Deathtouch', 'Defender', 'Delve',
+  'Double strike', 'Exalted', 'Exploit', 'Extort', 'Fear', 'First strike',
+  'Flash', 'Flying', 'Goad', 'Haste', 'Hexproof', 'Horsemanship',
+  'Improvise', 'Indestructible', 'Infect', 'Intimidate', 'Landwalk',
+  'Lifelink', 'Menace', 'Mutate', 'Myriad', 'Ninjutsu', 'Persist', 'Protection', 'Prowess',
+  'Reach', 'Riot', 'Shadow', 'Shroud', 'Skulk', 'Toxic', 'Trample',
+  'Undying', 'Vigilance', 'Ward', 'Wither',
+];
+
+const COLOR_WORDS = {
+  white: 'W', blue: 'U', black: 'B', red: 'R', green: 'G', colorless: 'C',
+};
+
+function textOf(card) {
+  const printed = String(card?.oracleText || card?.oracle_text || '');
+  const manual = (card?.manualKeywords || []).map((value) => String(value || '').trim()).filter(Boolean).join('\n');
+  return [printed, manual].filter(Boolean).join('\n').replace(/[−–—]/g, '-');
+}
+
+function typeOf(card) {
+  return String(card?.typeLine || card?.type_line || '');
+}
+
+function lower(value) { return String(value || '').toLocaleLowerCase(); }
+
+function numericWord(value, fallback = 0) {
+  const clean = lower(value).trim();
+  if (/^\d+$/.test(clean)) return Number(clean);
+  return NUMBER_WORDS[clean] ?? fallback;
+}
+
+function keywordSet(card) {
+  const set = new Set([...(card?.keywords || []), ...(card?.manualKeywords || [])].map((keyword) => lower(keyword)));
+  const text = textOf(card);
+  for (const keyword of KEYWORD_NAMES) {
+    const normalized = lower(keyword);
+    const pattern = normalized === 'landwalk'
+      ? /\b(?:plainswalk|islandwalk|swampwalk|mountainwalk|forestwalk|landwalk)\b/i
+      : new RegExp(`\\b${normalized.replace(/\s+/g, '\\s+')}\\b`, 'i');
+    if (pattern.test(text)) set.add(normalized);
+  }
+  if (/can't be blocked/i.test(text)) set.add('unblockable');
+  if (/attacks each combat if able/i.test(text)) set.add('must attack');
+  if (/can't attack alone/i.test(text)) set.add("can't attack alone");
+  if (/can't block/i.test(text)) set.add("can't block");
+  return set;
+}
+
+function parseProtection(text) {
+  const qualities = [];
+  for (const match of text.matchAll(/protection from ([^.;\n]+)/gi)) {
+    const raw = match[1].trim();
+    for (const piece of raw.split(/,| and /i).map((value) => value.trim()).filter(Boolean)) qualities.push(lower(piece));
+  }
+  return [...new Set(qualities)];
+}
+
+function parseWard(text) {
+  const match = text.match(/ward\s*(?:-|—)?\s*(\{[^\n.]+?\}|pay\s+\d+\s+life|discard\s+a\s+card|sacrifice\s+a\s+permanent)/i);
+  return match?.[1]?.trim() || '';
+}
+
+function parseNamedNumber(text, keyword) {
+  const match = text.match(new RegExp(`\\b${keyword}\\s+(\\d+|[a-z]+)`, 'i'));
+  return match ? numericWord(match[1], 0) : 0;
+}
+
+function parseLandwalk(text) {
+  const values = [];
+  for (const match of text.matchAll(/\b(plains|island|swamp|mountain|forest|land)walk\b/gi)) values.push(`${match[1][0].toUpperCase()}${match[1].slice(1).toLowerCase()}`);
+  return [...new Set(values)];
+}
+
+function parseGrantedKeywords(text) {
+  const results = [];
+  const patterns = [
+    /(?:creatures|creature tokens) you control have ([^.]+)/gi,
+    /other ([A-Za-z -]+) creatures you control have ([^.]+)/gi,
+    /(?:equipped|enchanted) creature has ([^.]+)/gi,
+    /(?:equipped|enchanted) creature gains ([^.]+)/gi,
+    /(?:equipped|enchanted) creature gets [^.]+? and (?:has|gains) ([^.]+)/gi,
+  ];
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const phrase = match[match.length - 1];
+      const found = KEYWORD_NAMES.filter((keyword) => new RegExp(`\\b${lower(keyword).replace(/\s+/g, '\\s+')}\\b`, 'i').test(phrase));
+      if (/can't be blocked/i.test(phrase)) found.push('Unblockable');
+      results.push(...found.map(lower));
+    }
+  }
+  return [...new Set(results)];
+}
+
+function parsePumps(text) {
+  const effects = [];
+  const patterns = [
+    { scope: 'all', re: /(?:other )?creatures you control get ([+-]\d+)\/([+-]\d+)/gi },
+    { scope: 'tribal', re: /(?:other )?([A-Za-z -]+) creatures you control get ([+-]\d+)\/([+-]\d+)/gi },
+    { scope: 'attached', re: /(?:equipped|enchanted) creature gets ([+-]\d+)\/([+-]\d+)/gi },
+    { scope: 'all-creatures', re: /all creatures get ([+-]\d+)\/([+-]\d+)/gi },
+  ];
+  for (const { scope, re } of patterns) {
+    for (const match of text.matchAll(re)) {
+      if (scope === 'tribal') effects.push({ scope, subtype: match[1].trim(), power: Number(match[2]), toughness: Number(match[3]) });
+      else effects.push({ scope, power: Number(match[1]), toughness: Number(match[2]) });
+    }
+  }
+  return effects;
+}
+
+function parseCombatRestrictions(text) {
+  const powerLimit = text.match(/can't be blocked by creatures with power (\d+) or (?:greater|more)/i);
+  const powerFloor = text.match(/can't be blocked by creatures with power (\d+) or less/i);
+  return {
+    cannotAttack: /(?:this creature|~) can't attack/i.test(text),
+    cannotBlock: /(?:this creature|~) can't block/i.test(text),
+    attacksEachCombat: /attacks each combat if able/i.test(text),
+    attacksAloneRestriction: /can't attack alone/i.test(text),
+    mustBeBlocked: /must be blocked if able/i.test(text),
+    maxOneBlocker: /can't be blocked by more than one creature/i.test(text),
+    needsTwoOrMoreBlockers: /can't be blocked except by two or more creatures/i.test(text),
+    blockPowerAtLeast: powerLimit ? Number(powerLimit[1]) + 1 : null,
+    blockPowerAtMost: powerFloor ? Number(powerFloor[1]) : null,
+  };
+}
+
+function parseSpellRestrictions(text) {
+  return {
+    onlyDuringCombat: /cast this spell only during combat/i.test(text),
+    onlyDuringOwnTurn: /cast this spell only during your turn/i.test(text),
+    onlyDuringOpponentTurn: /cast this spell only during an opponent's turn/i.test(text),
+    onlyAfterAttacker: /cast this spell only after attackers have been declared/i.test(text),
+    cannotBeCountered: /this spell can't be countered/i.test(text),
+    splitSecond: /\bsplit second\b/i.test(text),
+  };
+}
+
+function parseActivatedAbilities(text) {
+  const abilities = [];
+  const lines = text.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  for (const line of lines) {
+    const colon = line.indexOf(':');
+    if (colon < 0) continue;
+    const cost = line.slice(0, colon).trim();
+    const effect = line.slice(colon + 1).trim();
+    const manaCost = [...cost.matchAll(/\{([^}]+)\}/g)]
+      .map((match) => match[1])
+      .filter((symbol) => /^\d+$|^[WUBRGC](?:\/[WUBRGC])?$/.test(symbol))
+      .map((symbol) => `{${symbol}}`)
+      .join('');
+    abilities.push({
+      cost,
+      effect,
+      manaCost,
+      tap: /\{T\}/i.test(cost),
+      untap: /\{Q\}/i.test(cost),
+      sacrifice: /sacrifice/i.test(cost),
+      discard: /discard/i.test(cost),
+      loyalty: /^[-+−]\d+/.test(cost),
+      manaAbility: /^.*(?:\{T\}|sacrifice|pay).*:\s*add\b/i.test(line) || /^\{T\}:\s*add\b/i.test(line),
+      sorcerySpeedOnly: /activate only as a sorcery/i.test(line),
+      onceEachTurn: /activate only once each turn/i.test(line),
+    });
+  }
+  return abilities;
+}
+
+function parseEffectTags(text, typeLine = '') {
+  const instant = /\bInstant\b/.test(typeLine);
+  return {
+    draw: /draw (?:a|an|one|two|three|four|five|six|seven|\d+) cards?/i.test(text),
+    discard: /(?:target player|each opponent|opponent) discards?|discard (?:a|your hand|\d+)/i.test(text),
+    mill: /\bmill(?:s)? (?:a|one|two|three|four|five|six|\d+)/i.test(text),
+    tutor: /search (?:your|target player's) library/i.test(text),
+    ramp: /search your library for (?:a|up to .*?) (?:basic )?land|put .* land card .* onto the battlefield/i.test(text),
+    tokenMaker: /create .* token/i.test(text),
+    recursion: /return target .* from .*graveyard|cast .* from your graveyard|play .* from your graveyard|graveyard to (?:your hand|the battlefield)/i.test(text),
+    graveyardInteraction: /exile target card from a graveyard|cards? in graveyards? can't|graveyard to exile/i.test(text),
+    counterspell: /counter target (?:spell|activated ability|triggered ability)/i.test(text),
+    boardWipe: /destroy all|exile all|all creatures get -\d+\/-\d+|deals? \d+ damage to each creature|return all .* to their owners?' hands/i.test(text),
+    targetedRemoval: /destroy target|exile target|return target .* to (?:its owner's|their owner's|your) hand|target creature gets -\d+\/-\d+|deals? \d+ damage to target creature/i.test(text),
+    protectionSpell: instant && /gains? (?:hexproof|indestructible|protection)|phase[s]? out|regenerate target/i.test(text),
+    combatTrick: instant && /gets? [+-][0-9X]+\/[+-][0-9X]+|gains? (?:first strike|double strike|trample|deathtouch|lifelink|flying|hexproof|indestructible)/i.test(text),
+    extraTurn: /take an extra turn/i.test(text),
+    extraCombat: /additional combat phase/i.test(text),
+    blink: /exile .* then return .* to the battlefield/i.test(text),
+    copy: /copy target|create a token that's a copy|becomes a copy/i.test(text),
+    sacrificeOutlet: /sacrifice [^:]+:/i.test(text),
+    lifeDrain: /each opponent loses|you gain .* life.*each opponent/i.test(text),
+  };
+}
+
+function analyzeCardRulesUncached(card) {
+  const text = textOf(card);
+  const typeLine = typeOf(card);
+  const keys = keywordSet(card);
+  const activatedAbilities = parseActivatedAbilities(text);
+  const protectionFrom = parseProtection(text);
+  return {
+    text,
+    typeLine,
+    supertypes: typeLine.split('—')[0].trim().split(/\s+/).filter(Boolean),
+    subtypes: (typeLine.split('—')[1] || '').trim().split(/\s+/).filter(Boolean),
+    colors: [...(card?.colors || [])],
+    keywords: keys,
+    flying: keys.has('flying'),
+    reach: keys.has('reach'),
+    menace: keys.has('menace'),
+    deathtouch: keys.has('deathtouch'),
+    firstStrike: keys.has('first strike'),
+    doubleStrike: keys.has('double strike'),
+    trample: keys.has('trample'),
+    lifelink: keys.has('lifelink'),
+    vigilance: keys.has('vigilance'),
+    haste: keys.has('haste'),
+    flash: keys.has('flash'),
+    indestructible: keys.has('indestructible'),
+    hexproof: keys.has('hexproof'),
+    shroud: keys.has('shroud'),
+    defender: keys.has('defender'),
+    fear: keys.has('fear'),
+    intimidate: keys.has('intimidate'),
+    shadow: keys.has('shadow'),
+    horsemanship: keys.has('horsemanship'),
+    skulk: keys.has('skulk'),
+    infect: keys.has('infect'),
+    wither: keys.has('wither'),
+    prowess: keys.has('prowess'),
+    exalted: keys.has('exalted'),
+    battleCry: keys.has('battle cry'),
+    persist: keys.has('persist'),
+    undying: keys.has('undying'),
+    myriad: keys.has('myriad'),
+    toxic: parseNamedNumber(text, 'toxic'),
+    afflict: parseNamedNumber(text, 'afflict'),
+    annihilator: parseNamedNumber(text, 'annihilator'),
+    absorb: parseNamedNumber(text, 'absorb'),
+    ward: keys.has('ward'),
+    wardCost: parseWard(text),
+    protection: protectionFrom.length > 0,
+    protectionFrom,
+    landwalk: parseLandwalk(text),
+    unblockable: keys.has('unblockable'),
+    grantedKeywords: parseGrantedKeywords(text),
+    pumpEffects: parsePumps(text),
+    combatRestrictions: parseCombatRestrictions(text),
+    spellRestrictions: parseSpellRestrictions(text),
+    activatedAbilities,
+    manaAbilities: activatedAbilities.filter((ability) => ability.manaAbility),
+    effectTags: parseEffectTags(text, typeLine),
+    deathTrigger: /whenever .* dies|when .* dies|put into a graveyard from the battlefield/i.test(text),
+    attackTrigger: /whenever .* attacks|when .* attacks|at the beginning of combat/i.test(text),
+    combatDamageTrigger: /whenever .* deals combat damage|combat damage to (?:a player|an opponent)/i.test(text),
+    enterTrigger: /when(?:ever)? .* enters(?: the battlefield)?/i.test(text),
+    upkeepTrigger: /at the beginning of .* upkeep/i.test(text),
+    endStepTrigger: /at the beginning of .* end step/i.test(text),
+    staticEffect: /creatures you control get|other .* get|players can't|spells .* cost|you may|each opponent|cards? in .* have|maximum hand size/i.test(text),
+    extraLandPlays: (() => {
+      const match = text.match(/you may play (?:up to )?(an?|one|two|three|\d+) additional lands? on each of your turns/i);
+      return match ? Math.max(1, numericWord(match[1], 1)) : (/you may play an additional land on each of your turns/i.test(text) ? 1 : 0);
+    })(),
+    flashGrant: /you may cast (?:creature|artifact|enchantment|nonland permanent)?\s*spells as though they had flash/i.test(text),
+    noCreatureSpells: /players can't cast creature spells/i.test(text),
+    oneSpellPerTurn: /players can't cast more than one spell each turn|each player can't cast more than one spell each turn/i.test(text),
+  };
+}
+
+const CARD_RULES_CACHE = new WeakMap();
+
+function analyzeCardRules(card) {
+  if (!card || typeof card !== 'object') return analyzeCardRulesUncached(card);
+  const signature = `${card.oracleText || card.oracle_text || ''}${card.typeLine || card.type_line || ''}${(card.keywords || []).join('|')}${(card.manualKeywords || []).join('|')}${(card.colors || []).join('|')}`;
+  const cached = CARD_RULES_CACHE.get(card);
+  if (cached?.signature === signature) return cached.value;
+  const value = analyzeCardRulesUncached(card);
+  CARD_RULES_CACHE.set(card, { signature, value });
+  return value;
+}
+
+function qualityMatches(source, quality) {
+  const q = lower(quality);
+  const sourceRules = analyzeCardRules(source);
+  const sourceType = lower(sourceRules.typeLine);
+  const sourceColors = new Set((source?.colors || []).map(String));
+  if (q === 'everything') return true;
+  for (const [word, symbol] of Object.entries(COLOR_WORDS)) if (q.includes(word) && sourceColors.has(symbol)) return true;
+  if (q.includes('artifacts') && sourceType.includes('artifact')) return true;
+  if (q.includes('creatures') && sourceType.includes('creature')) return true;
+  if (q.includes('instants') && sourceType.includes('instant')) return true;
+  if (q.includes('sorceries') && sourceType.includes('sorcery')) return true;
+  if (q.includes('monocolored') && sourceColors.size === 1) return true;
+  if (q.includes('multicolored') && sourceColors.size > 1) return true;
+  return false;
+}
+
+function hasProtectionFrom(target, source) {
+  const rules = analyzeCardRules(target);
+  return rules.protectionFrom.some((quality) => qualityMatches(source, quality));
+}
+
+function canTargetPermanent(source, target, sourceControllerId = null) {
+  const targetRules = analyzeCardRules(target);
+  if (targetRules.shroud) return { legal: false, reason: `${target.name} has shroud.` };
+  if (targetRules.hexproof && sourceControllerId && sourceControllerId !== target.controller) return { legal: false, reason: `${target.name} has hexproof.` };
+  if (hasProtectionFrom(target, source)) return { legal: false, reason: `${target.name} has relevant protection.` };
+  const text = lower(targetRules.text);
+  const sourceColors = new Set(source?.colors || []);
+  for (const [word, symbol] of Object.entries(COLOR_WORDS)) {
+    if (text.includes(`can't be the target of ${word} spells`) && sourceColors.has(symbol)) return { legal: false, reason: `${target.name} can't be targeted by ${word} spells.` };
+  }
+  return { legal: true, reason: '', wardCost: targetRules.wardCost || '' };
+}
+
+function sharesColor(a, b) {
+  const colors = new Set(a?.colors || []);
+  return (b?.colors || []).some((color) => colors.has(color));
+}
+
+function defenderControlsLandSubtype(defenderBattlefield, subtype) {
+  return (defenderBattlefield || []).some((card) => lower(typeOf(card)).includes(lower(subtype)));
+}
+
+function blockRestriction(attacker, blocker, context = {}) {
+  const attack = analyzeCardRules(attacker);
+  const block = analyzeCardRules(blocker);
+  const blockerStats = context.blockerStats || { power: Number(blocker?.power || 0), toughness: Number(blocker?.toughness || 0) };
+  if (block.combatRestrictions.cannotBlock) return { legal: false, reason: `${blocker.name} can't block.` };
+  if (attack.unblockable) return { legal: false, reason: `${attacker.name} can't be blocked.` };
+  if (attack.flying && !(block.flying || block.reach)) return { legal: false, reason: 'Flying requires flying or reach.' };
+  if (attack.shadow !== block.shadow) return { legal: false, reason: 'Shadow creatures only block or are blocked by shadow creatures.' };
+  if (attack.horsemanship && !block.horsemanship) return { legal: false, reason: 'Horsemanship requires horsemanship to block.' };
+  if (attack.fear && !(lower(typeOf(blocker)).includes('artifact') || (blocker.colors || []).includes('B'))) return { legal: false, reason: 'Fear can be blocked only by artifact or black creatures.' };
+  if (attack.intimidate && !(lower(typeOf(blocker)).includes('artifact') || sharesColor(attacker, blocker))) return { legal: false, reason: 'Intimidate requires an artifact creature or a shared color.' };
+  if (attack.skulk && Number(blockerStats.power || 0) > Number(context.attackerStats?.power || attacker.power || 0)) return { legal: false, reason: 'Skulk prevents a higher-power creature from blocking.' };
+  for (const subtype of attack.landwalk) if (defenderControlsLandSubtype(context.defenderBattlefield, subtype)) return { legal: false, reason: `${subtype}walk makes the attacker unblockable.` };
+  if (hasProtectionFrom(attacker, blocker)) return { legal: false, reason: 'Protection prevents this creature from blocking it.' };
+  if (attack.combatRestrictions.blockPowerAtLeast != null && Number(blockerStats.power || 0) < attack.combatRestrictions.blockPowerAtLeast) return { legal: false, reason: 'The blocker does not have enough power.' };
+  if (attack.combatRestrictions.blockPowerAtMost != null && Number(blockerStats.power || 0) > attack.combatRestrictions.blockPowerAtMost) return { legal: false, reason: 'The blocker has too much power.' };
+  return { legal: true, reason: '' };
+}
+
+function keywordSummary(card) {
+  const rules = analyzeCardRules(card);
+  const values = [];
+  for (const keyword of rules.keywords) values.push(keyword);
+  if (rules.toxic) values.push(`toxic ${rules.toxic}`);
+  if (rules.afflict) values.push(`afflict ${rules.afflict}`);
+  if (rules.annihilator) values.push(`annihilator ${rules.annihilator}`);
+  if (rules.wardCost) values.push(`ward ${rules.wardCost}`);
+  return [...new Set(values)].sort();
+}
+
+
+return { analyzeCardRules, hasProtectionFrom, canTargetPermanent, blockRestriction, keywordSummary };
+})();
+
+// ---- card-evaluation.js ----
+__modules["./card-evaluation.js"] = (() => {
+const { analyzeCardRules, blockRestriction, canTargetPermanent, hasProtectionFrom } = __modules["./card-rules-model.js"];
+const { isCreature, numericStat } = __modules["./utils.js"];
+
+function oracle(card) { return String(card?.oracleText || card?.oracle_text || '').replace(/[−–—]/g, '-'); }
+function typeLine(card) { return String(card?.typeLine || card?.type_line || ''); }
+function lower(value) { return String(value || '').toLocaleLowerCase(); }
+
+function subtypeMatches(card, subtype = '') {
+  const words = lower(typeLine(card).split('—')[1] || '').split(/\s+/);
+  return lower(subtype).split(/\s+/).some((piece) => words.includes(piece));
+}
+
+function controllerMatches(source, target) {
+  return !source?.controller || !target?.controller || source.controller === target.controller;
+}
+
+function sourceAppliesPump(source, target, effect) {
+  if (effect.scope === 'attached') return source.attachedTo === target.instanceId;
+  if (effect.scope === 'all-creatures') return isCreature(target);
+  if (!controllerMatches(source, target) || !isCreature(target)) return false;
+  if (effect.scope === 'all') return true;
+  if (effect.scope === 'tribal') return subtypeMatches(target, effect.subtype);
+  return false;
+}
+
+function sourceGrantedKeywords(source, target) {
+  const rules = analyzeCardRules(source);
+  const text = oracle(source);
+  const grants = new Set();
+  if (source.attachedTo === target.instanceId && rules.grantedKeywords.length) {
+    rules.grantedKeywords.forEach((keyword) => grants.add(keyword));
+  }
+  if (controllerMatches(source, target) && isCreature(target)) {
+    if (/(?:creatures|creature tokens) you control have/i.test(text)) rules.grantedKeywords.forEach((keyword) => grants.add(keyword));
+    const tribal = text.match(/other ([A-Za-z -]+) creatures you control have/i);
+    if (tribal && subtypeMatches(target, tribal[1])) rules.grantedKeywords.forEach((keyword) => grants.add(keyword));
+  }
+  return grants;
+}
+
+function dynamicBaseStats(card, battlefield = [], playerContext = {}) {
+  const text = oracle(card);
+  let power = numericStat(card?.power, Number.NaN);
+  let toughness = numericStat(card?.toughness, Number.NaN);
+  const own = battlefield.filter((item) => !card?.controller || item.controller === card.controller);
+  const handSize = Number(playerContext.handSize || 0);
+  const graveSize = Number(playerContext.graveyardSize || 0);
+  const countFromText = () => {
+    if (/number of creatures you control/i.test(text)) return own.filter(isCreature).length;
+    if (/number of lands you control/i.test(text)) return own.filter((item) => /\bLand\b/.test(typeLine(item))).length;
+    if (/number of artifacts you control/i.test(text)) return own.filter((item) => /\bArtifact\b/.test(typeLine(item))).length;
+    if (/number of cards in your hand/i.test(text)) return handSize;
+    if (/number of creature cards in your graveyard/i.test(text)) return graveSize;
+    return 0;
+  };
+  const count = countFromText();
+  if (!Number.isFinite(power)) power = count;
+  if (!Number.isFinite(toughness)) toughness = count;
+  const baseSet = text.match(/base power and toughness (?:are|is) (\d+)\/(\d+)/i);
+  if (baseSet) { power = Number(baseSet[1]); toughness = Number(baseSet[2]); }
+  return { power: Number.isFinite(power) ? power : 0, toughness: Number.isFinite(toughness) ? toughness : 0 };
+}
+
+function derivedCardState(card, battlefield = [], context = {}) {
+  const base = analyzeCardRules(card);
+  const stats = dynamicBaseStats(card, battlefield, context);
+  let power = stats.power;
+  let toughness = stats.toughness;
+  const keywords = new Set(base.keywords);
+  const sources = [];
+
+  for (const source of battlefield) {
+    const rules = analyzeCardRules(source);
+    for (const effect of rules.pumpEffects) {
+      if (!sourceAppliesPump(source, card, effect)) continue;
+      power += Number(effect.power || 0);
+      toughness += Number(effect.toughness || 0);
+      sources.push(`${source.name}: ${effect.power >= 0 ? '+' : ''}${effect.power}/${effect.toughness >= 0 ? '+' : ''}${effect.toughness}`);
+    }
+    for (const keyword of sourceGrantedKeywords(source, card)) {
+      keywords.add(keyword);
+      sources.push(`${source.name}: ${keyword}`);
+    }
+  }
+
+  const counters = card?.counters || {};
+  for (const [counterName, rawCount] of Object.entries(counters)) {
+    const match = String(counterName).trim().match(/^([+-]?\d+)\/([+-]?\d+)$/);
+    if (!match) continue;
+    const count = Number(rawCount || 0);
+    const powerDelta = Number(match[1] || 0) * count;
+    const toughnessDelta = Number(match[2] || 0) * count;
+    power += powerDelta;
+    toughness += toughnessDelta;
+    if (count) sources.push(`${count} ${counterName} counter${count === 1 ? '' : 's'}`);
+  }
+  power += Number(card?.temporaryPowerBonus || 0);
+  toughness += Number(card?.temporaryToughnessBonus || 0);
+  if (Number(counters.stun || 0) > 0) sources.push(`${counters.stun} stun counter${Number(counters.stun) === 1 ? '' : 's'}`);
+
+  const merged = { ...base, keywords };
+  for (const flag of [
+    'flying', 'reach', 'menace', 'deathtouch', 'firstStrike', 'doubleStrike',
+    'trample', 'lifelink', 'vigilance', 'haste', 'flash', 'indestructible',
+    'hexproof', 'shroud', 'defender', 'fear', 'intimidate', 'shadow',
+    'horsemanship', 'skulk', 'infect', 'wither', 'prowess', 'exalted',
+    'battleCry', 'persist', 'undying', 'myriad', 'unblockable',
+  ]) {
+    const keyword = flag.replace(/[A-Z]/g, (letter) => ` ${letter.toLocaleLowerCase()}`);
+    merged[flag] = Boolean(base[flag] || keywords.has(keyword));
+  }
+
+  return { ...merged, power, toughness, modifierSources: sources };
+}
+
+function cardTraits(card, battlefield = [], context = {}) {
+  const state = battlefield.length ? derivedCardState(card, battlefield, context) : analyzeCardRules(card);
+  const effects = state.effectTags || {};
+  return {
+    ...state,
+    creature: isCreature(card),
+    instant: /\bInstant\b/.test(typeLine(card)),
+    aura: /\bAura\b/.test(typeLine(card)),
+    equipment: /\bEquipment\b/.test(typeLine(card)),
+    activatedAbility: Boolean(state.activatedAbilities?.length),
+    tapAbility: Boolean(state.activatedAbilities?.some((ability) => ability.tap)),
+    staticEffect: Boolean(state.staticEffect),
+    draw: Boolean(effects.draw),
+    tutor: Boolean(effects.tutor),
+    tokenMaker: Boolean(effects.tokenMaker),
+    recursion: Boolean(effects.recursion),
+    sacrificeValue: Boolean(effects.sacrificeOutlet),
+    graveyardInteraction: Boolean(effects.graveyardInteraction),
+    counterspell: Boolean(effects.counterspell),
+    boardWipe: Boolean(effects.boardWipe),
+    targetedRemoval: Boolean(effects.targetedRemoval),
+    protectionSpell: Boolean(effects.protectionSpell),
+    combatTrick: Boolean(effects.combatTrick),
+    flashThreat: isCreature(card) && Boolean(state.flash),
+    anthem: (() => {
+      const global = (state.pumpEffects || []).filter((effect) => ['all', 'tribal'].includes(effect.scope));
+      return global.reduce((sum, effect) => ({ power: sum.power + Number(effect.power || 0), toughness: sum.toughness + Number(effect.toughness || 0) }), { power: 0, toughness: 0 });
+    })(),
+    interactionCategories: [
+      effects.counterspell && 'counterspell',
+      effects.targetedRemoval && 'removal',
+      effects.boardWipe && 'boardWipe',
+      effects.combatTrick && 'combatTrick',
+      effects.protectionSpell && 'protection',
+      effects.graveyardInteraction && 'graveyardInteraction',
+      (isCreature(card) && state.flash) && 'flashThreat',
+    ].filter(Boolean),
+  };
+}
+
+function effectiveStats(card, battlefield = [], context = {}) {
+  const derived = derivedCardState(card, battlefield, context);
+  return { power: derived.power, toughness: derived.toughness };
+}
+
+function targetability(source, target, sourceControllerId = null) {
+  return canTargetPermanent(source, target, sourceControllerId);
+}
+
+function canBlock(attacker, blocker, blockerBattlefield = [], attackerBattlefield = [], context = {}) {
+  if (!isCreature(blocker) || blocker.tapped) return false;
+  const blockerStats = effectiveStats(blocker, blockerBattlefield, context.defenderContext || {});
+  if (blockerStats.toughness <= 0) return false;
+  const attackerStats = effectiveStats(attacker, attackerBattlefield, context.attackerContext || {});
+  return blockRestriction(attacker, blocker, {
+    defenderBattlefield: blockerBattlefield,
+    blockerStats,
+    attackerStats,
+  }).legal;
+}
+
+function sourceCanDamage(source, target) {
+  return !hasProtectionFrom(target, source);
+}
+
+function lethalDamage(source, target, sourceState, targetState) {
+  if (!sourceCanDamage(source, target)) return Infinity;
+  if (sourceState.deathtouch && sourceState.power > 0) return 1;
+  return Math.max(0, targetState.toughness);
+}
+
+function damageCreature(source, target, amount, sourceState, targetState) {
+  if (amount <= 0 || !sourceCanDamage(source, target)) return { dies: false, minusCounters: 0, damage: 0 };
+  const minusCounters = sourceState.infect || sourceState.wither ? amount : 0;
+  const regularDamage = minusCounters ? 0 : amount;
+  const lethal = sourceState.deathtouch || regularDamage >= targetState.toughness || minusCounters >= targetState.toughness;
+  return { dies: lethal && !targetState.indestructible, minusCounters, damage: regularDamage };
+}
+
+function combatOutcome(attacker, blockers = [], attackerBattlefield = [], blockerBattlefield = [], context = {}) {
+  const attack = derivedCardState(attacker, attackerBattlefield, context.attackerContext || {});
+  const attackerStats = { power: attack.power, toughness: attack.toughness };
+  const legalBlockers = blockers.filter((blocker) => canBlock(attacker, blocker, blockerBattlefield, attackerBattlefield, context));
+  const doubleFactor = attack.doubleStrike ? 2 : 1;
+
+  if (!legalBlockers.length || (attack.menace && legalBlockers.length < 2) || (attack.combatRestrictions?.needsTwoOrMoreBlockers && legalBlockers.length < 2)) {
+    const rawDamage = Math.max(0, attackerStats.power) * doubleFactor;
+    const poisonDamage = attack.infect ? rawDamage : (rawDamage > 0 ? Number(attack.toxic || 0) : 0);
+    const lifeDamage = attack.infect ? 0 : rawDamage;
+    return {
+      playerDamage: lifeDamage,
+      lifeDamage,
+      rawDamage,
+      poisonDamage,
+      afflictLifeLoss: 0,
+      attackerDies: false,
+      blockersDie: [],
+      blockerMinusCounters: {},
+      attackerMinusCounters: 0,
+      lifelinkGain: attack.lifelink ? rawDamage : 0,
+      unblocked: true,
+    };
+  }
+
+  const blockerStates = legalBlockers.map((blocker) => ({ card: blocker, state: derivedCardState(blocker, blockerBattlefield, context.defenderContext || {}), alive: true, minusCounters: 0, damage: 0 }));
+  let attackerDamage = 0;
+  let attackerMinusCounters = 0;
+  let attackerDies = false;
+  let trampleDamage = 0;
+  const phases = [
+    { attackerDeals: attack.firstStrike || attack.doubleStrike, blockersDeal: blockerStates.some(({ state }) => state.firstStrike || state.doubleStrike) },
+    { attackerDeals: !attack.firstStrike || attack.doubleStrike, blockersDeal: blockerStates.some(({ state }) => !state.firstStrike || state.doubleStrike) },
+  ];
+
+  for (const phase of phases) {
+    if (attackerDies) break;
+    const blockersAtPhaseStart = blockerStates.filter((item) => item.alive);
+    if (phase.attackerDeals) {
+      let remaining = Math.max(0, attackerStats.power);
+      for (const blocker of blockersAtPhaseStart) {
+        const needed = lethalDamage(attacker, blocker.card, attack, { ...blocker.state, toughness: blocker.state.toughness - blocker.minusCounters });
+        const assigned = Math.min(remaining, Number.isFinite(needed) ? Math.max(1, needed) : remaining);
+        const result = damageCreature(attacker, blocker.card, assigned, attack, { ...blocker.state, toughness: blocker.state.toughness - blocker.minusCounters });
+        blocker.minusCounters += result.minusCounters;
+        blocker.damage += result.damage;
+        blocker.alive = !result.dies;
+        remaining = Math.max(0, remaining - assigned);
+      }
+      if (attack.trample) trampleDamage += remaining;
+    }
+    if (phase.blockersDeal) {
+      // Combat damage in a step is simultaneous. A blocker that was alive at
+      // the start of this damage step still deals its damage even if the
+      // attacker assigns lethal damage to it in the same step.
+      for (const blocker of blockersAtPhaseStart) {
+        const blockerDealsThisPhase = phase === phases[0]
+          ? (blocker.state.firstStrike || blocker.state.doubleStrike)
+          : (!blocker.state.firstStrike || blocker.state.doubleStrike);
+        if (!blockerDealsThisPhase) continue;
+        const result = damageCreature(blocker.card, attacker, Math.max(0, blocker.state.power), blocker.state, { ...attack, toughness: attack.toughness - attackerMinusCounters });
+        attackerMinusCounters += result.minusCounters;
+        attackerDamage += result.damage;
+        if (result.dies) attackerDies = true;
+      }
+    }
+  }
+
+  const rawDamage = Math.max(0, trampleDamage);
+  const poisonDamage = attack.infect ? rawDamage : (rawDamage > 0 ? Number(attack.toxic || 0) : 0);
+  const lifeDamage = attack.infect ? 0 : rawDamage;
+  return {
+    playerDamage: lifeDamage,
+    lifeDamage,
+    rawDamage,
+    poisonDamage,
+    afflictLifeLoss: Number(attack.afflict || 0),
+    attackerDies,
+    blockersDie: blockerStates.filter((item) => !item.alive).map((item) => item.card.instanceId),
+    blockerMinusCounters: Object.fromEntries(blockerStates.filter((item) => item.minusCounters > 0).map((item) => [item.card.instanceId, item.minusCounters])),
+    attackerMinusCounters,
+    lifelinkGain: attack.lifelink ? Math.max(0, blockerStates.reduce((sum, item) => sum + item.damage + item.minusCounters, 0) + rawDamage) : 0,
+    unblocked: false,
+  };
+}
+
+function permanentValue(card, friendlyBattlefield = [], opposingBattlefield = [], context = {}) {
+  const traits = cardTraits(card, friendlyBattlefield, context);
+  const stats = effectiveStats(card, friendlyBattlefield, context);
+  let value = Number(card?.manaValue || 0) * 0.82;
+  if (traits.creature) {
+    value += stats.power * 0.84 + stats.toughness * 0.6;
+    const blockers = opposingBattlefield.filter((blocker) => canBlock(card, blocker, opposingBattlefield, friendlyBattlefield));
+    if (traits.flying) value += blockers.length ? 0.9 : 2.25;
+    if (traits.reach) value += opposingBattlefield.some((opponent) => cardTraits(opponent, opposingBattlefield).flying) ? 1.45 : 0.4;
+    if (traits.menace) value += opposingBattlefield.filter((blocker) => isCreature(blocker) && !blocker.tapped).length < 2 ? 1.85 : 0.85;
+    if (traits.fear || traits.intimidate || traits.shadow || traits.horsemanship || traits.landwalk?.length || traits.skulk) value += blockers.length ? 1.0 : 2.0;
+    if (traits.deathtouch) value += stats.power <= 2 ? 2.5 : 1.45;
+    if (traits.firstStrike) value += 1.0;
+    if (traits.doubleStrike) value += 2.8 + Math.max(0, stats.power) * 0.32;
+    if (traits.trample) value += 1.1;
+    if (traits.lifelink) value += context.lowLife ? 2.1 : 1.0;
+    if (traits.infect) value += 2.1;
+    if (traits.toxic) value += Math.min(3, traits.toxic * 0.7);
+    if (traits.indestructible) value += 2.45;
+    if (traits.hexproof || traits.shroud) value += 1.85;
+    if (traits.ward) value += 1.2;
+    if (traits.protectionFrom?.length) value += 1.4;
+    if (traits.vigilance) value += 0.72;
+    if (traits.haste) value += card?.summoningSick ? 1.25 : 0.42;
+    if (traits.deathTrigger) value += 1.7;
+    if (traits.attackTrigger || traits.annihilator || traits.myriad) value += 1.9 + Number(traits.annihilator || 0) * 0.8;
+    if (traits.combatDamageTrigger) value += blockers.length ? 1.2 : 2.3;
+    if (traits.activatedAbility) value += 1.15;
+    if (traits.persist || traits.undying) value += 1.4;
+    if (traits.defender && !/can attack as though it didn't have defender/i.test(oracle(card))) value -= 0.55;
+    if (card?.summoningSick && !traits.haste) value -= 0.25;
+  }
+  if (traits.equipment || traits.aura) value += 1.25;
+  if (traits.staticEffect) value += 1.55;
+  if (traits.anthem.power || traits.anthem.toughness) value += 1.6 + friendlyBattlefield.filter(isCreature).length * 0.48;
+  if (traits.draw) value += 1.3;
+  if (traits.tutor) value += 1.75;
+  if (traits.tokenMaker) value += 1.3;
+  if (traits.recursion) value += 1.2;
+  if (traits.sacrificeValue) value += 0.85;
+  if (traits.targetedRemoval) value += 1.35;
+  if (traits.boardWipe) value += 2.2;
+  if (traits.counterspell) value += 1.3;
+  if (card?.commander) value += 1.75;
+  if (card?.token) value -= 0.15;
+  if (card?.tapped) value -= traits.vigilance ? 0.1 : 0.48;
+  if (card?.faceDown) value *= 0.8;
+  value += Object.values(card?.counters || {}).reduce((sum, amount) => sum + Math.abs(Number(amount || 0)) * 0.3, 0);
+  if (card?.attachedTo) value += 0.65;
+  return value;
+}
+
+function combatTradeScore(attacker, blockers, attackerBattlefield = [], blockerBattlefield = [], context = {}) {
+  const outcome = combatOutcome(attacker, blockers, attackerBattlefield, blockerBattlefield, context);
+  const attackerValue = permanentValue(attacker, attackerBattlefield, blockerBattlefield);
+  const killedBlockerValue = blockers
+    .filter((blocker) => outcome.blockersDie.includes(blocker.instanceId))
+    .reduce((sum, blocker) => sum + permanentValue(blocker, blockerBattlefield, attackerBattlefield), 0);
+  return outcome.lifeDamage * 1.15 + outcome.poisonDamage * 2.1 + outcome.afflictLifeLoss * 0.9 + killedBlockerValue - (outcome.attackerDies ? attackerValue : 0) + outcome.lifelinkGain * 0.35;
+}
+
+function publicCardSnapshot(card) {
+  if (!card) return null;
+  return {
+    instanceId: card.instanceId,
+    scryfallId: card.scryfallId || null,
+    oracleId: card.oracleId || null,
+    name: card.name,
+    manaCost: card.manaCost || '',
+    manaValue: Number(card.manaValue || 0),
+    typeLine: card.typeLine || '',
+    oracleText: card.oracleText || '',
+    power: card.power || '',
+    toughness: card.toughness || '',
+    keywords: [...(card.keywords || [])],
+    manualKeywords: [...(card.manualKeywords || [])],
+    colors: [...(card.colors || [])],
+    colorIdentity: [...(card.colorIdentity || [])],
+    commander: Boolean(card.commander),
+    token: Boolean(card.token),
+    producedMana: [...(card.producedMana || [])],
+  };
+}
+
+
+return { derivedCardState, cardTraits, effectiveStats, targetability, canBlock, combatOutcome, permanentValue, combatTradeScore, publicCardSnapshot };
+})();
+
+// ---- rules.js ----
+__modules["./rules.js"] = (() => {
+const { PHASES } = __modules["./constants.js"];
+const { analyzeCardRules } = __modules["./card-rules-model.js"];
+const { hasFlash, isCreature, isLand, isPermanent, manaBundleAmount, manaProductionChoices, manaRequirement, totalMana, untappedManaSources } = __modules["./utils.js"];
+
+function validateDeck(entries, byName, commanderNames = []) {
+  const errors = [];
+  const warnings = [];
+  const total = entries.reduce((sum, entry) => sum + entry.count, 0);
+  if (total !== 100) errors.push(`Commander decks need exactly 100 cards including the commander. This list has ${total}.`);
+  const unknown = entries.filter((entry) => !byName[entry.name.toLocaleLowerCase()]);
+  if (unknown.length) errors.push(`Unknown card${unknown.length === 1 ? '' : 's'}: ${unknown.map((entry) => entry.name).join(', ')}.`);
+  if (!commanderNames.length) errors.push('Choose at least one commander.');
+  if (commanderNames.length > 2) errors.push('This build supports at most two commanders.');
+
+  const commanders = commanderNames.map((name) => byName[name.toLocaleLowerCase()]).filter(Boolean);
+  const identity = new Set(commanders.flatMap((card) => card.colorIdentity || []));
+  for (const entry of entries) {
+    const card = byName[entry.name.toLocaleLowerCase()];
+    if (!card) continue;
+    const isBasic = card.typeLine.includes('Basic Land');
+    const anyNumber = /deck can have any number of cards named/i.test(card.oracleText || '');
+    const upTo = (card.oracleText || '').match(/deck can have up to (\w+) cards named/i);
+    if (entry.count > 1 && !isBasic && !anyNumber && !upTo) errors.push(`${card.name} appears ${entry.count} times, but Commander is singleton.`);
+    const offColor = (card.colorIdentity || []).filter((color) => !identity.has(color));
+    if (commanders.length && offColor.length) errors.push(`${card.name} has ${offColor.join('/')} in its color identity, outside the selected commander identity.`);
+    if (card.legalities?.commander === 'banned') errors.push(`${card.name} is banned in Commander.`);
+    if (card.legalities?.commander === 'not_legal') warnings.push(`${card.name} is marked not legal in Commander by Scryfall.`);
+  }
+
+  for (const commander of commanders) {
+    const eligible = commander.typeLine.includes('Legendary Creature') || /can be your commander/i.test(commander.oracleText || '');
+    if (!eligible) errors.push(`${commander.name} is not normally eligible to be a commander.`);
+  }
+  if (commanders.length === 2) warnings.push('Two-commander pairing rules such as Partner, Background, and Friends forever are not fully validated yet.');
+  return { errors: [...new Set(errors)], warnings: [...new Set(warnings)], total, identity: [...identity] };
+}
+
+function commanderCandidates(cards) {
+  return cards.filter((card) => card.typeLine.includes('Legendary Creature') || /can be your commander/i.test(card.oracleText || ''));
+}
+
+
+const MANA_COLORS = ['W', 'U', 'B', 'R', 'G', 'C'];
+
+function controlsSubtype(player, subtype) {
+  const needle = String(subtype || '').toLocaleLowerCase();
+  return (player?.zones?.battlefield || []).some((card) => String(card.typeLine || '').toLocaleLowerCase().includes(needle));
+}
+
+function handContainsSubtype(player, subtype) {
+  const needle = String(subtype || '').toLocaleLowerCase();
+  return (player?.zones?.hand || []).some((card) => String(card.typeLine || '').toLocaleLowerCase().includes(needle));
+}
+
+/**
+ * Applies common land-entry rules using only visible state. It deliberately
+ * returns the reasoning so the coach can explain why a land is or is not
+ * immediately usable. Unusual replacement effects remain manual.
+ */
+function landEntryPlan(card, player, { opponentCount = 1, payLife = 'auto' } = {}) {
+  if (!isLand(card)) return { tapped: false, lifePaid: 0, reason: 'Not a land.', choice: null };
+  const text = String(card.oracleText || '').replace(/\n/g, ' ').toLocaleLowerCase();
+  const battlefield = player?.zones?.battlefield || [];
+  const otherLands = battlefield.filter(isLand).length;
+  const creatures = battlefield.filter(isCreature);
+  const result = { tapped: false, lifePaid: 0, reason: 'No visible effect makes this land enter tapped.', choice: null };
+
+  // Shock-land style optional life payment.
+  if (/may pay 2 life[\s\S]*if you don['’]t[\s\S]*enters?(?: the battlefield)? tapped/.test(text)) {
+    const shouldPay = payLife === true || (payLife === 'auto' && Number(player?.life || 0) > 8);
+    return shouldPay
+      ? { tapped: false, lifePaid: 2, reason: 'Pay 2 life so the land enters untapped.', choice: 'pay-life' }
+      : { tapped: true, lifePaid: 0, reason: 'The optional 2 life was not paid.', choice: 'enter-tapped' };
+  }
+
+  // Reveal-land style condition.
+  const revealMatch = text.match(/unless you reveal (?:a|an) ([a-z ]+?) card from your hand/);
+  if (revealMatch) {
+    const types = revealMatch[1].split(/\s+or\s+|\//).map((value) => value.trim()).filter(Boolean);
+    const canReveal = types.some((type) => handContainsSubtype(player, type));
+    return { tapped: !canReveal, lifePaid: 0, reason: canReveal ? `A ${types.join(' or ')} card can be revealed.` : `No ${types.join(' or ')} card is visible in hand to reveal.`, choice: canReveal ? 'reveal' : null };
+  }
+
+  // Check lands and similar conditional lands.
+  const basicTypes = ['plains', 'island', 'swamp', 'mountain', 'forest'];
+  if (/enters?(?: the battlefield)? tapped unless you control/.test(text)) {
+    if (/two or more other lands/.test(text)) {
+      const untapped = otherLands >= 2;
+      return { tapped: !untapped, lifePaid: 0, reason: untapped ? 'You control two or more other lands.' : 'You do not control two or more other lands.', choice: null };
+    }
+    if (/a legendary creature/.test(text)) {
+      const untapped = creatures.some((creature) => /Legendary/.test(creature.typeLine || ''));
+      return { tapped: !untapped, lifePaid: 0, reason: untapped ? 'You control a legendary creature.' : 'You do not control a legendary creature.', choice: null };
+    }
+    if (/two or more opponents/.test(text)) {
+      const untapped = opponentCount >= 2;
+      return { tapped: !untapped, lifePaid: 0, reason: untapped ? 'You have at least two opponents.' : 'You have fewer than two opponents.', choice: null };
+    }
+    const mentioned = basicTypes.filter((type) => text.includes(type));
+    if (mentioned.length) {
+      const untapped = mentioned.some((type) => controlsSubtype(player, type));
+      return { tapped: !untapped, lifePaid: 0, reason: untapped ? `You control a required ${mentioned.join(' or ')}.` : `You do not control a required ${mentioned.join(' or ')}.`, choice: null };
+    }
+  }
+
+  // Fast-land style condition.
+  if (/enters?(?: the battlefield)? tapped if you control two or more other lands/.test(text)) {
+    const tapped = otherLands >= 2;
+    return { tapped, lifePaid: 0, reason: tapped ? 'You control two or more other lands.' : 'You control fewer than two other lands.', choice: null };
+  }
+
+  // Optional “you may have this enter tapped” is not forced.
+  if (/you may have .* enter(?: the battlefield)? tapped/.test(text)) {
+    return { tapped: false, lifePaid: 0, reason: 'Entering tapped is optional; the coach assumes untapped unless another effect matters.', choice: 'untapped' };
+  }
+
+  if (/enters?(?: the battlefield)? tapped/.test(text)) {
+    return { tapped: true, lifePaid: 0, reason: 'Oracle text says this land enters tapped.', choice: null };
+  }
+  return result;
+}
+
+function manaDevelopmentSnapshot(player) {
+  const floating = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0, ...(player?.mana || {}) };
+  const colors = new Set(Object.entries(floating).filter(([, amount]) => Number(amount) > 0).map(([color]) => color));
+  let available = totalMana(floating);
+  let nextTurn = totalMana(floating);
+  let untappedSourceCount = 0;
+  let tappedSourceCount = 0;
+  const sources = [];
+  const currentlyUsable = new Map(untappedManaSources(player).map((source) => [source.card.instanceId, source]));
+  for (const card of player?.zones?.battlefield || []) {
+    const choices = manaProductionChoices(card, { player });
+    if (!choices.length) continue;
+    const capacity = Math.max(0, ...choices.map((choice) => manaBundleAmount(choice.mana)));
+    const noUntap = /doesn't untap during your untap step/i.test(card.oracleText || '');
+    if (!noUntap) nextTurn += capacity;
+    const usable = currentlyUsable.get(card.instanceId);
+    if (usable) {
+      const currentCapacity = Math.max(0, ...usable.choices.map((choice) => manaBundleAmount(choice.mana)));
+      available += currentCapacity;
+      untappedSourceCount += 1;
+      for (const choice of usable.choices) for (const [color, amount] of Object.entries(choice.mana || {})) if (Number(amount) > 0) colors.add(color);
+    } else tappedSourceCount += 1;
+    sources.push({ instanceId: card.instanceId, name: card.name, tapped: Boolean(card.tapped), usableNow: Boolean(usable), capacity, choices });
+  }
+  return { floating, available, nextTurn, colors: [...colors], untappedSourceCount, tappedSourceCount, sources };
+}
+
+/** Colors worth preserving because another visible instant/flash card may use them. */
+function strategicPaymentColors(player, excludedCardId = null) {
+  const colors = new Set();
+  const candidates = [
+    ...(player?.zones?.hand || []),
+    ...(player?.zones?.command || []).filter((card) => hasFlash(card)),
+  ];
+  for (const card of candidates) {
+    if (card.instanceId === excludedCardId) continue;
+    const instantSpeed = String(card.typeLine || '').includes('Instant') || hasFlash(card);
+    if (!instantSpeed) continue;
+    const req = manaRequirement(card.manaCost || '');
+    for (const color of MANA_COLORS) if (Number(req[color] || 0) > 0) colors.add(color);
+    for (const flexible of req.flexible || []) for (const color of flexible) if (MANA_COLORS.includes(color)) colors.add(color);
+  }
+  return [...colors];
+}
+
+function extraLandAllowance(state, playerId) {
+  const player = state.players[playerId];
+  return (player?.zones?.battlefield || []).reduce((sum, card) => sum + Number(analyzeCardRules(card).extraLandPlays || 0), 0);
+}
+
+function landPlayAllowance(state, playerId) {
+  return 1 + extraLandAllowance(state, playerId);
+}
+
+function grantsFlashFor(card, permanent) {
+  const text = String(permanent?.oracleText || '').toLocaleLowerCase();
+  const type = String(card?.typeLine || '').toLocaleLowerCase();
+  if (/you may cast spells as though they had flash/.test(text)) return true;
+  if (/you may cast creature spells as though they had flash/.test(text) && type.includes('creature')) return true;
+  if (/you may cast artifact spells as though they had flash/.test(text) && type.includes('artifact')) return true;
+  if (/you may cast enchantment spells as though they had flash/.test(text) && type.includes('enchantment')) return true;
+  if (/you may cast nonland permanent spells as though they had flash/.test(text) && isPermanent(card) && !isLand(card)) return true;
+  return false;
+}
+
+function battlefieldCastingRestrictions(state, playerId, card) {
+  const reasons = [];
+  const allPermanents = Object.values(state.players || {}).flatMap((player) => player.zones?.battlefield || []);
+  const cardType = String(card?.typeLine || '').toLocaleLowerCase();
+  for (const permanent of allPermanents) {
+    const rules = analyzeCardRules(permanent);
+    if (rules.noCreatureSpells && cardType.includes('creature')) reasons.push(`${permanent.name} prevents creature spells from being cast.`);
+    if (rules.oneSpellPerTurn && Number(state.players[playerId]?.spellsCastThisTurn || 0) >= 1) reasons.push(`${permanent.name} limits that player to one spell this turn.`);
+    const text = String(permanent.oracleText || '').toLocaleLowerCase();
+    if (/your opponents can't cast spells during your turn/.test(text) && permanent.controller !== playerId && state.activePlayerId === permanent.controller) reasons.push(`${permanent.name} prevents opponents from casting spells during its controller's turn.`);
+    if (/players can't cast spells from graveyards/.test(text) && card?._sourceZone === 'graveyard') reasons.push(`${permanent.name} prevents casting from graveyards.`);
+  }
+  return reasons;
+}
+
+function landPlayLegality(state, playerId, card) {
+  const reasons = [];
+  const player = state.players[playerId];
+  const phase = PHASES[state.phaseIndex]?.id;
+  if (!isLand(card)) reasons.push('Only a land card can be played as a land.');
+  if (playerId !== state.activePlayerId) reasons.push('Only the active player may play a land.');
+  if (!['main1', 'main2'].includes(phase)) reasons.push('A land can normally be played only during a main phase.');
+  if ((state.stack || []).length) reasons.push('A land can be played only while the stack is empty.');
+  const allowance = landPlayAllowance(state, playerId);
+  if (Number(player?.landPlaysThisTurn || 0) >= allowance) reasons.push(`That player has already used ${allowance === 1 ? 'the normal land play' : `all ${allowance} available land plays`} for this turn.`);
+  return { legal: reasons.length === 0, reasons, allowance };
+}
+
+function spellCastLegality(state, playerId, card, sourceZone = 'hand', options = {}) {
+  const { useUntappedSources = true } = options;
+  const reasons = [];
+  const player = state.players[playerId];
+  const phase = PHASES[state.phaseIndex]?.id;
+  const rules = analyzeCardRules(card);
+  card._sourceZone = sourceZone;
+  if (isLand(card)) reasons.push('Lands are played, not cast as spells.');
+  const flashGranted = (player?.zones?.battlefield || []).some((permanent) => grantsFlashFor(card, permanent));
+  const instantSpeed = String(card.typeLine || '').includes('Instant') || hasFlash(card) || flashGranted;
+  if (!instantSpeed) {
+    if (playerId !== state.activePlayerId) reasons.push('A noninstant spell normally requires your own turn.');
+    if (!['main1', 'main2'].includes(phase)) reasons.push('A noninstant spell normally requires a main phase.');
+    if ((state.stack || []).length) reasons.push('A noninstant spell normally requires an empty stack.');
+  }
+  if (rules.spellRestrictions.onlyDuringCombat && phase !== 'combat') reasons.push('This spell can be cast only during combat.');
+  if (rules.spellRestrictions.onlyDuringOwnTurn && playerId !== state.activePlayerId) reasons.push('This spell can be cast only during its controller\'s turn.');
+  if (rules.spellRestrictions.onlyDuringOpponentTurn && playerId === state.activePlayerId) reasons.push('This spell can be cast only during an opponent\'s turn.');
+  if (rules.spellRestrictions.onlyAfterAttacker && phase !== 'combat') reasons.push('This spell requires attackers to have been declared.');
+  reasons.push(...battlefieldCastingRestrictions(state, playerId, card));
+  delete card._sourceZone;
+  const costPlan = buildCostPlan(state, playerId, card, sourceZone, options);
+  const payment = useUntappedSources
+    ? planSpellPayment(state, playerId, card, sourceZone, { ...options, costPlan })
+    : { ...canPayMana(player?.mana || {}, costPlan.finalManaCost, 0), sources: [], projectedPool: { ...(player?.mana || {}) }, costPlan };
+  if (!payment.ok) reasons.push(payment.reason || `The available resources cannot pay ${costPlan.displayCost || card.manaCost || 'this cost'}.`);
+  return { legal: reasons.length === 0, reasons: [...new Set(reasons)], tax: costPlan.commanderTax, payment, costPlan, instantSpeed, cannotBeCountered: rules.spellRestrictions.cannotBeCountered, splitSecond: rules.spellRestrictions.splitSecond };
+}
+
+function moveLegality(state, card, source, targetPlayerId, targetZone, options = {}) {
+  const mode = state.settings.rulesMode;
+  if (mode === 'free') return { legal: true, reasons: [] };
+  const reasons = [];
+  const targetPlayer = state.players[targetPlayerId];
+
+  if (targetZone === 'command' && !card.commander) reasons.push('Only a designated commander should be placed in the command zone.');
+
+  if (targetZone === 'battlefield' && source.zone === 'hand') {
+    if (isLand(card)) reasons.push(...landPlayLegality(state, targetPlayerId, card).reasons);
+    else {
+      if (!isPermanent(card)) reasons.push('Instants and sorceries are cast onto the stack, not placed directly onto the battlefield.');
+      reasons.push(...spellCastLegality(state, targetPlayerId, card, source.zone, { ...options, useUntappedSources: state.settings.manaMode === 'auto' }).reasons);
+    }
+  }
+
+  if (targetZone === 'battlefield' && source.zone === 'command') {
+    reasons.push(...spellCastLegality(state, targetPlayerId, card, source.zone, { ...options, useUntappedSources: state.settings.manaMode === 'auto' }).reasons);
+  }
+
+  if (targetZone === 'stack' && ['hand', 'command'].includes(source.zone)) {
+    reasons.push(...spellCastLegality(state, targetPlayerId, card, source.zone, { ...options, useUntappedSources: state.settings.manaMode === 'auto' }).reasons);
+  }
+
+  if (['graveyard', 'exile', 'library'].includes(source.zone) && !['graveyard', 'exile', 'library'].includes(targetZone)) {
+    reasons.push(`Moving a card from ${source.zone} to ${targetZone} normally requires a card effect. Use an override when resolving that effect manually.`);
+  }
+  return { legal: reasons.length === 0, reasons: [...new Set(reasons)] };
+}
+
+function canPayMana(pool, manaCost, tax = 0) {
+  const req = manaRequirement(manaCost, tax);
+  const working = { ...pool };
+  for (const color of ['W', 'U', 'B', 'R', 'G', 'C']) {
+    if ((working[color] || 0) < req[color]) return { ok: false, reason: `Not enough ${color} mana for ${manaCost || 'this cost'}${tax ? ` plus ${tax} commander tax` : ''}.` };
+    working[color] -= req[color];
+  }
+  for (const choices of req.flexible) {
+    const available = choices.find((color) => (working[color] || 0) > 0);
+    if (!available) return { ok: false, reason: `The mana pool cannot satisfy ${manaCost}.` };
+    working[available] -= 1;
+  }
+  if (totalMana(working) < req.generic) return { ok: false, reason: `Not enough total mana for ${manaCost || 'this cost'}${tax ? ` plus ${tax} commander tax` : ''}.` };
+  return { ok: true, reason: '' };
+}
+
+function spendMana(pool, manaCost, tax = 0) {
+  const req = manaRequirement(manaCost, tax);
+  const next = { ...pool };
+  for (const color of ['W', 'U', 'B', 'R', 'G', 'C']) next[color] = Math.max(0, next[color] - req[color]);
+  for (const choices of req.flexible) {
+    const available = choices
+      .filter((color) => next[color] > 0)
+      .sort((a, b) => Number(next[b] || 0) - Number(next[a] || 0))[0];
+    if (available) next[available] -= 1;
+  }
+  let generic = req.generic;
+  for (const color of ['C', 'W', 'U', 'B', 'R', 'G']) {
+    const amount = Math.min(next[color], generic);
+    next[color] -= amount;
+    generic -= amount;
+  }
+  return next;
+}
+
+
+function planManaPayment(player, manaCost, tax = 0, options = {}) {
+  const pool = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0, ...(player?.mana || {}) };
+  if (canPayMana(pool, manaCost, tax).ok) {
+    return { ok: true, sources: [], projectedPool: pool, remainingPool: spendMana(pool, manaCost, tax), preservedColors: [] };
+  }
+
+  const preserveColors = [...new Set((options.preserveColors || []).filter((color) => MANA_COLORS.includes(color)))];
+  const sources = untappedManaSources(player)
+    .filter((source) => !(options.excludeSourceIds || []).includes(source.card.instanceId))
+    .map((source) => ({ ...source, choices: source.choices.filter((choice) => !options.spellCard || manaChoiceCanPaySpell(source.card, choice, options.spellCard, options.sourceZone || 'hand')) }))
+    .filter((source) => source.choices.length)
+    .map((source) => ({ ...source, flexibility: source.choices.length, maxAmount: Math.max(...source.choices.map((choice) => manaBundleAmount(choice.mana))) }))
+    .sort((a, b) => (b.maxAmount - a.maxAmount) || (a.flexibility - b.flexibility));
+  const requirement = manaRequirement(manaCost, tax);
+  const costUnits = requirement.generic
+    + MANA_COLORS.reduce((sum, color) => sum + Number(requirement[color] || 0), 0)
+    + Number(requirement.flexible?.length || 0);
+  const shortfall = Math.max(0, costUnits - totalMana(pool));
+  const largestSource = Math.max(1, ...sources.map((source) => source.maxAmount));
+  const minimumSources = Math.max(1, Math.ceil(shortfall / largestSource));
+  const maxNodesPerDepth = Math.max(200, Number(options.maxNodes || 12000));
+  let best = null;
+
+  const addBundle = (poolValue, mana) => {
+    const next = { ...poolValue };
+    for (const color of MANA_COLORS) next[color] = Number(next[color] || 0) + Number(mana?.[color] || 0);
+    return next;
+  };
+
+  const availableColorsAfter = (working, selectedIds) => {
+    const remaining = spendMana(working, manaCost, tax);
+    const colors = new Set(Object.entries(remaining).filter(([, amount]) => Number(amount) > 0).map(([color]) => color));
+    for (const source of sources) {
+      if (selectedIds.has(source.card.instanceId)) continue;
+      for (const choice of source.choices) for (const [color, amount] of Object.entries(choice.mana || {})) if (Number(amount) > 0) colors.add(color);
+    }
+    return { remaining, colors };
+  };
+
+  const consider = (working, selected) => {
+    if (!canPayMana(working, manaCost, tax).ok) return;
+    const selectedIds = new Set(selected.map((item) => item.instanceId));
+    const { remaining, colors } = availableColorsAfter(working, selectedIds);
+    const missingPreserved = preserveColors.filter((color) => !colors.has(color));
+    const flexPenalty = selected.reduce((sum, item) => sum + Math.max(0, Number(item.flexibility || 1) - 1) * 0.45, 0);
+    const utilityPenalty = selected.reduce((sum, item) => {
+      const source = sources.find((candidate) => candidate.card.instanceId === item.instanceId);
+      const text = String(source?.card?.oracleText || '');
+      const nonManaAbility = /(?:^|\n)(?!\{T\}:\s*Add)[^\n.]{0,120}:/.test(text);
+      return sum + (nonManaAbility ? 0.8 : 0);
+    }, 0);
+    const score = missingPreserved.length * 12
+      + flexPenalty
+      + utilityPenalty
+      - totalMana(remaining) * 0.12;
+    if (!best || selected.length < best.sources.length || (selected.length === best.sources.length && score < best.score)) {
+      best = {
+        score,
+        ok: true,
+        sources: selected.map(({ flexibility, ...item }) => ({ ...item })),
+        projectedPool: { ...working },
+        remainingPool: remaining,
+        preservedColors: preserveColors.filter((color) => colors.has(color)),
+      };
+    }
+  };
+
+  // Iterative deepening guarantees that the planner first finds the fewest
+  // physical permanents that must be tapped, then optimizes color preservation.
+  for (let sourceLimit = minimumSources; sourceLimit <= sources.length; sourceLimit += 1) {
+    let nodes = 0;
+    best = null;
+    const dfs = (index, working, selected) => {
+      if (nodes++ >= maxNodesPerDepth) return;
+      if (canPayMana(working, manaCost, tax).ok) {
+        consider(working, selected);
+        return;
+      }
+      if (index >= sources.length || selected.length >= sourceLimit) return;
+      if (selected.length + (sources.length - index) < minimumSources) return;
+
+      const source = sources[index];
+      for (let choiceIndex = 0; choiceIndex < source.choices.length; choiceIndex += 1) {
+        const choice = source.choices[choiceIndex];
+        let paidPool = working;
+        if (choice.activationManaCost) {
+          if (!canPayMana(paidPool, choice.activationManaCost, 0).ok) continue;
+          paidPool = spendMana(paidPool, choice.activationManaCost, 0);
+        }
+        const metadata = manaSourcePaymentCost(source.card, choice);
+        dfs(index + 1, addBundle(paidPool, choice.mana), [...selected, {
+          instanceId: source.card.instanceId,
+          name: source.card.name,
+          choiceIndex,
+          mana: { ...choice.mana },
+          label: choice.label,
+          flexibility: source.flexibility,
+          ...metadata,
+        }]);
+      }
+      dfs(index + 1, working, selected);
+    };
+    dfs(0, pool, []);
+    if (best) return best;
+  }
+
+  return { ok: false, sources: [], projectedPool: pool, remainingPool: pool, preservedColors: [], reason: `The untapped mana sources cannot pay ${manaCost || 'this cost'}${tax ? ` plus ${tax} commander tax` : ''}.` };
+}
+
+
+function requirementClone(req) {
+  return { W: Number(req.W || 0), U: Number(req.U || 0), B: Number(req.B || 0), R: Number(req.R || 0), G: Number(req.G || 0), C: Number(req.C || 0), generic: Number(req.generic || 0), flexible: (req.flexible || []).map((entry) => [...entry]) };
+}
+
+function combineRequirements(...requirements) {
+  const out = requirementClone({});
+  for (const req of requirements) {
+    for (const color of MANA_COLORS) out[color] += Number(req?.[color] || 0);
+    out.generic += Number(req?.generic || 0);
+    out.flexible.push(...(req?.flexible || []).map((entry) => [...entry]));
+  }
+  return out;
+}
+
+function requirementToManaCost(requirement) {
+  const symbols = [];
+  if (Number(requirement?.generic || 0) > 0) symbols.push(`{${Number(requirement.generic)}}`);
+  for (const color of MANA_COLORS) for (let i = 0; i < Number(requirement?.[color] || 0); i += 1) symbols.push(`{${color}}`);
+  for (const choices of requirement?.flexible || []) if (choices.length) symbols.push(`{${choices.join('/')}}`);
+  return symbols.join('');
+}
+
+function spellMatchesCostText(card, text) {
+  const type = String(card?.typeLine || '').toLocaleLowerCase();
+  if (/creature spells?/.test(text) && !type.includes('creature')) return false;
+  if (/artifact spells?/.test(text) && !type.includes('artifact')) return false;
+  if (/enchantment spells?/.test(text) && !type.includes('enchantment')) return false;
+  if (/instant spells?/.test(text) && !type.includes('instant')) return false;
+  if (/sorcery spells?/.test(text) && !type.includes('sorcery')) return false;
+  if (/noncreature spells?/.test(text) && type.includes('creature')) return false;
+  return true;
+}
+
+function genericCostModifierFromText(text, card, direction = 'less') {
+  let total = 0;
+  const normalized = String(text || '').replace(/\n/g, ' ');
+  const re = direction === 'less'
+    ? /(?:spells|creature spells|artifact spells|enchantment spells|instant spells|sorcery spells|noncreature spells) you cast cost \{(\d+)\} less/gi
+    : /(?:spells|creature spells|artifact spells|enchantment spells|instant spells|sorcery spells|noncreature spells) (?:your opponents|opponents) cast cost \{(\d+)\} more/gi;
+  for (const match of normalized.matchAll(re)) {
+    const phrase = match[0].toLocaleLowerCase();
+    if (spellMatchesCostText(card, phrase)) total += Number(match[1] || 0);
+  }
+  return total;
+}
+
+function additionalCostPlan(player, card) {
+  const text = String(card?.oracleText || '').replace(/\n/g, ' ');
+  const result = { life: 0, sacrifices: [], discards: [], errors: [] };
+  const life = text.match(/as an additional cost to cast this spell,? pay (\d+) life/i);
+  if (life) {
+    result.life = Number(life[1]);
+    if (Number(player?.life || 0) <= result.life) result.errors.push(`Paying ${result.life} life would leave no life available.`);
+  }
+  if (/as an additional cost to cast this spell,? discard a card/i.test(text)) {
+    const candidate = [...(player?.zones?.hand || [])]
+      .filter((item) => item.instanceId !== card.instanceId)
+      .sort((a, b) => Number(a.manaValue || 0) - Number(b.manaValue || 0))[0];
+    if (candidate) result.discards.push(candidate.instanceId);
+    else result.errors.push('An additional card must be discarded.');
+  }
+  const sacrificeCreature = /as an additional cost to cast this spell,? sacrifice a creature/i.test(text);
+  const sacrificePermanent = /as an additional cost to cast this spell,? sacrifice a permanent/i.test(text);
+  if (sacrificeCreature || sacrificePermanent) {
+    const candidates = (player?.zones?.battlefield || [])
+      .filter((item) => sacrificePermanent || isCreature(item))
+      .sort((a, b) => (a.commander === b.commander ? 0 : a.commander ? 1 : -1) || (a.token === b.token ? 0 : a.token ? -1 : 1) || Number(a.manaValue || 0) - Number(b.manaValue || 0));
+    if (candidates[0]) result.sacrifices.push(candidates[0].instanceId);
+    else result.errors.push(`An additional ${sacrificeCreature ? 'creature' : 'permanent'} must be sacrificed.`);
+  }
+  return result;
+}
+
+function kickerCost(card) {
+  const match = String(card?.oracleText || '').match(/(?:multi)?kicker\s+(\{[^\n.]+?\})/i);
+  return match?.[1]?.replace(/\}\s*\{/g, '}{') || '';
+}
+
+function buildCostPlan(state, playerId, card, sourceZone = 'hand', options = {}) {
+  const player = state.players[playerId];
+  const baseManaCost = options.alternativeManaCost || card.manaCost || '';
+  const commanderTax = sourceZone === 'command' ? 2 * Number(player?.commanderCastCount?.[card.instanceId] || 0) : 0;
+  const optionalMana = options.additionalManaCost || (options.kicked ? kickerCost(card) : '');
+  const chosenX = Math.max(0, Math.floor(Number(options.xValue ?? card.castXValue ?? 0)));
+  const base = combineRequirements(manaRequirement(baseManaCost, 0, chosenX), manaRequirement(optionalMana, 0, chosenX));
+  let reductions = 0;
+  let increases = commanderTax;
+  for (const permanent of player?.zones?.battlefield || []) reductions += genericCostModifierFromText(permanent.oracleText, card, 'less');
+  for (const [opponentId, opponent] of Object.entries(state.players || {})) {
+    if (opponentId === playerId) continue;
+    for (const permanent of opponent?.zones?.battlefield || []) increases += genericCostModifierFromText(permanent.oracleText, card, 'more');
+  }
+  const finalRequirement = requirementClone(base);
+  finalRequirement.generic = Math.max(0, finalRequirement.generic + increases - reductions);
+  const additional = additionalCostPlan(player, card);
+  return {
+    baseManaCost,
+    optionalMana,
+    xValue: chosenX,
+    commanderTax,
+    increases,
+    reductions,
+    finalRequirement,
+    finalManaCost: requirementToManaCost(finalRequirement),
+    displayCost: requirementToManaCost(finalRequirement) || 'no mana',
+    additional,
+    mechanics: {
+      convoke: /\bconvoke\b/i.test(card.oracleText || '') || [...(card.keywords || []), ...(card.manualKeywords || [])].some((value) => /^convoke$/i.test(value)),
+      delve: /\bdelve\b/i.test(card.oracleText || '') || [...(card.keywords || []), ...(card.manualKeywords || [])].some((value) => /^delve$/i.test(value)),
+      improvise: /\bimprovise\b/i.test(card.oracleText || '') || [...(card.keywords || []), ...(card.manualKeywords || [])].some((value) => /^improvise$/i.test(value)),
+      kicker: kickerCost(card),
+    },
+  };
+}
+
+function manaChoiceCanPaySpell(source, choice, spell, sourceZone = 'hand') {
+  const type = String(spell?.typeLine || '').toLocaleLowerCase();
+  const restrictions = new Set(choice?.restrictions || []);
+  if (restrictions.has('abilities-only')) return false;
+  if (restrictions.has('creature-spells-only') && !type.includes('creature')) return false;
+  if (restrictions.has('artifact-spells-only') && !type.includes('artifact')) return false;
+  if (restrictions.has('enchantment-spells-only') && !type.includes('enchantment')) return false;
+  if (restrictions.has('instant-sorcery-only') && !(type.includes('instant') || type.includes('sorcery'))) return false;
+  if (restrictions.has('colorless-spells-only') && (spell?.colors || []).length) return false;
+  if (restrictions.has('commander-only') && !spell?.commander) return false;
+  if (restrictions.has('graveyard-spells-only') && sourceZone !== 'graveyard') return false;
+  return true;
+}
+
+function manaSourcePaymentCost(source, choice = {}) {
+  const text = String(source?.oracleText || '');
+  return {
+    sacrificeSource: Boolean(choice.sacrificeSource) || (/sacrifice (?:this artifact|this permanent|~|treasure|clue|food|this land)/i.test(text) && /add\s+\{/i.test(text)),
+    lifeCost: Number(choice.lifeCost || text.match(/pay (\d+) life[^:]*:\s*add/i)?.[1] || 0),
+    activationManaCost: choice.activationManaCost || '',
+    discardCost: Boolean(choice.discardCost),
+    restrictions: [...(choice.restrictions || [])],
+  };
+}
+
+function specialPaymentCandidates(player, card, costPlan) {
+  const generic = Number(costPlan.finalRequirement.generic || 0);
+  const colored = MANA_COLORS.reduce((sum, color) => sum + Number(costPlan.finalRequirement[color] || 0), 0) + Number(costPlan.finalRequirement.flexible?.length || 0);
+  const candidates = [];
+  if (costPlan.mechanics.convoke) {
+    const creatures = (player?.zones?.battlefield || [])
+      .filter((item) => isCreature(item) && !item.tapped)
+      .sort((a, b) => (a.commander === b.commander ? 0 : a.commander ? 1 : -1) || (a.token === b.token ? 0 : a.token ? -1 : 1) || Number(a.manaValue || 0) - Number(b.manaValue || 0));
+    candidates.push(...creatures.slice(0, generic + colored).map((item) => ({ kind: 'convoke', instanceId: item.instanceId, colors: [...(item.colors || [])], opportunity: item.commander ? 4 : item.token ? 0.25 : 0.7 + Number(item.manaValue || 0) * 0.18 })));
+  }
+  if (costPlan.mechanics.improvise) {
+    const artifacts = (player?.zones?.battlefield || [])
+      .filter((item) => /Artifact/.test(item.typeLine || '') && !item.tapped)
+      .sort((a, b) => Number(a.manaValue || 0) - Number(b.manaValue || 0));
+    candidates.push(...artifacts.slice(0, generic).map((item) => ({ kind: 'improvise', instanceId: item.instanceId, opportunity: item.token ? 0.2 : 0.55 + Number(item.manaValue || 0) * 0.12 })));
+  }
+  if (costPlan.mechanics.delve) {
+    const grave = [...(player?.zones?.graveyard || [])]
+      .sort((a, b) => (/flashback|escape|unearth|from your graveyard/i.test(a.oracleText || '') ? 1 : 0) - (/flashback|escape|unearth|from your graveyard/i.test(b.oracleText || '') ? 1 : 0) || Number(a.manaValue || 0) - Number(b.manaValue || 0));
+    candidates.push(...grave.slice(0, generic).map((item) => ({ kind: 'delve', instanceId: item.instanceId, opportunity: /flashback|escape|unearth|from your graveyard/i.test(item.oracleText || '') ? 2.2 : 0.28 })));
+  }
+  return candidates.sort((a, b) => a.opportunity - b.opportunity);
+}
+
+function applySpecialPaymentResources(requirement, resources) {
+  const req = requirementClone(requirement);
+  const used = [];
+  for (const resource of resources) {
+    let paid = false;
+    if (resource.kind === 'convoke') {
+      const color = (resource.colors || []).find((candidate) => Number(req[candidate] || 0) > 0);
+      if (color) { req[color] -= 1; paid = true; }
+      if (!paid) {
+        const flexIndex = (req.flexible || []).findIndex((choices) => choices.some((candidate) => (resource.colors || []).includes(candidate)));
+        if (flexIndex >= 0) { req.flexible.splice(flexIndex, 1); paid = true; }
+      }
+    }
+    if (!paid && Number(req.generic || 0) > 0) { req.generic -= 1; paid = true; }
+    if (paid) used.push(resource);
+  }
+  return { requirement: req, used };
+}
+
+function planSpellPayment(state, playerId, card, sourceZone = 'hand', options = {}) {
+  const player = state.players[playerId];
+  const costPlan = options.costPlan || buildCostPlan(state, playerId, card, sourceZone, options);
+  if (costPlan.additional.errors.length) return { ok: false, reason: costPlan.additional.errors.join(' '), costPlan };
+  const preserveColors = options.preserveColors || strategicPaymentColors(player, card.instanceId);
+  const candidates = specialPaymentCandidates(player, card, costPlan);
+  const maxSpecial = candidates.length;
+  let best = null;
+  for (let count = 0; count <= maxSpecial; count += 1) {
+    const candidateResources = candidates.slice(0, count);
+    const special = applySpecialPaymentResources(costPlan.finalRequirement, candidateResources);
+    const resources = special.used;
+    const adjustedCost = requirementToManaCost(special.requirement);
+    const manaPlan = planManaPayment(player, adjustedCost, 0, { preserveColors, spellCard: card, sourceZone, excludeSourceIds: resources.map((item) => item.instanceId), maxNodes: options.maxNodes });
+    if (!manaPlan.ok) continue;
+    const opportunity = resources.reduce((sum, item) => sum + item.opportunity, 0)
+      + (manaPlan.sources || []).reduce((sum, item) => sum + Number(item.lifeCost || 0) * 0.45 + (item.sacrificeSource ? 1.15 : 0), 0);
+    const score = opportunity + (manaPlan.sources?.length || 0) * 0.08;
+    if (!best || score < best.score) {
+      best = {
+        ...manaPlan,
+        score,
+        costPlan,
+        finalManaCost: adjustedCost,
+        convoke: resources.filter((item) => item.kind === 'convoke').map((item) => item.instanceId),
+        improvise: resources.filter((item) => item.kind === 'improvise').map((item) => item.instanceId),
+        delve: resources.filter((item) => item.kind === 'delve').map((item) => item.instanceId),
+        sacrifices: [...costPlan.additional.sacrifices],
+        discards: [...costPlan.additional.discards],
+        lifePaid: Number(costPlan.additional.life || 0) + (manaPlan.sources || []).reduce((sum, item) => sum + Number(item.lifeCost || 0), 0),
+      };
+    }
+  }
+  return best || { ok: false, reason: `The visible resources cannot pay ${costPlan.displayCost}.`, costPlan, sources: [] };
+}
+
+function findBattlefieldCard(draft, instanceId) {
+  for (const player of Object.values(draft.players || {})) {
+    const card = (player.zones?.battlefield || []).find((item) => item.instanceId === instanceId);
+    if (card) return { player, card };
+  }
+  return null;
+}
+
+function applySpellPayment(draft, playerId, payment) {
+  if (!payment?.ok) return false;
+  const player = draft.players[playerId];
+  for (const item of payment.sources || []) {
+    const found = findBattlefieldCard(draft, item.instanceId);
+    if (!found || found.card.tapped) continue;
+    if (item.activationManaCost) player.mana = spendMana(player.mana, item.activationManaCost, 0);
+    found.card.tapped = true;
+    for (const color of MANA_COLORS) player.mana[color] = Number(player.mana[color] || 0) + Number(item.mana?.[color] || 0);
+    if (item.discardCost && player.zones.hand.length) player.zones.graveyard.push(player.zones.hand.shift());
+    if (item.sacrificeSource) {
+      const index = found.player.zones.battlefield.findIndex((card) => card.instanceId === item.instanceId);
+      const [sacrificed] = found.player.zones.battlefield.splice(index, 1);
+      found.player.zones.graveyard.push(sacrificed);
+    }
+  }
+  for (const id of [...(payment.convoke || []), ...(payment.improvise || [])]) {
+    const found = findBattlefieldCard(draft, id);
+    if (found) found.card.tapped = true;
+  }
+  for (const id of payment.delve || []) {
+    const index = player.zones.graveyard.findIndex((card) => card.instanceId === id);
+    if (index >= 0) player.zones.exile.push(player.zones.graveyard.splice(index, 1)[0]);
+  }
+  for (const id of payment.sacrifices || []) {
+    const index = player.zones.battlefield.findIndex((card) => card.instanceId === id);
+    if (index >= 0) player.zones.graveyard.push(player.zones.battlefield.splice(index, 1)[0]);
+  }
+  for (const id of payment.discards || []) {
+    const index = player.zones.hand.findIndex((card) => card.instanceId === id);
+    if (index >= 0) player.zones.graveyard.push(player.zones.hand.splice(index, 1)[0]);
+  }
+  player.life -= Number(payment.lifePaid || 0);
+  player.mana = spendMana(player.mana, payment.finalManaCost || payment.costPlan?.finalManaCost || '', 0);
+  return true;
+}
+
+function battlefieldGrantsKeyword(state, card, keyword) {
+  const player = state.players[card.controller];
+  if (!player) return false;
+  const needle = keyword.toLocaleLowerCase();
+  return (player.zones.battlefield || []).some((source) => {
+    if (source.instanceId === card.instanceId) return false;
+    const text = String(source.oracleText || '').toLocaleLowerCase();
+    if (new RegExp(`creatures you control have ${needle}`).test(text)) return true;
+    const subtype = String(card.typeLine || '').split('—')[1] || '';
+    const tribal = text.match(new RegExp(`other ([a-z -]+) creatures you control have ${needle}`));
+    return Boolean(tribal && subtype.toLocaleLowerCase().includes(tribal[1].trim()));
+  });
+}
+
+function attackLegality(state, card) {
+  const reasons = [];
+  const rules = analyzeCardRules(card);
+  if (!isCreature(card)) reasons.push('Only creatures can attack.');
+  if (card.tapped) reasons.push('Tapped creatures cannot attack.');
+  const hasHaste = rules.haste || battlefieldGrantsKeyword(state, card, 'haste');
+  if (card.summoningSick && !hasHaste) reasons.push('This creature has summoning sickness and does not have haste.');
+  if (rules.defender && !/can attack as though it didn't have defender/i.test(rules.text)) reasons.push('A creature with defender cannot attack.');
+  if (rules.combatRestrictions.cannotAttack) reasons.push('This creature has an effect saying it cannot attack.');
+  if (Number(card.counters?.stun || 0) > 0 && card.tapped) reasons.push('A tapped creature with a stun counter cannot attack.');
+  if (card.controller !== state.activePlayerId) reasons.push('Only the active player declares attackers.');
+  if (PHASES[state.phaseIndex].id !== 'combat') reasons.push('Attackers are normally declared during combat.');
+  return { legal: reasons.length === 0, reasons };
+}
+
+function attackGroupLegality(state, cardIds = []) {
+  const reasons = [];
+  const cards = cardIds.map((id) => Object.values(state.players).flatMap((player) => player.zones.battlefield || []).find((card) => card.instanceId === id)).filter(Boolean);
+  for (const card of cards) reasons.push(...attackLegality(state, card).reasons.map((reason) => `${card.name}: ${reason}`));
+  if (cards.length === 1 && analyzeCardRules(cards[0]).combatRestrictions.attacksAloneRestriction) reasons.push(`${cards[0].name} can't attack alone.`);
+  return { legal: reasons.length === 0, reasons: [...new Set(reasons)] };
+}
+
+function recognizedEffects(card) {
+  const rules = analyzeCardRules(card);
+  const effects = [];
+  if (rules.effectTags.draw) effects.push('Draw cards');
+  if (rules.effectTags.discard) effects.push('Discard');
+  if (rules.effectTags.targetedRemoval) effects.push('Targeted interaction');
+  if (rules.effectTags.boardWipe) effects.push('Board wipe');
+  if (rules.effectTags.tokenMaker) effects.push('Creates tokens');
+  if (rules.effectTags.tutor || rules.effectTags.ramp) effects.push('Searches library');
+  if (rules.effectTags.mill) effects.push('Mills cards');
+  if (rules.effectTags.counterspell) effects.push('Counters a spell or ability');
+  if (rules.effectTags.recursion) effects.push('Graveyard recursion');
+  if (rules.effectTags.blink) effects.push('Blink effect');
+  if (rules.effectTags.copy) effects.push('Copy effect');
+  if (rules.enterTrigger || rules.attackTrigger || rules.combatDamageTrigger || rules.upkeepTrigger || rules.endStepTrigger) effects.push('Triggered ability');
+  if (rules.activatedAbilities.length) effects.push('Activated ability');
+  return [...new Set(effects)];
+}
+
+function stackDestination(card) {
+  return isPermanent(card) ? 'battlefield' : 'graveyard';
+}
+
+
+const HAND_SIZE_WORDS = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5,
+  six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  eleven: 11, twelve: 12, thirteen: 13, fourteen: 14,
+  fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18,
+  nineteen: 19, twenty: 20,
+};
+
+function handSizeNumber(value) {
+  const clean = String(value || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+  if (/^\d+$/.test(clean)) return Number(clean);
+  return HAND_SIZE_WORDS[clean] ?? null;
+}
+
+function handSizeChangesFromText(text, relation = 'self') {
+  const clean = String(text || '').replace(/[’]/g, "'");
+  const result = { unlimited: false, exact: null, delta: 0, manual: false, reasons: [] };
+  const selfPrefix = relation === 'self' ? '(?:you have|your)' : "(?:each opponent(?:'s)?|your opponents?(?:'|’)s?)";
+  if (relation === 'self' && /you have no maximum hand size/i.test(clean)) {
+    result.unlimited = true;
+    result.reasons.push('No maximum hand size');
+  }
+  if (relation === 'opponent' && /(?:each opponent|your opponents?) (?:has|have) no maximum hand size/i.test(clean)) {
+    result.unlimited = true;
+    result.reasons.push('Opponent effect grants no maximum hand size');
+  }
+  const exact = clean.match(new RegExp(`${selfPrefix} maximum hand size is (?!increased|reduced|equal)([a-z0-9-]+)`, 'i'));
+  if (exact) {
+    const value = handSizeNumber(exact[1]);
+    if (value == null) result.manual = true;
+    else { result.exact = value; result.reasons.push(`Maximum hand size becomes ${value}`); }
+  }
+  const increase = clean.match(new RegExp(`${selfPrefix} maximum hand size is increased by ([a-z0-9-]+)`, 'i'));
+  if (increase) {
+    const value = handSizeNumber(increase[1]);
+    if (value == null) result.manual = true;
+    else { result.delta += value; result.reasons.push(`Maximum hand size +${value}`); }
+  }
+  const reduce = clean.match(new RegExp(`${selfPrefix} maximum hand size is reduced by ([a-z0-9-]+)`, 'i'));
+  if (reduce) {
+    const value = handSizeNumber(reduce[1]);
+    if (value == null) result.manual = true;
+    else { result.delta -= value; result.reasons.push(`Maximum hand size -${value}`); }
+  }
+  if (/maximum hand size is equal to/i.test(clean)) result.manual = true;
+  return result;
+}
+
+function maximumHandSize(state, playerId) {
+  let value = 7;
+  let unlimited = false;
+  let manual = false;
+  const reasons = [];
+  const player = state.players[playerId];
+  if (!player) return { value: 7, label: '7', unlimited: false, manual: false, reasons: [] };
+
+  for (const card of player.zones.battlefield || []) {
+    const change = handSizeChangesFromText(card.oracleText, 'self');
+    if (change.unlimited) unlimited = true;
+    if (change.exact != null) value = change.exact;
+    value += change.delta;
+    manual ||= change.manual;
+    reasons.push(...change.reasons.map((reason) => `${card.name}: ${reason}`));
+  }
+  for (const opponent of Object.values(state.players).filter((item) => item.id !== playerId)) {
+    for (const card of opponent.zones.battlefield || []) {
+      const change = handSizeChangesFromText(card.oracleText, 'opponent');
+      if (change.unlimited) unlimited = true;
+      if (change.exact != null) value = change.exact;
+      value += change.delta;
+      manual ||= change.manual;
+      reasons.push(...change.reasons.map((reason) => `${card.name}: ${reason}`));
+    }
+  }
+  value = Math.max(0, value);
+  return {
+    value: unlimited ? Infinity : value,
+    label: unlimited ? '∞' : `${value}${manual ? '*' : ''}`,
+    unlimited,
+    manual,
+    reasons,
+  };
+}
+
+
+return { validateDeck, commanderCandidates, landEntryPlan, manaDevelopmentSnapshot, strategicPaymentColors, landPlayAllowance, landPlayLegality, spellCastLegality, moveLegality, canPayMana, spendMana, planManaPayment, requirementToManaCost, buildCostPlan, planSpellPayment, applySpellPayment, attackLegality, attackGroupLegality, recognizedEffects, stackDestination, maximumHandSize };
+})();
+
+// ---- knowledge.js ----
+__modules["./knowledge.js"] = (() => {
+const { PHASES } = __modules["./constants.js"];
+const { cardTraits, publicCardSnapshot } = __modules["./card-evaluation.js"];
+const { manaProductionChoices, uid } = __modules["./utils.js"];
+
+function createKnowledgePlayer() {
+  return {
+    knownHand: {},
+    knownLibraryTop: [],
+    knownLibraryBottom: [],
+    observedCards: {},
+    usedInteraction: {
+      removal: 0,
+      counterspell: 0,
+      combatTrick: 0,
+      protection: 0,
+      boardWipe: 0,
+      graveyardInteraction: 0,
+      flashThreat: 0,
+    },
+    behavior: {
+      passesWithOpenMana: 0,
+      consecutivePassesWithOpenMana: 0,
+      openManaHistory: [],
+      attacks: [],
+      blocks: [],
+      spellsCast: 0,
+      landsPlayed: 0,
+      cardsHeldAcrossTurns: 0,
+      lastEndingHandSize: null,
+      meaningfulDecisions: [],
+    },
+  };
+}
+
+function createKnowledgeState(playerIds = ['p1', 'p2']) {
+  return {
+    events: [],
+    players: Object.fromEntries(playerIds.map((id) => [id, createKnowledgePlayer()])),
+  };
+}
+
+function ensureKnowledge(draft) {
+  draft.knowledge ||= createKnowledgeState(Object.keys(draft.players || {}));
+  draft.knowledge.events ||= [];
+  draft.knowledge.players ||= {};
+  for (const playerId of Object.keys(draft.players || {})) {
+    const existing = draft.knowledge.players[playerId] || {};
+    const fresh = createKnowledgePlayer();
+    draft.knowledge.players[playerId] = {
+      ...fresh,
+      ...existing,
+      knownHand: { ...fresh.knownHand, ...(existing.knownHand || {}) },
+      observedCards: { ...fresh.observedCards, ...(existing.observedCards || {}) },
+      usedInteraction: { ...fresh.usedInteraction, ...(existing.usedInteraction || {}) },
+      behavior: { ...fresh.behavior, ...(existing.behavior || {}) },
+    };
+  }
+  return draft.knowledge;
+}
+
+function observedKey(card) {
+  return card?.oracleId || card?.scryfallId || String(card?.name || '').toLocaleLowerCase();
+}
+
+function rememberObserved(playerMemory, card, zone, turn) {
+  if (!card?.name) return;
+  const key = observedKey(card);
+  const prior = playerMemory.observedCards[key] || {
+    card: publicCardSnapshot(card),
+    seenCount: 0,
+    zones: {},
+    firstSeenTurn: turn,
+    lastSeenTurn: turn,
+  };
+  prior.card = publicCardSnapshot(card);
+  prior.seenCount += 1;
+  prior.zones[zone || 'unknown'] = Number(prior.zones[zone || 'unknown'] || 0) + 1;
+  prior.lastSeenTurn = turn;
+  playerMemory.observedCards[key] = prior;
+}
+
+function removeKnownHand(playerMemory, instanceId, cardName = '') {
+  if (instanceId && playerMemory.knownHand[instanceId]) delete playerMemory.knownHand[instanceId];
+  if (!instanceId && cardName) {
+    const entry = Object.entries(playerMemory.knownHand).find(([, known]) => known.card?.name === cardName);
+    if (entry) delete playerMemory.knownHand[entry[0]];
+  }
+}
+
+function addKnownHand(playerMemory, card, event) {
+  if (!card?.instanceId) return;
+  playerMemory.knownHand[card.instanceId] = {
+    card: publicCardSnapshot(card),
+    sinceTurn: event.turn,
+    reason: event.type,
+    confidence: 1,
+  };
+}
+
+function recordPublicEvent(draft, event) {
+  const knowledge = ensureKnowledge(draft);
+  const normalized = {
+    id: event.id || uid('public'),
+    time: event.time || new Date().toISOString(),
+    turn: Number(event.turn ?? draft.turnNumber ?? 1),
+    phase: event.phase || PHASES[draft.phaseIndex || 0]?.id || 'unknown',
+    public: event.public !== false,
+    ...event,
+    card: event.card ? publicCardSnapshot(event.card) : null,
+  };
+  if (!normalized.public) return normalized;
+  knowledge.events.unshift(normalized);
+  if (knowledge.events.length > 800) knowledge.events.length = 800;
+
+  const subjectId = event.subjectPlayerId || event.playerId || event.actorId || event.card?.owner;
+  const memory = subjectId ? knowledge.players[subjectId] : null;
+  if (memory && normalized.card) rememberObserved(memory, normalized.card, event.toZone || event.zone || event.fromZone, normalized.turn);
+
+  if (memory) {
+    const card = normalized.card;
+    if (['returned_to_hand', 'revealed_in_hand', 'draw_known'].includes(normalized.type)) addKnownHand(memory, card, normalized);
+    if (['cast', 'played', 'discarded', 'exiled', 'countered', 'library_top', 'library_bottom', 'shuffled_away'].includes(normalized.type)) {
+      removeKnownHand(memory, card?.instanceId, card?.name);
+    }
+    if (normalized.type === 'revealed' && normalized.zone === 'hand') addKnownHand(memory, card, normalized);
+    if (normalized.type === 'library_top') {
+      memory.knownLibraryTop = [{ card, turn: normalized.turn, reason: normalized.type }];
+    }
+    if (normalized.type === 'library_bottom') {
+      memory.knownLibraryBottom.push({ card, turn: normalized.turn, reason: normalized.type });
+      if (memory.knownLibraryBottom.length > 12) memory.knownLibraryBottom.shift();
+    }
+    if (normalized.type === 'shuffled') {
+      memory.knownLibraryTop = [];
+      memory.knownLibraryBottom = [];
+    }
+    if (normalized.type === 'cast' && card) {
+      const traits = cardTraits(card);
+      for (const category of traits.interactionCategories) {
+        memory.usedInteraction[category] = Number(memory.usedInteraction[category] || 0) + 1;
+      }
+      if (normalized.type === 'cast') memory.behavior.spellsCast += 1;
+    }
+    if (normalized.type === 'played' && /Land/.test(card?.typeLine || '')) memory.behavior.landsPlayed += 1;
+    if (normalized.type === 'attack') {
+      memory.behavior.attacks.push({ turn: normalized.turn, cards: normalized.cards || (card ? [card] : []) });
+      if (memory.behavior.attacks.length > 60) memory.behavior.attacks.shift();
+    }
+    if (normalized.type === 'block') {
+      memory.behavior.blocks.push({ turn: normalized.turn, blocker: card, attacker: normalized.targetCard || null });
+      if (memory.behavior.blocks.length > 60) memory.behavior.blocks.shift();
+    }
+    if (normalized.meaningful) {
+      memory.behavior.meaningfulDecisions.push({ turn: normalized.turn, type: normalized.type, text: normalized.text || '' });
+      if (memory.behavior.meaningfulDecisions.length > 100) memory.behavior.meaningfulDecisions.shift();
+    }
+  }
+  return normalized;
+}
+
+function recordZoneTransition(draft, { card, actorId, subjectPlayerId, fromZone, toZone, libraryPosition = 'top', castAttempt = false }) {
+  let type = 'zone_move';
+  if (castAttempt) type = 'cast';
+  else if (fromZone === 'hand' && toZone === 'battlefield' && /Land/.test(card?.typeLine || '')) type = 'played';
+  else if (fromZone === 'library' && toZone === 'graveyard') type = 'milled';
+  else if (fromZone === 'hand' && toZone === 'graveyard') type = 'discarded';
+  else if (toZone === 'exile') type = 'exiled';
+  else if (toZone === 'hand' && fromZone !== 'library') type = 'returned_to_hand';
+  else if (fromZone === 'battlefield' && toZone === 'graveyard') type = 'destroyed_or_died';
+  else if (toZone === 'library') type = libraryPosition === 'bottom' ? 'library_bottom' : 'library_top';
+  return recordPublicEvent(draft, {
+    type,
+    actorId,
+    subjectPlayerId,
+    card,
+    fromZone,
+    toZone,
+    position: toZone === 'library' ? libraryPosition : undefined,
+    meaningful: ['cast', 'played', 'discarded', 'milled', 'exiled', 'returned_to_hand', 'destroyed_or_died'].includes(type),
+  });
+}
+
+function visibleManaSnapshot(player) {
+  const colors = new Set();
+  let total = Object.values(player?.mana || {}).reduce((sum, amount) => sum + Number(amount || 0), 0);
+  for (const [color, amount] of Object.entries(player?.mana || {})) if (Number(amount || 0) > 0) colors.add(color);
+  for (const card of player?.zones?.battlefield || []) {
+    if (card.tapped) continue;
+    const choices = manaProductionChoices(card, { player });
+    const best = choices.map((choice) => Object.values(choice.mana).reduce((sum, amount) => sum + Number(amount || 0), 0)).sort((a, b) => b - a)[0] || 0;
+    total += best;
+    for (const choice of choices) for (const [color, amount] of Object.entries(choice.mana || {})) if (Number(amount || 0) > 0) colors.add(color);
+  }
+  return { total, colors: [...colors] };
+}
+
+function recordTurnPass(draft, playerId) {
+  const knowledge = ensureKnowledge(draft);
+  const player = draft.players[playerId];
+  const memory = knowledge.players[playerId];
+  const mana = visibleManaSnapshot(player);
+  const handSize = player.zones.hand.length;
+  const passedOpen = mana.total > 0 && handSize > 0;
+  if (passedOpen) {
+    memory.behavior.passesWithOpenMana += 1;
+    memory.behavior.consecutivePassesWithOpenMana += 1;
+  } else {
+    memory.behavior.consecutivePassesWithOpenMana = 0;
+  }
+  if (memory.behavior.lastEndingHandSize === handSize && handSize > 0) memory.behavior.cardsHeldAcrossTurns += 1;
+  memory.behavior.lastEndingHandSize = handSize;
+  memory.behavior.openManaHistory.push({
+    turn: draft.turnNumber,
+    total: mana.total,
+    colors: mana.colors,
+    handSize,
+  });
+  if (memory.behavior.openManaHistory.length > 40) memory.behavior.openManaHistory.shift();
+  recordPublicEvent(draft, {
+    type: 'turn_pass',
+    actorId: playerId,
+    subjectPlayerId: playerId,
+    openMana: mana,
+    handSize,
+    meaningful: passedOpen,
+    text: passedOpen ? `${player.name} passed with ${mana.total} mana available and ${handSize} cards.` : `${player.name} passed the turn.`,
+  });
+}
+
+function knownHandCards(state, playerId) {
+  ensureKnowledge(state);
+  return Object.values(state.knowledge.players[playerId]?.knownHand || {}).map((entry) => entry.card).filter(Boolean);
+}
+
+function publicMemorySummary(state, observerId, opponentId) {
+  ensureKnowledge(state);
+  const memory = state.knowledge.players[opponentId] || createKnowledgePlayer();
+  const known = Object.values(memory.knownHand || {}).map((entry) => entry.card?.name).filter(Boolean);
+  const used = Object.entries(memory.usedInteraction || {}).filter(([, count]) => Number(count) > 0);
+  const recent = (state.knowledge.events || [])
+    .filter((event) => event.subjectPlayerId === opponentId || event.actorId === opponentId)
+    .slice(0, 12);
+  return {
+    observerId,
+    opponentId,
+    knownHand: known,
+    usedInteraction: Object.fromEntries(used),
+    behavior: memory.behavior,
+    recent,
+  };
+}
+
+
+return { createKnowledgePlayer, createKnowledgeState, ensureKnowledge, recordPublicEvent, recordZoneTransition, visibleManaSnapshot, recordTurnPass, knownHandCards, publicMemorySummary };
+})();
+
+// ---- strategy-profile.js ----
+__modules["./strategy-profile.js"] = (() => {
+const { cardTraits } = __modules["./card-evaluation.js"];
+const { isCreature, isLand } = __modules["./utils.js"];
+
+const ARCHETYPES = [
+  'evasive', 'ninjutsu', 'graveyard', 'zombies', 'tokens', 'sacrifice',
+  'artifacts', 'equipment', 'spellslinger', 'counters', 'lifegain',
+  'ramp', 'control', 'goWide', 'voltron', 'reanimator',
+];
+
+function blankScores() {
+  return Object.fromEntries(ARCHETYPES.map((name) => [name, 0]));
+}
+
+function textOf(card) {
+  return `${card?.name || ''}\n${card?.typeLine || ''}\n${card?.oracleText || ''}`.toLocaleLowerCase();
+}
+
+function addCardSignals(scores, card, weight = 1) {
+  const text = textOf(card);
+  const traits = cardTraits(card);
+  if (/ninjutsu|ninja/.test(text)) { scores.ninjutsu += 3.4 * weight; scores.evasive += 0.75 * weight; }
+  if (/can't be blocked|unblockable|flying|menace|shadow|fear|skulk/.test(text)) scores.evasive += 1.35 * weight;
+  if (/graveyard|mill|dies|died|discard/.test(text)) scores.graveyard += 1.05 * weight;
+  if (/zombie/.test(text)) scores.zombies += 1.65 * weight;
+  if (/return .*graveyard|reanimate|from your graveyard to the battlefield|put .* from .*graveyard onto the battlefield/.test(text)) scores.reanimator += 2.1 * weight;
+  if (traits.tokenMaker || /create .* token/.test(text)) scores.tokens += 1.7 * weight;
+  if (traits.sacrificeValue || /sacrifice/.test(text)) scores.sacrifice += 1.45 * weight;
+  if (/artifact/.test(card?.typeLine || '') || /artifact/.test(text)) scores.artifacts += 0.8 * weight;
+  if (traits.equipment || /equipped creature|equip /.test(text)) scores.equipment += 1.8 * weight;
+  if (/instant|sorcery/.test(card?.typeLine || '') || /whenever you cast (?:an instant|an instant or sorcery|a noncreature spell)/.test(text)) scores.spellslinger += 0.72 * weight;
+  if (/\+1\/\+1 counter|proliferate|counter on/.test(text)) scores.counters += 1.25 * weight;
+  if (/gain life|lifelink|life total/.test(text)) scores.lifegain += 1.05 * weight;
+  if (isLand(card) || /add \{|search your library for .* land|additional land/.test(text)) scores.ramp += 0.55 * weight;
+  if (traits.counterspell || traits.targetedRemoval || traits.boardWipe || /players can't|opponents can't/.test(text)) scores.control += 1.15 * weight;
+  if (traits.anthem.power || traits.anthem.toughness || /creatures you control get|for each creature you control/.test(text)) scores.goWide += 1.15 * weight;
+  if (traits.equipment || traits.aura || /commander you control|target creature gets/.test(text)) scores.voltron += 0.72 * weight;
+  if (isCreature(card) && Number(card?.manaValue || 0) >= 6 && (/graveyard|ninjutsu|put .* onto the battlefield/.test(text))) scores.reanimator += 0.9 * weight;
+}
+
+function buildStrategyProfile(player) {
+  const scores = blankScores();
+  const commanders = [
+    ...(player?.zones?.command || []),
+    ...(player?.zones?.battlefield || []).filter((card) => card.commander),
+  ];
+  for (const commander of commanders) addCardSignals(scores, commander, 3.2);
+  for (const zone of ['battlefield', 'graveyard', 'exile']) {
+    for (const card of player?.zones?.[zone] || []) addCardSignals(scores, card, zone === 'battlefield' ? 0.9 : 0.42);
+  }
+  // A player is allowed to know their own decklist. Including the library at a
+  // low weight lets the bot understand a totally custom deck before drawing
+  // the key cards, without leaking any opponent library identities.
+  for (const card of player?.zones?.library || []) addCardSignals(scores, card, 0.16);
+  for (const card of player?.zones?.hand || []) addCardSignals(scores, card, 0.33);
+
+  const ranked = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+  const primary = ranked[0]?.[1] > 1 ? ranked[0][0] : 'midrange';
+  const secondary = ranked[1]?.[1] > 1.25 ? ranked[1][0] : null;
+  return { scores, primary, secondary, commanders: commanders.map((card) => card.name) };
+}
+
+function cardStrategySynergy(card, profile, context = {}) {
+  if (!card || !profile) return 0;
+  const traits = cardTraits(card);
+  const text = textOf(card);
+  const s = profile.scores || {};
+  let value = 0;
+  if (s.ninjutsu > 2) {
+    if (/ninjutsu|ninja/.test(text)) value += 3.2;
+    if (traits.unblockable || traits.flying || traits.menace || Number(card.manaValue || 0) <= 2 && isCreature(card)) value += 1.5;
+    if (Number(card.manaValue || 0) >= 6 && isCreature(card)) value += 0.8;
+  }
+  if (s.evasive > 2 && (traits.flying || traits.unblockable || traits.menace)) value += 1.2;
+  if (s.graveyard > 2) {
+    if (traits.deathTrigger || traits.recursion || /mill|discard|graveyard/.test(text)) value += 1.45;
+    if (context.zone === 'graveyard' && (traits.recursion || /cast .* from your graveyard/.test(text))) value += 1.1;
+  }
+  if (s.zombies > 2 && /zombie/.test(text)) value += 1.45;
+  if (s.reanimator > 2 && (traits.recursion || Number(card.manaValue || 0) >= 6 && isCreature(card))) value += 1.35;
+  if (s.tokens > 2 && traits.tokenMaker) value += 1.4;
+  if (s.sacrifice > 2 && (traits.sacrificeValue || traits.deathTrigger || card.token)) value += 1.2;
+  if (s.artifacts > 2 && /artifact/.test(card.typeLine || '')) value += 0.9;
+  if (s.equipment > 2 && traits.equipment) value += 1.3;
+  if (s.spellslinger > 2 && /Instant|Sorcery/.test(card.typeLine || '')) value += 1.0;
+  if (s.counters > 2 && /counter|proliferate/.test(text)) value += 0.9;
+  if (s.lifegain > 2 && (traits.lifelink || /gain life/.test(text))) value += 0.9;
+  if (s.control > 2 && (traits.counterspell || traits.targetedRemoval || traits.boardWipe)) value += 1.1;
+  if (s.goWide > 2 && (traits.tokenMaker || traits.anthem.power || traits.anthem.toughness)) value += 1.0;
+  if (s.voltron > 2 && (traits.equipment || traits.aura || card.commander)) value += 0.9;
+  return value;
+}
+
+function actionStrategyBonus(action, state, playerId, profile = buildStrategyProfile(state.players[playerId])) {
+  const player = state.players[playerId];
+  const cards = [];
+  const find = (id) => {
+    for (const zone of Object.values(player.zones || {})) {
+      const card = zone.find((item) => item.instanceId === id);
+      if (card) return card;
+    }
+    return null;
+  };
+  if (action.cardId) cards.push(find(action.cardId));
+  for (const step of action.steps || []) if (step.cardId) cards.push(find(step.cardId));
+  let bonus = cards.filter(Boolean).reduce((sum, card) => sum + cardStrategySynergy(card, profile), 0);
+  if (action.type === 'attack') {
+    const attackers = (action.cardIds || []).map(find).filter(Boolean);
+    if (profile.scores.ninjutsu > 2 && attackers.some((card) => cardTraits(card).unblockable || cardTraits(card).flying)) bonus += 2.2;
+    if (profile.scores.graveyard > 2 && attackers.some((card) => cardTraits(card).deathTrigger)) bonus += 0.8;
+  }
+  if (action.type === 'hold' && profile.scores.control > 3) bonus += 0.65;
+  return bonus;
+}
+
+function strategyLabel(profile) {
+  if (!profile) return 'balanced midrange';
+  const labels = {
+    evasive: 'evasive combat', ninjutsu: 'Ninja/ninjutsu', graveyard: 'graveyard value', zombies: 'Zombie synergy',
+    tokens: 'token development', sacrifice: 'sacrifice value', artifacts: 'artifact synergy', equipment: 'Equipment/Voltron',
+    spellslinger: 'spellslinger', counters: 'counter growth', lifegain: 'lifegain', ramp: 'mana development', control: 'interaction/control',
+    goWide: 'go-wide combat', voltron: 'commander damage', reanimator: 'reanimation', midrange: 'balanced midrange',
+  };
+  return profile.secondary ? `${labels[profile.primary] || profile.primary} with ${labels[profile.secondary] || profile.secondary}` : (labels[profile.primary] || profile.primary);
+}
+
+
+return { buildStrategyProfile, cardStrategySynergy, actionStrategyBonus, strategyLabel };
+})();
+
+// ---- engine-bridge.js ----
+__modules["./engine-bridge.js"] = (() => {
+const BRIDGE_VERSION = '0.1.0';
+const DEFAULT_TIMEOUT_MS = 4000;
+let sequence = 0;
+let lastHealth = null;
+let lastError = '';
+let queued = Promise.resolve();
+
+function cleanEndpoint(value = '') {
+  return String(value || '').trim().replace(/\/+$/, '');
+}
+
+function configuration(state = null) {
+  const settings = state?.settings || {};
+  return {
+    mode: settings.externalRulesEngineMode === 'shadow' ? 'shadow' : 'local',
+    endpoint: cleanEndpoint(settings.externalRulesEngineEndpoint || ''),
+  };
+}
+
+function safeClone(value) {
+  try { return structuredClone(value); }
+  catch {
+    try { return JSON.parse(JSON.stringify(value)); }
+    catch { return null; }
+  }
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function health(endpoint) {
+  const base = cleanEndpoint(endpoint);
+  if (!base) return { ok: false, message: 'Enter an engine gateway URL first.' };
+  try {
+    const response = await fetchWithTimeout(`${base}/api/v1/health`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body?.message || `Gateway returned HTTP ${response.status}.`);
+    lastHealth = { ...body, checkedAt: new Date().toISOString() };
+    lastError = '';
+    return { ok: true, ...body };
+  } catch (error) {
+    lastError = error?.name === 'AbortError' ? 'Engine gateway timed out.' : (error?.message || 'Could not reach the engine gateway.');
+    return { ok: false, message: lastError };
+  }
+}
+
+function postShadow(path, payload, state) {
+  const config = configuration(state);
+  if (config.mode !== 'shadow' || !config.endpoint) return;
+  const envelope = {
+    bridgeVersion: BRIDGE_VERSION,
+    sequence: ++sequence,
+    sentAt: new Date().toISOString(),
+    page: location.href,
+    payload,
+  };
+  queued = queued.then(async () => {
+    try {
+      const response = await fetchWithTimeout(`${config.endpoint}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(envelope),
+        keepalive: true,
+      }, 6500);
+      if (!response.ok) throw new Error(`Engine gateway returned HTTP ${response.status}.`);
+      lastError = '';
+    } catch (error) {
+      lastError = error?.message || 'Shadow engine sync failed.';
+      console.warn('[Commander Forge engine bridge]', lastError);
+    }
+  });
+}
+
+function onStateChanged(state, meta = {}) {
+  postShadow('/api/v1/shadow/state', {
+    kind: 'state',
+    meta: safeClone(meta),
+    state: safeClone(state),
+  }, state);
+}
+
+function onUiAction(action, dataset = {}, state = null) {
+  postShadow('/api/v1/shadow/action', {
+    kind: 'ui-action',
+    action: String(action || ''),
+    dataset: safeClone(dataset),
+    turnNumber: Number(state?.turnNumber || 0),
+    phaseIndex: Number(state?.phaseIndex || 0),
+    activePlayerId: state?.activePlayerId || null,
+    priorityPlayerId: state?.priorityPlayerId || null,
+  }, state);
+}
+
+function status(state = null) {
+  const config = configuration(state);
+  return {
+    ...config,
+    bridgeVersion: BRIDGE_VERSION,
+    lastHealth: safeClone(lastHealth),
+    lastError,
+  };
+}
+
+return { health, onStateChanged, onUiAction, status, configuration };
+})();
+
+// ---- state.js ----
+__modules["./state.js"] = (() => {
+const { DEFAULT_SETTINGS, PHASES, STORAGE_KEY, ZONES } = __modules["./constants.js"];
+const { createKnowledgeState, ensureKnowledge, recordPublicEvent } = __modules["./knowledge.js"];
+const engineBridge = __modules["./engine-bridge.js"];
+const { deepClone, shuffle, uid } = __modules["./utils.js"];
+
+function createPlayer(id, name) {
+  return {
+    id,
+    name,
+    life: 40,
+    poison: 0,
+    mana: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 },
+    zones: Object.fromEntries(ZONES.map((zone) => [zone, []])),
+    commanderDamage: {},
+    commanderCastCount: {},
+    colorIdentity: [],
+    landPlaysThisTurn: 0,
+    spellsCastThisTurn: 0,
+    noncreatureSpellsCastThisTurn: 0,
+    mulligans: 0,
+    lost: false,
+  };
+}
+
+function createInitialState() {
+  const players = { p1: createPlayer('p1', 'Player 1'), p2: createPlayer('p2', 'Player 2') };
+  return {
+    version: 10,
+    players,
+    activePlayerId: 'p1',
+    turnOrder: ['p1', 'p2'],
+    startingRoll: null,
+    turnNumber: 1,
+    phaseIndex: 0,
+    stack: [],
+    priorityPlayerId: 'p1',
+    consecutivePasses: 0,
+    pendingTriggers: [],
+    eventQueue: [],
+    openingHands: { active: false, kept: { p1: false, p2: false }, bottomRequired: { p1: 0, p2: 0 } },
+    selected: null,
+    log: [],
+    knowledge: createKnowledgeState(Object.keys(players)),
+    settings: { ...DEFAULT_SETTINGS },
+    winner: null,
+    started: false,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+let state = createInitialState();
+let history = [];
+let listeners = new Set();
+
+function getState() { return state; }
+function subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); }
+function notify() { listeners.forEach((listener) => listener(state)); }
+
+function normalizeCardShape(card) {
+  card.tapped = Boolean(card.tapped);
+  card.summoningSick = Boolean(card.summoningSick);
+  card.attacking = Boolean(card.attacking);
+  card.attackTargetPlayerId ||= null;
+  card.blocking ||= null;
+  card.blockedBy ||= [];
+  card.faceDown = Boolean(card.faceDown);
+  card.token = Boolean(card.token);
+  card.commander = Boolean(card.commander);
+  card.counters ||= {};
+  card.notes ||= '';
+  card.castXValue = card.castXValue === null || card.castXValue === undefined ? null : Math.max(0, Math.floor(Number(card.castXValue || 0)));
+  card.mutationPile ||= [];
+  card.mutationTopIndex = Number.isInteger(card.mutationTopIndex) ? card.mutationTopIndex : 0;
+  card.attachedTo ||= null;
+  card.attachments ||= [];
+  card.damageMarked = Number(card.damageMarked || 0);
+  card.deathtouchDamaged = Boolean(card.deathtouchDamaged);
+  card.continuousEffects ||= [];
+  card.abilityActivationsThisTurn ||= {};
+  card.tokenStyle ||= null;
+  card.stackFresh = Boolean(card.stackFresh);
+  card.enteredBattlefieldTurn = Number(card.enteredBattlefieldTurn || 0);
+  card.predefinedToken = Boolean(card.predefinedToken);
+  card.manualKeywords = [...new Set((card.manualKeywords || []).map((value) => String(value || '').trim()).filter(Boolean))];
+  return card;
+}
+
+function ensureStateShape(next) {
+  const previousVersion = Number(next.version || 0);
+  next.version = 11;
+  const previousSettings = next.settings || {};
+  next.settings = { ...DEFAULT_SETTINGS, ...previousSettings, hideOpponentHand: false, manaAutomationV3: true, coachInformationSetV4: true, coachTacticalV5: true, phaseSafetyV6: true, tabletopUXV7: true, tokenPeekV8: true, commanderZoneUXV9: true, rulesKnowledgeV10: true };
+  if (!previousSettings.coachInformationSetV4 && Number(previousSettings.coachRollouts || 0) === 450) next.settings.coachRollouts = 120;
+  if (!previousSettings.coachTacticalV5 && Number(previousSettings.coachRollouts || 0) > 100) next.settings.coachRollouts = 80;
+  next.stack ||= [];
+  next.priorityPlayerId = next.players?.[next.priorityPlayerId] ? next.priorityPlayerId : (next.activePlayerId || 'p1');
+  next.consecutivePasses = Number(next.consecutivePasses || 0);
+  next.pendingTriggers ||= [];
+  next.pendingTriggers = next.pendingTriggers.map((effect) => ({
+    id: effect.id || uid('effect'),
+    sourceCardId: effect.sourceCardId || null,
+    sourceName: effect.sourceName || 'Manual effect',
+    controllerId: effect.controllerId || next.activePlayerId,
+    kind: effect.kind || 'manual',
+    text: effect.text || 'Resolve this effect manually.',
+    conditionText: effect.conditionText || '',
+    conditionStatus: effect.conditionStatus || (effect.conditionText ? 'unconfirmed' : 'not-required'),
+    optional: Boolean(effect.optional),
+    originKey: String(effect.originKey || ''),
+    createdTurn: Number(effect.createdTurn || next.turnNumber || 1),
+    createdPhase: effect.createdPhase || PHASES[next.phaseIndex || 0]?.id || 'untap',
+  }));
+  // Alpha 5 changed how pending triggers/card-effect choices are tracked. Old
+  // unresolved helper prompts can otherwise survive a saved game forever and
+  // keep reappearing even after the player already carried out the effect.
+  if (previousVersion < 11) next.pendingTriggers = [];
+  next.eventQueue ||= [];
+  next.openingHands ||= { active: false, kept: { p1: false, p2: false }, bottomRequired: { p1: 0, p2: 0 } };
+  next.openingHands.kept = { p1: false, p2: false, ...(next.openingHands.kept || {}) };
+  next.openingHands.bottomRequired = { p1: 0, p2: 0, ...(next.openingHands.bottomRequired || {}) };
+  next.openingHands.active = Boolean(next.openingHands.active);
+  next.log ||= [];
+  next.turnNumber ||= 1;
+  next.phaseIndex ||= 0;
+  next.players ||= {};
+  if (!next.players.p1) next.players.p1 = createPlayer('p1', 'Player 1');
+  if (!next.players.p2) next.players.p2 = createPlayer('p2', 'Player 2');
+  next.turnOrder = Array.isArray(next.turnOrder) ? next.turnOrder.filter((id) => next.players[id]) : Object.keys(next.players);
+  for (const id of Object.keys(next.players)) if (!next.turnOrder.includes(id)) next.turnOrder.push(id);
+  next.startingRoll = next.startingRoll && typeof next.startingRoll === 'object' ? next.startingRoll : null;
+  next.activePlayerId = next.players[next.activePlayerId] ? next.activePlayerId : (next.turnOrder[0] || 'p1');
+  next.selected ||= null;
+  next.winner ||= null;
+  next.started = Boolean(next.started);
+  for (const [playerId, player] of Object.entries(next.players)) {
+    const defaults = createPlayer(playerId, player.name || playerId);
+    Object.assign(defaults, player);
+    defaults.mana = { ...createPlayer(playerId, '').mana, ...(player.mana || {}) };
+    defaults.zones = Object.fromEntries(ZONES.map((zone) => [zone, [...(player.zones?.[zone] || [])].map(normalizeCardShape)]));
+    defaults.commanderDamage ||= {};
+    defaults.commanderCastCount ||= {};
+    defaults.colorIdentity ||= [...new Set(defaults.zones.command.flatMap((card) => card.colorIdentity || []))];
+    next.players[playerId] = defaults;
+  }
+  next.stack = next.stack.map(normalizeCardShape);
+  ensureKnowledge(next);
+  return next;
+}
+
+function setState(next, { save = true } = {}) {
+  state = ensureStateShape(next);
+  if (save) persist();
+  notify();
+  engineBridge.onStateChanged(state, { source: 'setState' });
+}
+
+function updateState(mutator, { snapshot = true, log = null } = {}) {
+  if (snapshot) pushHistory();
+  const next = deepClone(state);
+  ensureStateShape(next);
+  mutator(next);
+  if (log) next.log.unshift({ id: uid('log'), time: new Date().toISOString(), text: log });
+  state = ensureStateShape(next);
+  persist();
+  notify();
+  engineBridge.onStateChanged(state, { source: 'updateState', log });
+}
+
+function pushHistory() {
+  history.push(deepClone(state));
+  if (history.length > 60) history.shift();
+}
+
+function canUndo() { return history.length > 0; }
+
+function undo() {
+  const prior = history.pop();
+  if (!prior) return false;
+  state = ensureStateShape(prior);
+  persist();
+  notify();
+  engineBridge.onStateChanged(state, { source: 'undo' });
+  return true;
+}
+
+function resetState() {
+  history = [];
+  state = createInitialState();
+  persist();
+  notify();
+  engineBridge.onStateChanged(state, { source: 'resetState' });
+}
+
+function persist() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* optional */ }
+}
+
+function restore() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw);
+    if (![2, 3, 4, 5, 6, 7, 8, 9, 10].includes(parsed.version)) return false;
+    const previousSettings = parsed.settings || {};
+    parsed.settings = { ...DEFAULT_SETTINGS, ...previousSettings };
+    if (!previousSettings.manaAutomationV3) parsed.settings.manaMode = 'auto';
+    state = ensureStateShape(parsed);
+    notify();
+    return true;
+  } catch { return false; }
+}
+
+function importState(imported) {
+  if (!imported || ![2, 3, 4, 5, 6, 7, 8, 9, 10].includes(imported.version) || !imported.players) throw new Error('This is not a compatible Commander Forge save file.');
+  history = [];
+  state = ensureStateShape(imported);
+  persist();
+  notify();
+  engineBridge.onStateChanged(state, { source: 'importState' });
+}
+
+function phase() { return PHASES[state.phaseIndex]; }
+
+function findCard(instanceId, source = state) {
+  for (const player of Object.values(source.players)) {
+    for (const [zone, cards] of Object.entries(player.zones)) {
+      const index = cards.findIndex((card) => card.instanceId === instanceId);
+      if (index >= 0) return { card: cards[index], playerId: player.id, zone, index, container: cards };
+    }
+  }
+  const stackIndex = source.stack.findIndex((card) => card.instanceId === instanceId);
+  if (stackIndex >= 0) return { card: source.stack[stackIndex], playerId: source.stack[stackIndex].controller, zone: 'stack', index: stackIndex, container: source.stack };
+  return null;
+}
+
+function buildPlayerDeck(player, deck, commanderNames = []) {
+  const instances = [];
+  for (const entry of deck.entries) {
+    const data = deck.byName[entry.name.toLocaleLowerCase()];
+    if (!data) continue;
+    for (let i = 0; i < entry.count; i += 1) {
+      instances.push(normalizeCardShape({
+        ...deepClone(data),
+        instanceId: uid('card'),
+        owner: player.id,
+        controller: player.id,
+        tapped: false,
+        summoningSick: false,
+        attacking: false,
+        blocking: null,
+        blockedBy: [],
+        faceDown: false,
+        token: false,
+        commander: commanderNames.includes(data.name),
+        counters: {},
+        notes: '',
+        attachedTo: null,
+        attachments: [],
+      }));
+    }
+  }
+  const command = [];
+  for (const name of commanderNames) {
+    const index = instances.findIndex((card) => card.name === name);
+    if (index >= 0) command.push(instances.splice(index, 1)[0]);
+  }
+  player.zones = Object.fromEntries(ZONES.map((zone) => [zone, []]));
+  player.zones.command = command;
+  player.zones.library = shuffle(instances);
+  player.life = 40;
+  player.poison = 0;
+  player.commanderDamage = {};
+  player.commanderCastCount = Object.fromEntries(command.map((card) => [card.instanceId, 0]));
+  player.colorIdentity = [...new Set(command.flatMap((card) => card.colorIdentity || []))];
+  player.landPlaysThisTurn = 0;
+  player.spellsCastThisTurn = 0;
+  player.noncreatureSpellsCastThisTurn = 0;
+  player.mulligans = 0;
+  player.lost = false;
+}
+
+function drawCards(draft, playerId, amount = 1) {
+  ensureKnowledge(draft);
+  const player = draft.players[playerId];
+  const memory = draft.knowledge.players[playerId];
+  for (let i = 0; i < amount; i += 1) {
+    const card = player.zones.library.shift();
+    if (!card) {
+      player.lost = true;
+      draft.winner = Object.keys(draft.players).find((id) => id !== playerId) || null;
+      draft.log.unshift({ id: uid('log'), time: new Date().toISOString(), text: `${player.name} tried to draw from an empty library.` });
+      break;
+    }
+    player.zones.hand.push(card);
+    const knownTop = memory.knownLibraryTop?.[0]?.card;
+    if (knownTop && (knownTop.instanceId === card.instanceId || knownTop.name === card.name)) {
+      recordPublicEvent(draft, {
+        type: 'draw_known',
+        actorId: playerId,
+        subjectPlayerId: playerId,
+        card,
+        fromZone: 'library',
+        toZone: 'hand',
+        meaningful: true,
+      });
+      memory.knownLibraryTop.shift();
+    }
+  }
+}
+
+
+return { createPlayer, createInitialState, getState, subscribe, setState, updateState, pushHistory, canUndo, undo, resetState, persist, restore, importState, phase, findCard, buildPlayerDeck, drawCards };
+})();
+
+// ---- tactical-engine.js ----
+__modules["./tactical-engine.js"] = (() => {
+const { PHASES } = __modules["./constants.js"];
+const { analyzeCardRules } = __modules["./card-rules-model.js"];
+const { cardTraits, canBlock, combatOutcome, combatTradeScore, derivedCardState, effectiveStats, permanentValue, targetability } = __modules["./card-evaluation.js"];
+const { actionStrategyBonus, buildStrategyProfile, cardStrategySynergy } = __modules["./strategy-profile.js"];
+const { applySpellPayment, attackGroupLegality, attackLegality, landEntryPlan, landPlayLegality, manaDevelopmentSnapshot, planManaPayment, spellCastLegality } = __modules["./rules.js"];
+const { deepClone, isCreature, isLand, isPermanent, numericStat } = __modules["./utils.js"];
+
+const NUMBER_WORDS = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+
+function otherPlayerId(state, playerId) {
+  return Object.keys(state.players).find((id) => id !== playerId);
+}
+
+function playerTurnOrder(state) {
+  const ids = Array.isArray(state?.turnOrder) ? state.turnOrder.filter((id) => state.players?.[id] && !state.players[id].lost) : Object.keys(state?.players || {}).filter((id) => !state.players[id].lost);
+  return ids.length ? ids : Object.keys(state?.players || {});
+}
+
+function nextTurnPlayerId(state, playerId) {
+  const order = playerTurnOrder(state);
+  if (!order.length) return playerId;
+  const index = Math.max(0, order.indexOf(playerId));
+  return order[(index + 1) % order.length] || order[0];
+}
+
+function findTacticalCard(state, instanceId) {
+  for (const [playerId, player] of Object.entries(state.players || {})) {
+    for (const [zone, cards] of Object.entries(player.zones || {})) {
+      const index = cards.findIndex((card) => card.instanceId === instanceId);
+      if (index >= 0) return { card: cards[index], playerId, zone, index, cards };
+    }
+  }
+  const index = (state.stack || []).findIndex((card) => card.instanceId === instanceId);
+  return index >= 0 ? { card: state.stack[index], playerId: state.stack[index].controller, zone: 'stack', index, cards: state.stack } : null;
+}
+
+function phaseId(state) {
+  return PHASES[state.phaseIndex]?.id || 'main1';
+}
+
+function parseAmount(text, fallback = 1) {
+  const value = String(text || '').toLocaleLowerCase();
+  const digit = value.match(/\d+/);
+  if (digit) return Number(digit[0]);
+  for (const [word, amount] of Object.entries(NUMBER_WORDS)) if (new RegExp(`\\b${word}\\b`).test(value)) return amount;
+  return fallback;
+}
+
+function uniqueActions(actions) {
+  const seen = new Set();
+  return actions.filter((action) => {
+    const key = JSON.stringify([action.type, action.cardId || '', action.cardIds || [], (action.steps || []).map((step) => [step.type, step.cardId])]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function attackValue(state, playerId, card) {
+  const opponentId = otherPlayerId(state, playerId);
+  const player = state.players[playerId];
+  const opponent = state.players[opponentId];
+  const blockers = opponent.zones.battlefield.filter((blocker) => canBlock(card, blocker, opponent.zones.battlefield, player.zones.battlefield));
+  if (!blockers.length) {
+    const stats = effectiveStats(card, player.zones.battlefield);
+    const traits = cardTraits(card);
+    return stats.power * 1.25 + (traits.combatDamageTrigger ? 2.2 : 0) + (card.commander ? 0.65 : 0);
+  }
+  return Math.max(...blockers.map((blocker) => combatTradeScore(card, [blocker], player.zones.battlefield, opponent.zones.battlefield)), -1.5);
+}
+
+function generatedAttackPlans(state, playerId) {
+  if (state.activePlayerId !== playerId || phaseId(state) !== 'combat') return [];
+  const player = state.players[playerId];
+  const legal = player.zones.battlefield.filter((card) => attackLegality(state, card).legal);
+  if (!legal.length) return [];
+  const scored = legal.map((card) => ({ card, score: attackValue(state, playerId, card) }));
+  const actions = [];
+  for (const item of scored.slice(0, 8)) {
+    actions.push({ type: 'attack', cardIds: [item.card.instanceId], label: `Attack with ${item.card.name}` });
+  }
+  const favorable = scored.filter((item) => item.score > 0.55).map((item) => item.card.instanceId);
+  if (favorable.length > 1) actions.push({ type: 'attack', cardIds: favorable, label: `Attack with ${favorable.length} favorable attacker${favorable.length === 1 ? '' : 's'}` });
+  const evasive = scored.filter(({ card }) => {
+    const traits = cardTraits(card, player.zones.battlefield);
+    return traits.flying || traits.unblockable || traits.menace;
+  }).map(({ card }) => card.instanceId);
+  if (evasive.length) actions.push({ type: 'attack', cardIds: evasive, label: `Attack with the evasive creatures` });
+  const all = legal.map((card) => card.instanceId);
+  if (all.length > 1) actions.push({ type: 'attack', cardIds: all, label: `Attack with all legal creatures` });
+  return uniqueActions(actions).filter((action) => attackGroupLegality(state, action.cardIds || []).legal);
+}
+
+function kickerCost(card) {
+  return String(card?.oracleText || '').match(/(?:multi)?kicker\s+(\{[^\n.]+?\})/i)?.[1]?.replace(/\}\s*\{/g, '}{') || '';
+}
+
+function activatedAbilityActions(state, playerId, card, options = {}) {
+  const player = state.players[playerId];
+  const rules = analyzeCardRules(card);
+  const actions = [];
+  rules.activatedAbilities.forEach((ability, abilityIndex) => {
+    if (ability.manaAbility) return;
+    if (ability.tap && card.tapped) return;
+    if (ability.tap && isCreature(card) && card.summoningSick && !rules.haste) return;
+    if (ability.onceEachTurn && Number(card.abilityActivationsThisTurn?.[abilityIndex] || 0) > 0) return;
+    if (ability.sorcerySpeedOnly && (state.activePlayerId !== playerId || !['main1', 'main2'].includes(phaseId(state)) || state.stack.length)) return;
+    const paymentPlan = ability.manaCost
+      ? planManaPayment(player, ability.manaCost, 0, { excludeSourceIds: ability.tap ? [card.instanceId] : [], maxNodes: options.maxManaNodes })
+      : { ok: true, sources: [], finalManaCost: '' };
+    if (!paymentPlan.ok) return;
+    if (/pay (\d+) life/i.test(ability.cost) && player.life <= Number(ability.cost.match(/pay (\d+) life/i)[1])) return;
+    if (ability.discard && !(player.zones.hand || []).length) return;
+    actions.push({
+      type: 'activate-ability',
+      cardId: card.instanceId,
+      abilityIndex,
+      paymentPlan: { ...paymentPlan, finalManaCost: ability.manaCost || '' },
+      label: `Activate ${card.name}: ${ability.effect.slice(0, 72)}${ability.effect.length > 72 ? '…' : ''}`,
+    });
+  });
+  return actions;
+}
+
+function generateTacticalActions(state, playerId = state.activePlayerId, options = {}) {
+  const player = state.players[playerId];
+  if (!player) return [];
+  const actions = [];
+  const phase = phaseId(state);
+  const opponentCount = Math.max(1, Object.keys(state.players).length - 1);
+
+  if (['untap', 'upkeep', 'draw'].includes(phase) && playerId === state.activePlayerId) {
+    const lands = player.zones.hand.filter(isLand).slice(0, 5);
+    for (const card of lands) {
+      const entryPlan = landEntryPlan(card, player, { opponentCount, payLife: 'auto' });
+      actions.push({ type: 'advance-land', cardId: card.instanceId, entryPlan, label: `Advance to Main 1 → play ${card.name}${entryPlan.tapped ? ' tapped' : ''}` });
+    }
+    if (!lands.length) actions.push({ type: 'advance-phase', label: 'Advance toward Main 1' });
+  }
+
+  for (const card of player.zones.hand || []) {
+    if (isLand(card)) {
+      const legality = landPlayLegality(state, playerId, card);
+      if (legality.legal) {
+        const entryPlan = landEntryPlan(card, player, { opponentCount, payLife: 'auto' });
+        actions.push({ type: 'play-land', cardId: card.instanceId, entryPlan, label: `Play ${card.name}${entryPlan.tapped ? ' (enters tapped)' : ''}` });
+      }
+      continue;
+    }
+    const legality = spellCastLegality(state, playerId, card, 'hand', { maxNodes: options.maxManaNodes });
+    if (legality.legal) actions.push({ type: isPermanent(card) ? 'cast-permanent' : 'cast-spell', cardId: card.instanceId, paymentPlan: legality.payment, costPlan: legality.costPlan, label: `Cast ${card.name}` });
+    const kicker = kickerCost(card);
+    if (kicker) {
+      const kicked = spellCastLegality(state, playerId, card, 'hand', { kicked: true, maxNodes: options.maxManaNodes });
+      if (kicked.legal) actions.push({ type: isPermanent(card) ? 'cast-permanent' : 'cast-spell', cardId: card.instanceId, paymentPlan: kicked.payment, costPlan: kicked.costPlan, kicked: true, label: `Cast ${card.name} kicked` });
+    }
+  }
+  for (const card of player.zones.command || []) {
+    const legality = spellCastLegality(state, playerId, card, 'command', { maxNodes: options.maxManaNodes });
+    if (legality.legal) actions.push({ type: 'cast-commander', cardId: card.instanceId, paymentPlan: legality.payment, costPlan: legality.costPlan, label: `Cast ${card.name}${legality.tax ? ` (+${legality.tax} commander tax)` : ''}` });
+  }
+  for (const card of (player.zones.battlefield || []).slice(0, Number(options.battlefieldScanLimit || 40))) actions.push(...activatedAbilityActions(state, playerId, card, options));
+  actions.push(...generatedAttackPlans(state, playerId));
+  actions.push({ type: 'hold', label: 'Hold resources and pass priority' });
+  return uniqueActions(actions).slice(0, Number(options.limit || 36));
+}
+
+function removeFromZone(player, zone, cardId) {
+  const cards = player.zones[zone] || [];
+  const index = cards.findIndex((card) => card.instanceId === cardId);
+  return index >= 0 ? cards.splice(index, 1)[0] : null;
+}
+
+function chooseBestTarget(state, playerId, sourceCard, kind = 'remove') {
+  const opponentId = otherPlayerId(state, playerId);
+  const player = state.players[playerId];
+  const opponent = state.players[opponentId];
+  return [...opponent.zones.battlefield]
+    .filter((card) => {
+      const traits = cardTraits(card, opponent.zones.battlefield);
+      if (kind === 'destroy' && traits.indestructible) return false;
+      const target = targetability(sourceCard, card, playerId);
+      if (!target.legal) return false;
+      if (target.wardCost && !String(sourceCard?.oracleText || '').toLocaleLowerCase().includes('doesn\'t target')) {
+        const wardNumber = Number(String(target.wardCost).match(/\d+/)?.[0] || 0);
+        if (wardNumber > 0) {
+          const available = state.players[playerId].zones.battlefield.filter((item) => !item.tapped).length + Object.values(state.players[playerId].mana || {}).reduce((sum, amount) => sum + Number(amount || 0), 0);
+          if (available < wardNumber) return false;
+        }
+      }
+      return true;
+    })
+    .sort((a, b) => permanentValue(b, opponent.zones.battlefield, player.zones.battlefield) - permanentValue(a, opponent.zones.battlefield, player.zones.battlefield))[0] || null;
+}
+
+function createSimpleToken(playerId, name, power, toughness, keywords = []) {
+  return {
+    instanceId: `sim-token-${playerId}-${Math.random().toString(36).slice(2)}`,
+    name, manaCost: '', manaValue: 0, typeLine: 'Token Creature', oracleText: '',
+    power: String(power), toughness: String(toughness), keywords, colors: [], colorIdentity: [],
+    owner: playerId, controller: playerId, token: true, commander: false, tapped: false,
+    summoningSick: true, attacking: false, blocking: null, blockedBy: [], counters: {}, attachments: [],
+  };
+}
+
+function applyDraw(state, playerId, amount) {
+  const player = state.players[playerId];
+  for (let i = 0; i < amount; i += 1) {
+    const card = player.zones.library.shift();
+    if (!card) { player.lost = true; break; }
+    player.zones.hand.push(card);
+  }
+}
+
+function applyMill(state, playerId, amount) {
+  const player = state.players[playerId];
+  for (let i = 0; i < amount; i += 1) {
+    const card = player.zones.library.shift();
+    if (!card) break;
+    player.zones.graveyard.push(card);
+  }
+}
+
+function applyCommonEffects(state, playerId, card, context = {}) {
+  ensureTacticalCoachState(state);
+  const player = state.players[playerId];
+  const opponentId = otherPlayerId(state, playerId);
+  const opponent = state.players[opponentId];
+  const text = String(card?.oracleText || '').replace(/\n/g, ' ');
+  const notes = state._coach?.actionNotes || [];
+  const draw = text.match(/draw (a|an|one|two|three|four|five|six|\d+) cards?/i);
+  if (draw) { const amount = parseAmount(draw[1]); applyDraw(state, playerId, amount); notes.push(`${card.name} drew ${amount}`); }
+  const millSelf = text.match(/(?:you |target player )?mill(?:s)? (a|an|one|two|three|four|five|six|\d+) cards?/i);
+  if (millSelf) { const amount = parseAmount(millSelf[1]); applyMill(state, playerId, amount); notes.push(`${card.name} milled ${amount}`); }
+  const gain = text.match(/you gain (a|an|one|two|three|four|five|six|\d+) life/i);
+  if (gain) player.life += parseAmount(gain[1]);
+  const eachLose = text.match(/each opponent loses (a|an|one|two|three|four|five|six|\d+) life/i);
+  if (eachLose) opponent.life -= parseAmount(eachLose[1]);
+  const token = text.match(/create (a|an|one|two|three|four|five|six|\d+) (\d+)\/(\d+) [^.]*?([A-Za-z]+) creature tokens?/i);
+  if (token) {
+    const amount = parseAmount(token[1]);
+    for (let i = 0; i < Math.min(12, amount); i += 1) player.zones.battlefield.push(createSimpleToken(playerId, `${token[4]} Token`, Number(token[2]), Number(token[3])));
+  }
+  const traits = cardTraits(card);
+  // Counterspells are only meaningful while another spell is underneath them
+  // on the stack. This is primarily used by the autoplay opponent's response
+  // loop, but it also improves tactical simulation accuracy.
+  if (traits.counterspell && state.stack?.length) {
+    const countered = state.stack.pop();
+    const owner = state.players[countered.owner] || state.players[countered.controller];
+    if (owner) owner.zones.graveyard.push(countered);
+    notes.push(`${card.name} countered ${countered.name}`);
+  }
+  if (traits.boardWipe) {
+    for (const owner of Object.values(state.players)) {
+      const survivors = [];
+      for (const permanent of owner.zones.battlefield) {
+        if (!isCreature(permanent) || cardTraits(permanent).indestructible) survivors.push(permanent);
+        else owner.zones.graveyard.push(permanent);
+      }
+      owner.zones.battlefield = survivors;
+    }
+    notes.push(`${card.name} cleared most creatures`);
+  } else if (traits.targetedRemoval) {
+    const target = chooseBestTarget(state, playerId, card, /destroy target/i.test(text) ? 'destroy' : 'remove');
+    if (target) {
+      const index = opponent.zones.battlefield.findIndex((item) => item.instanceId === target.instanceId);
+      const [removed] = opponent.zones.battlefield.splice(index, 1);
+      if (/exile target/i.test(text)) opponent.zones.exile.push(removed);
+      else if (/return target .* hand/i.test(text)) opponent.zones.hand.push(removed);
+      else opponent.zones.graveyard.push(removed);
+      notes.push(`${card.name} answered ${target.name}`);
+    }
+  }
+  if (traits.tutor) {
+    state._coach.virtual[playerId] += 2.2;
+    notes.push(`${card.name} found a useful card`);
+  }
+  if (traits.recursion) {
+    const target = [...player.zones.graveyard].sort((a, b) => Number(b.manaValue || 0) - Number(a.manaValue || 0))[0];
+    if (target) {
+      player.zones.graveyard.splice(player.zones.graveyard.findIndex((item) => item.instanceId === target.instanceId), 1);
+      player.zones.hand.push(target);
+      notes.push(`${card.name} recovered ${target.name}`);
+    }
+  }
+  if (context.kicked) state._coach.virtual[playerId] += 1.25;
+}
+
+function ensureTacticalCoachState(state) {
+  state._coach ||= { virtual: {}, actionNotes: [], newPermanents: [], castCards: [], combatDamage: 0, effectsBySource: {} };
+  state._coach.virtual ||= {};
+  for (const id of Object.keys(state.players || {})) if (!Number.isFinite(Number(state._coach.virtual[id]))) state._coach.virtual[id] = 0;
+  state._coach.actionNotes ||= [];
+  state._coach.newPermanents ||= [];
+  state._coach.castCards ||= [];
+  state._coach.effectsBySource ||= {};
+  return state._coach;
+}
+
+function resolveCard(state, playerId, card, context = {}) {
+  ensureTacticalCoachState(state);
+  const player = state.players[playerId];
+  if (isPermanent(card)) {
+    card.controller = playerId;
+    card.tapped = false;
+    card.summoningSick = isCreature(card);
+    player.zones.battlefield.push(card);
+    applyCommonEffects(state, playerId, card, context);
+  } else {
+    applyCommonEffects(state, playerId, card, context);
+    player.zones.graveyard.push(card);
+  }
+}
+
+function chooseBlocks(state, attackerId, attackers) {
+  const defender = state.players[otherPlayerId(state, attackerId)];
+  const attackerPlayer = state.players[attackerId];
+  const available = defender.zones.battlefield.filter((card) => isCreature(card) && !card.tapped);
+  const result = new Map();
+  const ordered = [...attackers].sort((a, b) => permanentValue(b, attackerPlayer.zones.battlefield, defender.zones.battlefield) - permanentValue(a, attackerPlayer.zones.battlefield, defender.zones.battlefield));
+  for (const attacker of ordered) {
+    const traits = cardTraits(attacker);
+    const legal = available.filter((blocker) => canBlock(attacker, blocker, defender.zones.battlefield, attackerPlayer.zones.battlefield));
+    if (traits.menace) {
+      let best = null;
+      for (let i = 0; i < legal.length; i += 1) for (let j = i + 1; j < legal.length; j += 1) {
+        const pair = [legal[i], legal[j]];
+        const score = combatTradeScore(attacker, pair, attackerPlayer.zones.battlefield, defender.zones.battlefield);
+        if (!best || score < best.score) best = { pair, score };
+      }
+      if (best && best.score <= Math.max(2, effectiveStats(attacker, attackerPlayer.zones.battlefield).power * 1.15)) result.set(attacker.instanceId, best.pair);
+    } else if (legal.length) {
+      legal.sort((a, b) => combatTradeScore(attacker, [a], attackerPlayer.zones.battlefield, defender.zones.battlefield) - combatTradeScore(attacker, [b], attackerPlayer.zones.battlefield, defender.zones.battlefield));
+      const blocker = legal[0];
+      const trade = combatTradeScore(attacker, [blocker], attackerPlayer.zones.battlefield, defender.zones.battlefield);
+      if (trade <= Math.max(2.2, effectiveStats(attacker, attackerPlayer.zones.battlefield).power * 1.2)) result.set(attacker.instanceId, [blocker]);
+    }
+    for (const blocker of result.get(attacker.instanceId) || []) available.splice(available.findIndex((item) => item.instanceId === blocker.instanceId), 1);
+  }
+  return result;
+}
+
+function resolveCombat(state, playerId, cardIds) {
+  const player = state.players[playerId];
+  const opponentId = otherPlayerId(state, playerId);
+  const opponent = state.players[opponentId];
+  const attackers = player.zones.battlefield.filter((card) => cardIds.includes(card.instanceId));
+  const blocks = chooseBlocks(state, playerId, attackers);
+  const deadAttackers = new Set();
+  const deadBlockers = new Set();
+  const exaltedCount = attackers.length === 1 ? player.zones.battlefield.filter((card) => cardTraits(card, player.zones.battlefield).exalted).length : 0;
+  const battleCrySources = attackers.filter((card) => cardTraits(card, player.zones.battlefield).battleCry).length;
+
+  for (const attacker of attackers) {
+    const baseTraits = cardTraits(attacker, player.zones.battlefield);
+    if (!baseTraits.vigilance) attacker.tapped = true;
+    const prowess = baseTraits.prowess ? Number(player.noncreatureSpellsCastThisTurn || 0) : 0;
+    const battleCry = Math.max(0, battleCrySources - (baseTraits.battleCry ? 1 : 0));
+    const simulatedAttacker = {
+      ...attacker,
+      temporaryPowerBonus: Number(attacker.temporaryPowerBonus || 0) + exaltedCount + battleCry + prowess,
+      temporaryToughnessBonus: Number(attacker.temporaryToughnessBonus || 0) + exaltedCount + prowess,
+    };
+    const outcome = combatOutcome(simulatedAttacker, blocks.get(attacker.instanceId) || [], player.zones.battlefield, opponent.zones.battlefield);
+    opponent.life -= Number(outcome.lifeDamage || 0) + Number(outcome.afflictLifeLoss || 0);
+    opponent.poison += Number(outcome.poisonDamage || 0);
+    player.life += Number(outcome.lifelinkGain || 0);
+    if (attacker.commander && Number(outcome.rawDamage || 0) > 0) { const sourceId = (attacker.mutationPile || []).find((part) => part.commander)?.instanceId || attacker.instanceId; opponent.commanderDamage[sourceId] = Number(opponent.commanderDamage[sourceId] || 0) + Number(outcome.rawDamage || 0); }
+    if (outcome.attackerMinusCounters > 0) attacker.counters['-1/-1'] = Number(attacker.counters['-1/-1'] || 0) + Number(outcome.attackerMinusCounters);
+    for (const [blockerId, amount] of Object.entries(outcome.blockerMinusCounters || {})) {
+      const blocker = opponent.zones.battlefield.find((card) => card.instanceId === blockerId);
+      if (blocker) blocker.counters['-1/-1'] = Number(blocker.counters['-1/-1'] || 0) + Number(amount);
+    }
+    if (outcome.attackerDies) deadAttackers.add(attacker.instanceId);
+    for (const id of outcome.blockersDie) deadBlockers.add(id);
+    if (baseTraits.attackTrigger) state._coach.virtual[playerId] += 1.0 + Number(baseTraits.annihilator || 0) * 0.7;
+    if (Number(outcome.rawDamage || 0) > 0 && baseTraits.combatDamageTrigger) state._coach.virtual[playerId] += 1.8;
+  }
+  for (const card of player.zones.battlefield.filter((item) => deadAttackers.has(item.instanceId))) player.zones.graveyard.push(card);
+  for (const card of opponent.zones.battlefield.filter((item) => deadBlockers.has(item.instanceId))) opponent.zones.graveyard.push(card);
+  player.zones.battlefield = player.zones.battlefield.filter((item) => !deadAttackers.has(item.instanceId));
+  opponent.zones.battlefield = opponent.zones.battlefield.filter((item) => !deadBlockers.has(item.instanceId));
+}
+
+function resolveMarkedCombat(original, attackerPlayerId) {
+  const state = deepClone(original);
+  state._coach ||= { virtual: {}, actionNotes: [], newPermanents: [], castCards: [], combatDamage: 0, effectsBySource: {} };
+  state._coach.virtual ||= Object.fromEntries(Object.keys(state.players || {}).map((id) => [id, 0]));
+  const player = state.players[attackerPlayerId];
+  const opponentId = otherPlayerId(state, attackerPlayerId);
+  const opponent = state.players[opponentId];
+  if (!player || !opponent) return { ok: false, state, reason: 'Combat players were not found.' };
+  const attackers = (player.zones.battlefield || []).filter((card) => card.attacking);
+  if (!attackers.length) return { ok: false, state, reason: 'There are no declared attackers.' };
+  const deadAttackers = new Set();
+  const deadBlockers = new Set();
+  const exaltedCount = attackers.length === 1 ? player.zones.battlefield.filter((card) => cardTraits(card, player.zones.battlefield).exalted).length : 0;
+  const battleCrySources = attackers.filter((card) => cardTraits(card, player.zones.battlefield).battleCry).length;
+
+  for (const attacker of attackers) {
+    const baseTraits = cardTraits(attacker, player.zones.battlefield);
+    if (!baseTraits.vigilance) attacker.tapped = true;
+    const blockers = (opponent.zones.battlefield || []).filter((card) => (attacker.blockedBy || []).includes(card.instanceId) && card.blocking === attacker.instanceId);
+    const prowess = baseTraits.prowess ? Number(player.noncreatureSpellsCastThisTurn || 0) : 0;
+    const battleCry = Math.max(0, battleCrySources - (baseTraits.battleCry ? 1 : 0));
+    const simulatedAttacker = {
+      ...attacker,
+      temporaryPowerBonus: Number(attacker.temporaryPowerBonus || 0) + exaltedCount + battleCry + prowess,
+      temporaryToughnessBonus: Number(attacker.temporaryToughnessBonus || 0) + exaltedCount + prowess,
+    };
+    const outcome = combatOutcome(simulatedAttacker, blockers, player.zones.battlefield, opponent.zones.battlefield);
+    opponent.life -= Number(outcome.lifeDamage || 0) + Number(outcome.afflictLifeLoss || 0);
+    opponent.poison += Number(outcome.poisonDamage || 0);
+    player.life += Number(outcome.lifelinkGain || 0);
+    if (attacker.commander && Number(outcome.rawDamage || 0) > 0) {
+      const sourceId = (attacker.mutationPile || []).find((part) => part.commander)?.instanceId || attacker.instanceId;
+      opponent.commanderDamage[sourceId] = Number(opponent.commanderDamage[sourceId] || 0) + Number(outcome.rawDamage || 0);
+    }
+    if (outcome.attackerMinusCounters > 0) attacker.counters['-1/-1'] = Number(attacker.counters['-1/-1'] || 0) + Number(outcome.attackerMinusCounters);
+    for (const [blockerId, amount] of Object.entries(outcome.blockerMinusCounters || {})) {
+      const blocker = opponent.zones.battlefield.find((card) => card.instanceId === blockerId);
+      if (blocker) blocker.counters['-1/-1'] = Number(blocker.counters['-1/-1'] || 0) + Number(amount);
+    }
+    if (outcome.attackerDies) deadAttackers.add(attacker.instanceId);
+    for (const id of outcome.blockersDie || []) deadBlockers.add(id);
+  }
+
+  for (const card of player.zones.battlefield.filter((item) => deadAttackers.has(item.instanceId))) player.zones.graveyard.push(card);
+  for (const card of opponent.zones.battlefield.filter((item) => deadBlockers.has(item.instanceId))) opponent.zones.graveyard.push(card);
+  player.zones.battlefield = player.zones.battlefield.filter((item) => !deadAttackers.has(item.instanceId));
+  opponent.zones.battlefield = opponent.zones.battlefield.filter((item) => !deadBlockers.has(item.instanceId));
+  for (const owner of Object.values(state.players || {})) {
+    for (const card of owner.zones.battlefield || []) {
+      card.attacking = false;
+      card.attackTargetPlayerId = null;
+      card.blocking = null;
+      card.blockedBy = [];
+    }
+  }
+  return { ok: true, state: applyStateBasedActions(state) };
+}
+
+function resolveTacticalStackTop(original, controllerId, expectedCardId, context = {}) {
+  const state = deepClone(original);
+  state.stack ||= [];
+  state._coach ||= { virtual: {}, actionNotes: [], newPermanents: [], castCards: [], combatDamage: 0, effectsBySource: {} };
+  state._coach.virtual ||= {};
+  for (const id of Object.keys(state.players || {})) if (!Number.isFinite(Number(state._coach.virtual[id]))) state._coach.virtual[id] = 0;
+  state._coach.actionNotes ||= [];
+  state._coach.newPermanents ||= [];
+  state._coach.castCards ||= [];
+  state._coach.effectsBySource ||= {};
+  const top = state.stack.at(-1);
+  if (!top) return { ok: false, state, reason: 'The stack is empty.' };
+  if (expectedCardId && top.instanceId !== expectedCardId) return { ok: false, state, reason: 'Another response is above that spell.' };
+  const card = state.stack.pop();
+  resolveCard(state, controllerId || card.controller, card, context);
+  state.priorityPlayerId = state.activePlayerId;
+  state.consecutivePasses = 0;
+  return { ok: true, state: applyStateBasedActions(state), card };
+}
+
+function applyStateBasedActions(state) {
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const player of Object.values(state.players || {})) {
+      if (player.life <= 0 || player.poison >= 10 || Object.values(player.commanderDamage || {}).some((amount) => Number(amount) >= 21)) player.lost = true;
+      const survivors = [];
+      for (const card of player.zones.battlefield || []) {
+        if (isCreature(card) && effectiveStats(card, player.zones.battlefield).toughness <= 0) {
+          player.zones.graveyard.push(card);
+          changed = true;
+        } else survivors.push(card);
+      }
+      player.zones.battlefield = survivors;
+    }
+  }
+  return state;
+}
+
+function applyTacticalAction(original, playerId, action, options = {}) {
+  const state = options.mutate ? original : deepClone(original);
+  state.stack ||= [];
+  state._coach ||= { virtual: {}, actionNotes: [], newPermanents: [], castCards: [], combatDamage: 0, effectsBySource: {} };
+  state._coach.virtual ||= Object.fromEntries(Object.keys(state.players).map((id) => [id, 0]));
+  state._coach.actionNotes ||= [];
+  const player = state.players[playerId];
+  if (!player) return { ok: false, state, reason: 'Player not found.' };
+
+  if (action.type === 'sequence') {
+    let working = state;
+    for (const step of action.steps || []) {
+      const result = applyTacticalAction(working, playerId, step, { mutate: true, autoResolve: options.autoResolve !== false });
+      if (!result.ok) return result;
+      working = result.state;
+    }
+    return { ok: true, state: applyStateBasedActions(working) };
+  }
+  if (action.type === 'advance-phase') {
+    state.phaseIndex = PHASES.findIndex((phase) => phase.id === 'main1');
+    return { ok: true, state };
+  }
+  if (action.type === 'advance-land') state.phaseIndex = PHASES.findIndex((phase) => phase.id === 'main1');
+  if (['play-land', 'advance-land'].includes(action.type)) {
+    const found = findTacticalCard(state, action.cardId);
+    if (!found || found.zone !== 'hand') return { ok: false, state, reason: 'Land is no longer in hand.' };
+    const legality = landPlayLegality(state, playerId, found.card);
+    if (!legality.legal) return { ok: false, state, reason: legality.reasons.join(' ') };
+    const card = removeFromZone(player, 'hand', action.cardId);
+    const entry = action.entryPlan || landEntryPlan(card, player, { opponentCount: Math.max(1, Object.keys(state.players).length - 1), payLife: 'auto' });
+    card.tapped = Boolean(entry.tapped);
+    player.life -= Number(entry.lifePaid || 0);
+    player.landPlaysThisTurn = Number(player.landPlaysThisTurn || 0) + 1;
+    player.zones.battlefield.push(card);
+    return { ok: true, state: applyStateBasedActions(state) };
+  }
+  if (['cast-permanent', 'cast-spell', 'cast-commander'].includes(action.type)) {
+    const found = findTacticalCard(state, action.cardId);
+    if (!found) return { ok: false, state, reason: 'Spell is no longer available.' };
+    const sourceZone = found.zone;
+    const legality = spellCastLegality(state, playerId, found.card, sourceZone, { kicked: Boolean(action.kicked) });
+    if (!legality.legal) return { ok: false, state, reason: legality.reasons.join(' ') };
+    const card = removeFromZone(player, sourceZone, action.cardId);
+    applySpellPayment(state, playerId, action.paymentPlan?.ok ? action.paymentPlan : legality.payment);
+    if (sourceZone === 'command') player.commanderCastCount[card.instanceId] = Number(player.commanderCastCount[card.instanceId] || 0) + 1;
+    player.spellsCastThisTurn = Number(player.spellsCastThisTurn || 0) + 1;
+    if (!isCreature(card)) player.noncreatureSpellsCastThisTurn = Number(player.noncreatureSpellsCastThisTurn || 0) + 1;
+    state.stack.push(card);
+    state.priorityPlayerId = playerId;
+    state.consecutivePasses = 0;
+    if (options.autoResolve !== false) {
+      state.stack.pop();
+      resolveCard(state, playerId, card, { kicked: Boolean(action.kicked) });
+    }
+    return { ok: true, state: applyStateBasedActions(state) };
+  }
+  if (action.type === 'attack') {
+    const group = attackGroupLegality(state, action.cardIds || []);
+    if (!group.legal) return { ok: false, state, reason: group.reasons.join(' ') };
+    const legalIds = (action.cardIds || []).filter((id) => {
+      const found = findTacticalCard(state, id);
+      return found && attackLegality(state, found.card).legal;
+    });
+    if (!legalIds.length) return { ok: false, state, reason: 'No listed attacker is currently legal.' };
+    resolveCombat(state, playerId, legalIds);
+    return { ok: true, state: applyStateBasedActions(state) };
+  }
+  if (action.type === 'activate-ability') {
+    const found = findTacticalCard(state, action.cardId);
+    if (!found || found.zone !== 'battlefield') return { ok: false, state, reason: 'Permanent is not on the battlefield.' };
+    const rules = analyzeCardRules(found.card);
+    const ability = rules.activatedAbilities[Number(action.abilityIndex || 0)];
+    if (!ability || ability.manaAbility) return { ok: false, state, reason: 'That activated ability is not available to the tactical coach.' };
+    if (ability.tap && found.card.tapped) return { ok: false, state, reason: 'The permanent is already tapped.' };
+    if (ability.tap && isCreature(found.card) && found.card.summoningSick && !rules.haste) return { ok: false, state, reason: 'Summoning sickness prevents using this tap ability.' };
+    if (action.paymentPlan?.ok) applySpellPayment(state, playerId, action.paymentPlan);
+    if (ability.tap) found.card.tapped = true;
+    const life = Number(ability.cost.match(/pay (\d+) life/i)?.[1] || 0);
+    state.players[playerId].life -= life;
+    if (ability.discard && state.players[playerId].zones.hand.length) state.players[playerId].zones.graveyard.push(state.players[playerId].zones.hand.shift());
+    const effectCard = { ...found.card, oracleText: ability.effect, keywords: [] };
+    if (ability.sacrifice) {
+      const index = state.players[playerId].zones.battlefield.findIndex((item) => item.instanceId === found.card.instanceId);
+      if (index >= 0) state.players[playerId].zones.graveyard.push(state.players[playerId].zones.battlefield.splice(index, 1)[0]);
+    }
+    applyCommonEffects(state, playerId, effectCard, { activated: true });
+    found.card.abilityActivationsThisTurn ||= {};
+    found.card.abilityActivationsThisTurn[action.abilityIndex || 0] = Number(found.card.abilityActivationsThisTurn[action.abilityIndex || 0] || 0) + 1;
+    state._coach.virtual[playerId] += 0.8;
+    return { ok: true, state: applyStateBasedActions(state) };
+  }
+  if (action.type === 'hold') return { ok: true, state };
+  return { ok: false, state, reason: `Unsupported tactical action: ${action.type}` };
+}
+
+function availableInteractionValue(player) {
+  const mana = manaDevelopmentSnapshot(player);
+  let value = 0;
+  for (const card of player.zones.hand || []) {
+    const traits = cardTraits(card);
+    if (!(traits.counterspell || traits.targetedRemoval || traits.protectionSpell || traits.combatTrick)) continue;
+    if (Number(card.manaValue || 0) <= mana.available + 0.1) value += 1.2 + Number(card.manaValue || 0) * 0.12;
+  }
+  return value;
+}
+
+function tacticalStateScore(state, playerId, profile = buildStrategyProfile(state.players[playerId])) {
+  const opponentId = otherPlayerId(state, playerId);
+  const player = state.players[playerId];
+  const opponent = state.players[opponentId];
+  const valueBoard = (owner, enemy) => owner.zones.battlefield.reduce((sum, card) => sum + permanentValue(card, owner.zones.battlefield, enemy.zones.battlefield, { lowLife: owner.life <= 12 }) + cardStrategySynergy(card, profile, { zone: 'battlefield' }) * 0.65, 0);
+  const ownBoard = valueBoard(player, opponent);
+  const enemyBoard = opponent.zones.battlefield.reduce((sum, card) => sum + permanentValue(card, opponent.zones.battlefield, player.zones.battlefield, { lowLife: opponent.life <= 12 }), 0);
+  const ownMana = manaDevelopmentSnapshot(player);
+  const enemyMana = manaDevelopmentSnapshot(opponent);
+  const hand = (player.zones.hand.length - opponent.zones.hand.length) * 1.25;
+  const life = (player.life - opponent.life) * 0.18;
+  const mana = (ownMana.nextTurn - enemyMana.nextTurn) * 0.58 + (ownMana.available - enemyMana.available) * 0.34;
+  const poison = (opponent.poison - player.poison) * 1.8;
+  const commanderPressure = Object.values(opponent.commanderDamage || {}).reduce((max, amount) => Math.max(max, Number(amount || 0)), 0) * 0.32
+    - Object.values(player.commanderDamage || {}).reduce((max, amount) => Math.max(max, Number(amount || 0)), 0) * 0.38;
+  const virtual = Number(state._coach?.virtual?.[playerId] || 0) - Number(state._coach?.virtual?.[opponentId] || 0);
+  const interaction = availableInteractionValue(player) - availableInteractionValue(opponent) * 0.55;
+  const loss = player.lost ? -1000 : opponent.lost ? 1000 : 0;
+  return ownBoard - enemyBoard + hand + life + mana + poison + commanderPressure + virtual + interaction + loss;
+}
+
+function generateShortSequences(state, playerId, options = {}) {
+  const depth = Math.max(1, Math.min(4, Number(options.depth || 3)));
+  const beamWidth = Math.max(4, Math.min(30, Number(options.beamWidth || 12)));
+  const profile = buildStrategyProfile(state.players[playerId]);
+  let beam = [{ state: deepClone(state), steps: [], score: tacticalStateScore(state, playerId, profile) }];
+  const sequences = [];
+  for (let ply = 0; ply < depth; ply += 1) {
+    const next = [];
+    for (const node of beam) {
+      const actions = generateTacticalActions(node.state, playerId, { limit: ply === 0 ? 28 : 16 });
+      for (const action of actions) {
+        if (action.type === 'hold') continue;
+        const result = applyTacticalAction(node.state, playerId, action, { autoResolve: true });
+        if (!result.ok) continue;
+        const score = tacticalStateScore(result.state, playerId, profile) + actionStrategyBonus(action, node.state, playerId, profile);
+        const item = { state: result.state, steps: [...node.steps, action], score };
+        next.push(item);
+        if (item.steps.length > 1) sequences.push({ type: 'sequence', steps: item.steps, label: item.steps.map((step) => step.label).join(' → '), projectedScore: score });
+      }
+    }
+    next.sort((a, b) => b.score - a.score);
+    beam = next.slice(0, beamWidth);
+    if (!beam.length) break;
+  }
+  return uniqueActions(sequences).sort((a, b) => b.projectedScore - a.projectedScore).slice(0, Number(options.limit || 16));
+}
+
+function tacticalNow() {
+  return globalThis.performance?.now ? performance.now() : Date.now();
+}
+
+async function tacticalYield() {
+  if (globalThis.scheduler?.yield) {
+    await globalThis.scheduler.yield();
+    return;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function generateShortSequencesAsync(state, playerId, options = {}) {
+  const depth = Math.max(1, Math.min(3, Number(options.depth || 2)));
+  const beamWidth = Math.max(4, Math.min(16, Number(options.beamWidth || 7)));
+  const profile = buildStrategyProfile(state.players[playerId]);
+  let beam = [{ state: deepClone(state), steps: [], score: tacticalStateScore(state, playerId, profile) }];
+  const sequences = [];
+  const shouldCancel = typeof options.shouldCancel === 'function' ? options.shouldCancel : () => false;
+  const deadline = Number(options.deadline || Infinity);
+  const yieldBudgetMs = Math.max(6, Math.min(18, Number(options.yieldBudgetMs || 10)));
+  let lastYield = tacticalNow();
+
+  for (let ply = 0; ply < depth; ply += 1) {
+    const next = [];
+    for (let nodeIndex = 0; nodeIndex < beam.length; nodeIndex += 1) {
+      if (shouldCancel()) return [];
+      const node = beam[nodeIndex];
+      const actions = generateTacticalActions(node.state, playerId, { limit: ply === 0 ? 18 : 10, maxManaNodes: 450, battlefieldScanLimit: 28 });
+      for (const action of actions) {
+        if (action.type === 'hold') continue;
+        const result = applyTacticalAction(node.state, playerId, action, { autoResolve: true });
+        if (result.ok) {
+          const score = tacticalStateScore(result.state, playerId, profile) + actionStrategyBonus(action, node.state, playerId, profile);
+          const item = { state: result.state, steps: [...node.steps, action], score };
+          next.push(item);
+          if (item.steps.length > 1) sequences.push({ type: 'sequence', steps: item.steps, label: item.steps.map((step) => step.label).join(' → '), projectedScore: score });
+        }
+        const now = tacticalNow();
+        if (now - lastYield >= yieldBudgetMs) {
+          options.onProgress?.(`Building legal sequences · depth ${ply + 1}/${depth}`);
+          await tacticalYield();
+          lastYield = tacticalNow();
+          if (shouldCancel()) return [];
+        }
+        if (tacticalNow() >= deadline && sequences.length >= 3) break;
+      }
+      if (tacticalNow() >= deadline && sequences.length >= 3) break;
+    }
+    next.sort((a, b) => b.score - a.score);
+    beam = next.slice(0, beamWidth);
+    if (!beam.length || (tacticalNow() >= deadline && sequences.length >= 3)) break;
+    await tacticalYield();
+    lastYield = tacticalNow();
+  }
+  return uniqueActions(sequences).sort((a, b) => b.projectedScore - a.projectedScore).slice(0, Number(options.limit || 6));
+}
+
+
+return { findTacticalCard, generateTacticalActions, applyCommonEffects, applyStateBasedActions, applyTacticalAction, resolveMarkedCombat, resolveTacticalStackTop, tacticalStateScore, generateShortSequences, generateShortSequencesAsync };
+})();
+
+// ---- coach.js ----
+__modules["./coach.js"] = (() => {
+const { PHASES } = __modules["./constants.js"];
+const { keywordSummary } = __modules["./card-rules-model.js"];
+const { cardTraits, canBlock, combatOutcome, combatTradeScore, effectiveStats, permanentValue, publicCardSnapshot } = __modules["./card-evaluation.js"];
+const { ensureKnowledge, knownHandCards, publicMemorySummary, visibleManaSnapshot } = __modules["./knowledge.js"];
+const { attackLegality, landEntryPlan, landPlayAllowance, landPlayLegality, manaDevelopmentSnapshot, planManaPayment, spendMana, spellCastLegality, strategicPaymentColors } = __modules["./rules.js"];
+const { clamp, deepClone, isCreature, isLand, isPermanent, manaProductionChoices, numericStat, totalMana } = __modules["./utils.js"];
+const { applyTacticalAction, generateShortSequences, generateShortSequencesAsync, generateTacticalActions, tacticalStateScore } = __modules["./tactical-engine.js"];
+const { actionStrategyBonus, buildStrategyProfile, strategyLabel } = __modules["./strategy-profile.js"];
+
+const COLORS = ['W', 'U', 'B', 'R', 'G', 'C'];
+const INTERACTION_MODELS = {
+  counterspell: { label: 'counterspell', identities: ['U'], requiredOpenColors: ['U'], minMana: 2, base: 0.11, timing: 'now' },
+  removal: { label: 'creature removal', identities: ['W', 'U', 'B', 'R', 'G'], requiredOpenColors: ['W', 'U', 'B', 'R', 'G'], minMana: 1, base: 0.14, timing: 'now' },
+  combatTrick: { label: 'combat trick', identities: ['W', 'U', 'R', 'G'], requiredOpenColors: ['W', 'U', 'R', 'G'], minMana: 1, base: 0.09, timing: 'now' },
+  protection: { label: 'protection spell', identities: ['W', 'U', 'G'], requiredOpenColors: ['W', 'U', 'G'], minMana: 1, base: 0.08, timing: 'now' },
+  boardWipe: { label: 'board wipe next turn', identities: ['W', 'U', 'B', 'R'], requiredOpenColors: ['W', 'U', 'B', 'R'], minMana: 4, base: 0.08, timing: 'nextTurn' },
+  graveyardInteraction: { label: 'graveyard interaction', identities: ['W', 'B', 'G'], requiredOpenColors: ['W', 'B', 'G'], minMana: 1, base: 0.07, timing: 'now' },
+  flashThreat: { label: 'flash creature or instant-speed permanent', identities: ['W', 'U', 'G'], requiredOpenColors: ['W', 'U', 'G'], minMana: 2, base: 0.07, timing: 'now' },
+  engine: { label: 'additional creature or engine piece', identities: ['W', 'U', 'B', 'R', 'G', 'C'], requiredOpenColors: [], minMana: 2, base: 0.18, timing: 'nextTurn' },
+};
+
+function otherPlayerId(state, playerId) {
+  return Object.keys(state.players).find((id) => id !== playerId);
+}
+
+function phaseId(state) {
+  return PHASES[state.phaseIndex]?.id || 'main1';
+}
+
+function cardById(state, instanceId) {
+  for (const player of Object.values(state.players)) {
+    for (const cards of Object.values(player.zones)) {
+      const card = cards.find((item) => item.instanceId === instanceId);
+      if (card) return card;
+    }
+  }
+  return state.stack?.find((card) => card.instanceId === instanceId) || null;
+}
+
+function inferredColorIdentity(player) {
+  const explicit = new Set(player.colorIdentity || []);
+  for (const card of player.zones.command || []) for (const color of card.colorIdentity || []) explicit.add(color);
+  if (!explicit.size) {
+    for (const zone of ['battlefield', 'graveyard', 'exile']) {
+      for (const card of player.zones[zone] || []) for (const color of card.colorIdentity || card.colors || []) explicit.add(color);
+    }
+  }
+  if (!explicit.size) explicit.add('C');
+  return [...explicit];
+}
+
+function publicPlayerView(player, perspectiveId, memory) {
+  const self = player.id === perspectiveId;
+  return {
+    id: player.id,
+    name: player.name,
+    life: player.life,
+    poison: player.poison,
+    mana: { ...player.mana },
+    colorIdentity: inferredColorIdentity(player),
+    hand: self ? (player.zones.hand || []).map(publicCardSnapshot) : undefined,
+    handSize: player.zones.hand.length,
+    librarySize: player.zones.library.length,
+    battlefield: (player.zones.battlefield || []).map(publicCardSnapshotWithState),
+    graveyard: (player.zones.graveyard || []).map(publicCardSnapshotWithState),
+    exile: (player.zones.exile || []).map(publicCardSnapshotWithState),
+    command: (player.zones.command || []).map(publicCardSnapshotWithState),
+    knownHand: self ? [] : Object.values(memory?.knownHand || {}).map((entry) => entry.card).filter(Boolean),
+    commanderDamage: { ...(player.commanderDamage || {}) },
+    commanderCastCount: { ...(player.commanderCastCount || {}) },
+    behavior: deepClone(memory?.behavior || {}),
+    usedInteraction: { ...(memory?.usedInteraction || {}) },
+  };
+}
+
+function publicCardSnapshotWithState(card) {
+  return {
+    ...publicCardSnapshot(card),
+    owner: card.owner,
+    controller: card.controller,
+    tapped: Boolean(card.tapped),
+    summoningSick: Boolean(card.summoningSick),
+    attacking: Boolean(card.attacking),
+    attackTargetPlayerId: card.attackTargetPlayerId || null,
+    blocking: card.blocking || null,
+    blockedBy: [...(card.blockedBy || [])],
+    faceDown: Boolean(card.faceDown),
+    counters: { ...(card.counters || {}) },
+    attachedTo: card.attachedTo || null,
+    attachments: [...(card.attachments || [])],
+  };
+}
+
+/**
+ * Returns exactly the information available to a skilled human from one seat.
+ * Opponent hand/library card identities are deliberately omitted, even when the
+ * solo-table UI happens to display them to the user controlling both players.
+ */
+function buildInformationSet(state, perspectiveId = state.activePlayerId) {
+  ensureKnowledge(state);
+  const players = {};
+  for (const [playerId, player] of Object.entries(state.players)) {
+    players[playerId] = publicPlayerView(player, perspectiveId, state.knowledge.players[playerId]);
+  }
+  return {
+    perspectiveId,
+    activePlayerId: state.activePlayerId,
+    turnNumber: state.turnNumber,
+    phase: phaseId(state),
+    players,
+    stack: (state.stack || []).map(publicCardSnapshotWithState),
+    publicEvents: (state.knowledge.events || []).map((event) => deepClone(event)),
+    audit: {
+      ownFullHand: true,
+      ownBattlefield: true,
+      opponentsVisibleBattlefields: true,
+      publicZones: true,
+      opponentExactHiddenHand: false,
+      opponentDecklistOrLibraryIdentities: false,
+      opponentHandSize: true,
+      publicMemory: true,
+    },
+  };
+}
+
+function placeholderCards(count, prefix) {
+  const amount = Math.max(0, Number(count || 0));
+  if (!amount) return [];
+  const placeholder = {
+    instanceId: `${prefix}-unknown`,
+    name: 'Unknown card',
+    hidden: true,
+    typeLine: '',
+    oracleText: '',
+    keywords: [],
+    counters: {},
+  };
+  return Array(amount).fill(placeholder);
+}
+
+function simulationStateFromInformationSet(state, info) {
+  const draft = {
+    version: state.version,
+    activePlayerId: state.activePlayerId,
+    turnNumber: state.turnNumber,
+    phaseIndex: state.phaseIndex,
+    stack: info.stack.map((card) => deepClone(card)),
+    players: {},
+    _coach: { virtual: {}, newPermanents: [], castCards: [], actionNotes: [], combatDamage: 0, effectsBySource: {} },
+  };
+  for (const [playerId, view] of Object.entries(info.players)) {
+    const original = state.players[playerId];
+    const self = playerId === info.perspectiveId;
+    draft.players[playerId] = {
+      id: playerId,
+      name: view.name,
+      life: view.life,
+      poison: view.poison,
+      mana: { ...view.mana },
+      colorIdentity: [...view.colorIdentity],
+      commanderDamage: { ...view.commanderDamage },
+      commanderCastCount: { ...view.commanderCastCount },
+      landPlaysThisTurn: Number(original.landPlaysThisTurn || 0),
+      spellsCastThisTurn: Number(original.spellsCastThisTurn || 0),
+      noncreatureSpellsCastThisTurn: Number(original.noncreatureSpellsCastThisTurn || 0),
+      lost: Boolean(original.lost),
+      zones: {
+        hand: self ? (original.zones.hand || []).map((card) => deepClone(card)) : placeholderCards(view.handSize, `${playerId}-hand`),
+        library: placeholderCards(view.librarySize, `${playerId}-library`),
+        battlefield: (original.zones.battlefield || []).map((card) => deepClone(card)),
+        graveyard: (original.zones.graveyard || []).map((card) => deepClone(card)),
+        exile: (original.zones.exile || []).map((card) => deepClone(card)),
+        command: (original.zones.command || []).map((card) => deepClone(card)),
+      },
+    };
+    draft._coach.virtual[playerId] = 0;
+  }
+  return draft;
+}
+
+function possibleMoves(state, playerId = state.activePlayerId) {
+  const immediate = generateTacticalActions(state, playerId, { limit: 24 });
+  const sequences = generateShortSequences(state, playerId, { depth: 3, beamWidth: 10, limit: 8 });
+  return dedupeMoves([...immediate, ...sequences]).slice(0, 28);
+}
+
+function coachNow() {
+  return globalThis.performance?.now ? performance.now() : Date.now();
+}
+
+async function coachYield() {
+  if (globalThis.scheduler?.yield) {
+    await globalThis.scheduler.yield();
+    return;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function visibleCoachComplexity(state, playerId) {
+  const opponentId = otherPlayerId(state, playerId);
+  return (state.players[playerId]?.zones?.battlefield?.length || 0)
+    + (state.players[opponentId]?.zones?.battlefield?.length || 0)
+    + Math.min(12, state.players[playerId]?.zones?.hand?.length || 0)
+    + Math.min(8, state.stack?.length || 0);
+}
+
+async function possibleMovesAsync(state, playerId = state.activePlayerId, options = {}) {
+  const complexity = visibleCoachComplexity(state, playerId);
+  const immediateLimit = complexity >= 34 ? 15 : complexity >= 22 ? 18 : 22;
+  const finalLimit = complexity >= 34 ? 14 : complexity >= 22 ? 18 : 22;
+  const immediate = generateTacticalActions(state, playerId, { limit: immediateLimit, maxManaNodes: complexity >= 22 ? 500 : 900, battlefieldScanLimit: complexity >= 34 ? 24 : 36 });
+  options.onProgress?.('Checking immediate legal plays…');
+  await coachYield();
+  if (options.shouldCancel?.()) return [];
+  const sequences = complexity >= 30 ? [] : await generateShortSequencesAsync(state, playerId, {
+    depth: complexity >= 30 ? 2 : 3,
+    beamWidth: complexity >= 30 ? 5 : 7,
+    limit: complexity >= 30 ? 4 : 6,
+    deadline: options.deadline,
+    shouldCancel: options.shouldCancel,
+    onProgress: options.onProgress,
+    yieldBudgetMs: 10,
+  });
+  return dedupeMoves([...immediate, ...sequences]).slice(0, finalLimit);
+}
+
+function dedupeMoves(moves) {
+  const seen = new Set();
+  return moves.filter((move) => {
+    const key = `${move.type}:${move.cardId || ''}:${(move.cardIds || []).join(',')}:${(move.steps || []).map((step) => `${step.type}-${step.cardId}`).join('|')}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function addCastSequences(state, playerId, moves) {
+  const player = state.players[playerId];
+  const castMoves = moves.filter((move) => ['cast-permanent', 'cast-spell', 'cast-commander'].includes(move.type)).slice(0, 9);
+  for (let i = 0; i < castMoves.length; i += 1) {
+    for (let j = 0; j < castMoves.length; j += 1) {
+      if (i === j) continue;
+      const simulation = simulationStateFromInformationSet(state, buildInformationSet(state, playerId));
+      if (!applyMoveToDraft(simulation, playerId, castMoves[i]).ok) continue;
+      if (!canApplyMove(simulation, playerId, castMoves[j])) continue;
+      moves.push({
+        type: 'sequence',
+        steps: [castMoves[i], castMoves[j]],
+        label: `${castMoves[i].label} → ${castMoves[j].label.replace(/^Cast /, '')}`,
+      });
+      if (moves.filter((move) => move.type === 'sequence').length >= 8) return;
+    }
+  }
+}
+
+function addLandCastSequences(state, playerId, moves) {
+  const phase = phaseId(state);
+  const landMoves = moves.filter((move) => ['play-land', 'advance-land'].includes(move.type)).slice(0, 4);
+  for (const landMove of landMoves) {
+    const simulation = simulationStateFromInformationSet(state, buildInformationSet(state, playerId));
+    if (!applyMoveToDraft(simulation, playerId, landMove).ok) continue;
+    for (const card of simulation.players[playerId].zones.hand.filter((item) => !isLand(item)).slice(0, 12)) {
+      const traits = cardTraits(card);
+      if (!['main1', 'main2'].includes(phase) && landMove.type !== 'advance-land' && !(traits.instant || traits.flash)) continue;
+      const paymentPlan = planManaPayment(simulation.players[playerId], card.manaCost || '', 0, { preserveColors: strategicPaymentColors(simulation.players[playerId], card.instanceId), maxNodes: 10000 });
+      const castMove = { type: isPermanent(card) ? 'cast-permanent' : 'cast-spell', cardId: card.instanceId, paymentPlan, label: `Cast ${card.name}` };
+      if (!canApplyMove(simulation, playerId, castMove)) continue;
+      moves.push({ type: 'sequence', steps: [landMove, castMove], label: `${landMove.label} → Cast ${card.name}` });
+      if (moves.filter((move) => move.type === 'sequence').length >= 12) return;
+    }
+  }
+}
+
+function addAttackMoves(state, playerId, opponentId, moves) {
+  const attackers = state.players[playerId].zones.battlefield.filter((card) => attackLegality(state, card).legal);
+  if (!attackers.length) return;
+  attackers.slice(0, 8).forEach((card) => moves.push({ type: 'attack', cardIds: [card.instanceId], opponentId, label: `Attack with ${card.name}` }));
+  if (attackers.length > 1) {
+    moves.push({ type: 'attack', cardIds: attackers.map((card) => card.instanceId), opponentId, label: 'Attack with all legal creatures' });
+    const evasive = attackers.filter((card) => {
+      const traits = cardTraits(card, state.players[playerId].zones.battlefield);
+      return traits.flying || traits.unblockable || traits.menace;
+    });
+    if (evasive.length && evasive.length !== attackers.length) moves.push({ type: 'attack', cardIds: evasive.map((card) => card.instanceId), opponentId, label: 'Attack with evasive creatures' });
+    const favorable = attackers.filter((attacker) => visibleAttackValue(state, playerId, attacker) > 0.8);
+    if (favorable.length && favorable.length !== attackers.length) moves.push({ type: 'attack', cardIds: favorable.map((card) => card.instanceId), opponentId, label: 'Attack with favorable creatures' });
+  }
+}
+
+function visibleAttackValue(state, playerId, attacker) {
+  const opponentId = otherPlayerId(state, playerId);
+  const blockers = state.players[opponentId].zones.battlefield.filter((blocker) => canBlock(attacker, blocker, state.players[opponentId].zones.battlefield, state.players[playerId].zones.battlefield));
+  if (!blockers.length) return effectiveStats(attacker, state.players[playerId].zones.battlefield).power;
+  return Math.min(...blockers.map((blocker) => combatTradeScore(attacker, [blocker], state.players[playerId].zones.battlefield, state.players[opponentId].zones.battlefield)));
+}
+
+function identityAllows(identity, model) {
+  return model.identities.some((color) => identity.includes(color));
+}
+
+function nextTurnManaPotential(player) {
+  const snapshot = manaDevelopmentSnapshot(player);
+  return { total: snapshot.nextTurn, colors: [...snapshot.colors] };
+}
+
+function knownCategoryCards(state, opponentId, category) {
+  return knownHandCards(state, opponentId).filter((card) => {
+    const traits = cardTraits(card);
+    return category === 'engine'
+      ? !traits.interactionCategories.length
+      : traits.interactionCategories.includes(category);
+  });
+}
+
+function observedCategoryEvidence(state, opponentId, category) {
+  const player = state.players[opponentId];
+  const seen = new Map();
+  const publicCards = [
+    ...(player.zones.battlefield || []),
+    ...(player.zones.graveyard || []),
+    ...(player.zones.exile || []),
+    ...(player.zones.command || []),
+    ...Object.values(state.knowledge?.players?.[opponentId]?.observedCards || {}).map((entry) => entry.card).filter(Boolean),
+  ];
+  for (const card of publicCards) {
+    const key = card.oracleId || card.scryfallId || card.name;
+    if (seen.has(key)) continue;
+    seen.set(key, card);
+  }
+  return [...seen.values()].filter((card) => {
+    const traits = cardTraits(card);
+    if (category === 'engine') return traits.draw || traits.tutor || traits.tokenMaker || traits.staticEffect || traits.activatedAbility;
+    return traits.interactionCategories.includes(category);
+  });
+}
+
+function visibleStrategySignals(state, opponentId) {
+  const player = state.players[opponentId];
+  const cards = [...(player.zones.command || []), ...(player.zones.battlefield || []), ...(player.zones.graveyard || [])];
+  const text = cards.map((card) => `${card.typeLine || ''} ${card.oracleText || ''}`).join(' ').toLocaleLowerCase();
+  return {
+    spellslinger: /instant|sorcery|cast .* spell|noncreature spell/.test(text),
+    graveyard: /graveyard|dies|discard|mill/.test(text),
+    combat: /attacks|combat damage|creature you control/.test(text),
+    artifacts: /artifact/.test(text),
+  };
+}
+
+/** Builds probability/risk estimates using public information only. */
+function buildInteractionRisk(state, perspectiveId = state.activePlayerId) {
+  ensureKnowledge(state);
+  const opponentId = otherPlayerId(state, perspectiveId);
+  const opponent = state.players[opponentId];
+  const memory = state.knowledge.players[opponentId];
+  const strategySignals = visibleStrategySignals(state, opponentId);
+  const open = visibleManaSnapshot(opponent);
+  const nextTurn = nextTurnManaPotential(opponent);
+  const identity = inferredColorIdentity(opponent);
+  const handSize = opponent.zones.hand.length;
+  const handFactor = handSize <= 0 ? 0 : Math.min(1.25, 0.25 + handSize / 6.2);
+  const behavior = memory.behavior || {};
+  const passFactor = Math.min(0.18, Number(behavior.consecutivePassesWithOpenMana || 0) * 0.045 + Number(behavior.passesWithOpenMana || 0) * 0.012);
+  const heldFactor = Math.min(0.12, Number(behavior.cardsHeldAcrossTurns || 0) * 0.018);
+  const categories = {};
+
+  for (const [category, model] of Object.entries(INTERACTION_MODELS)) {
+    const possibleByIdentity = identityAllows(identity, model);
+    const mana = model.timing === 'now' ? open : nextTurn;
+    const hasRequiredColor = !model.requiredOpenColors.length || model.requiredOpenColors.some((color) => mana.colors.includes(color));
+    const castable = possibleByIdentity && mana.total >= model.minMana && hasRequiredColor;
+    const knownCards = knownCategoryCards(state, opponentId, category);
+    const observedEvidence = observedCategoryEvidence(state, opponentId, category);
+    const knownCastable = knownCards.some((card) => planManaPayment(opponent, card.manaCost || '', 0).ok);
+    let probability = castable && handSize > 0 ? model.base * handFactor : 0;
+    if (castable && observedEvidence.length) probability += Math.min(0.10, observedEvidence.length * 0.018);
+    if (castable && category === 'counterspell' && strategySignals.spellslinger) probability += 0.035;
+    if (castable && category === 'graveyardInteraction' && strategySignals.graveyard) probability += 0.03;
+    if (castable && ['combatTrick', 'protection', 'flashThreat'].includes(category) && strategySignals.combat) probability += 0.025;
+    if (castable && model.timing === 'now') probability += passFactor + heldFactor;
+    if (castable && model.timing === 'nextTurn') probability += Math.min(0.12, handSize * 0.012);
+    const usedCount = Number(memory.usedInteraction?.[category] || 0);
+    if (usedCount > 0) {
+      const depletion = category === 'boardWipe' ? 0.52 : 0.82;
+      probability *= Math.pow(depletion, Math.min(3, usedCount));
+    }
+    if (knownCards.length) probability = Math.max(probability, knownCastable ? 0.94 : 0.58);
+    probability = clamp(probability, 0, 0.96);
+
+    const reasons = [];
+    if (!possibleByIdentity) reasons.push(`not supported by the opponent's known ${identity.join('/')} color identity`);
+    else if (!castable) reasons.push(model.timing === 'now' ? 'not supported by currently open mana' : 'not supported by projected next-turn mana');
+    else {
+      reasons.push(`${mana.total} visible mana available${mana.colors.length ? ` in ${mana.colors.join('/')}` : ''}`);
+      reasons.push(`${handSize} card${handSize === 1 ? '' : 's'} in hand`);
+    }
+    if (knownCards.length) reasons.push(`publicly known in hand: ${knownCards.map((card) => card.name).join(', ')}`);
+    if (observedEvidence.length) reasons.push(`visible strategy evidence: ${observedEvidence.slice(0, 3).map((card) => card.name).join(', ')}`);
+    if (usedCount) reasons.push(`${usedCount} ${model.label}${usedCount === 1 ? '' : 's'} already used`);
+    if (behavior.consecutivePassesWithOpenMana) reasons.push(`passed ${behavior.consecutivePassesWithOpenMana} consecutive turn${behavior.consecutivePassesWithOpenMana === 1 ? '' : 's'} with mana open`);
+
+    categories[category] = {
+      category,
+      label: model.label,
+      probability,
+      possibleByIdentity,
+      castable,
+      timing: model.timing,
+      knownCards: knownCards.map(publicCardSnapshot),
+      observedEvidence: observedEvidence.map(publicCardSnapshot),
+      reasons,
+    };
+  }
+
+  return {
+    perspectiveId,
+    opponentId,
+    opponentName: opponent.name,
+    handSize,
+    colorIdentity: identity,
+    openMana: open,
+    nextTurnMana: nextTurn,
+    categories,
+    publicMemory: publicMemorySummary(state, perspectiveId, opponentId),
+  };
+}
+
+function hashString(text) {
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function analysisSeed(state, playerId) {
+  const publicShape = {
+    turn: state.turnNumber,
+    phase: state.phaseIndex,
+    playerId,
+    events: state.knowledge?.events?.length || 0,
+    boards: Object.fromEntries(Object.entries(state.players).map(([id, player]) => [id, player.zones.battlefield.map((card) => [card.name, card.tapped, card.counters])])),
+    hands: Object.fromEntries(Object.entries(state.players).map(([id, player]) => [id, player.zones.hand.length])),
+  };
+  return hashString(JSON.stringify(publicShape));
+}
+
+function sampleHiddenScenario(risk, rng) {
+  const unknownSlots = Math.max(0, risk.handSize - Object.values(risk.publicMemory?.knownHand || {}).length);
+  let slots = unknownSlots;
+  const scenario = { categories: new Set(), exactKnown: [] };
+  for (const [category, entry] of Object.entries(risk.categories)) {
+    if (entry.knownCards.length) {
+      scenario.categories.add(category);
+      scenario.exactKnown.push(...entry.knownCards);
+      continue;
+    }
+    if (slots <= 0 || entry.probability <= 0) continue;
+    if (rng() < entry.probability) {
+      scenario.categories.add(category);
+      slots -= 1;
+    }
+  }
+  return scenario;
+}
+
+function findSimCard(player, instanceId) {
+  for (const [zone, cards] of Object.entries(player.zones)) {
+    const index = cards.findIndex((card) => card.instanceId === instanceId);
+    if (index >= 0) return { zone, cards, index, card: cards[index] };
+  }
+  return null;
+}
+
+function paymentPlanUsable(player, card, tax, paymentPlan) {
+  if (!paymentPlan?.ok) return false;
+  const working = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0, ...(player.mana || {}) };
+  for (const source of paymentPlan.sources || []) {
+    const found = findSimCard(player, source.instanceId);
+    if (!found || found.zone !== 'battlefield' || found.card.tapped) return false;
+    for (const color of COLORS) working[color] = Number(working[color] || 0) + Number(source.mana?.[color] || 0);
+  }
+  return planManaPayment({ ...player, mana: working, zones: { ...player.zones, battlefield: [] } }, card.manaCost || '', tax, { maxNodes: 100 }).ok;
+}
+
+function canApplyMove(draft, playerId, move) {
+  const player = draft.players[playerId];
+  if (move.type === 'sequence') {
+    const preview = deepClone(draft);
+    return (move.steps || []).every((step) => applyMoveToDraft(preview, playerId, step).ok);
+  }
+  if (['play-land', 'advance-land'].includes(move.type)) {
+    const found = findSimCard(player, move.cardId);
+    return Boolean(found?.zone === 'hand' && isLand(found.card) && landPlayLegality(draft, playerId, found.card).legal);
+  }
+  if (['cast-permanent', 'cast-spell'].includes(move.type)) {
+    const found = findSimCard(player, move.cardId);
+    if (!found || found.zone !== 'hand') return false;
+    if (paymentPlanUsable(player, found.card, 0, move.paymentPlan)) return true;
+    return planManaPayment(player, found.card.manaCost, 0, { preserveColors: strategicPaymentColors(player, found.card.instanceId), maxNodes: 5000 }).ok;
+  }
+  if (move.type === 'cast-commander') {
+    const found = findSimCard(player, move.cardId);
+    const tax = found ? 2 * Number(player.commanderCastCount[found.card.instanceId] || 0) : 0;
+    if (!found || found.zone !== 'command') return false;
+    if (paymentPlanUsable(player, found.card, tax, move.paymentPlan)) return true;
+    return planManaPayment(player, found.card.manaCost, tax, { preserveColors: strategicPaymentColors(player, found.card.instanceId), maxNodes: 5000 }).ok;
+  }
+  return true;
+}
+
+function payApproximateMana(player, card, tax = 0, preferredPlan = null) {
+  const plan = paymentPlanUsable(player, card, tax, preferredPlan)
+    ? preferredPlan
+    : planManaPayment(player, card.manaCost || '', tax, { preserveColors: strategicPaymentColors(player, card.instanceId), maxNodes: 5000 });
+  if (!plan.ok) return false;
+  for (const source of plan.sources || []) {
+    const found = findSimCard(player, source.instanceId);
+    if (!found || found.card.tapped) return false;
+    found.card.tapped = true;
+    for (const color of COLORS) player.mana[color] = Number(player.mana[color] || 0) + Number(source.mana?.[color] || 0);
+  }
+  player.mana = spendMana(player.mana, card.manaCost || '', tax);
+  return true;
+}
+
+function applyMoveToDraft(draft, playerId, move) {
+  const player = draft.players[playerId];
+  const opponentId = otherPlayerId(draft, playerId);
+  const opponent = draft.players[opponentId];
+  if (!draft._coach) draft._coach = { virtual: { [playerId]: 0, [opponentId]: 0 }, newPermanents: [], castCards: [], actionNotes: [], combatDamage: 0, effectsBySource: {} };
+
+  if (move.type === 'sequence') {
+    for (const step of move.steps || []) {
+      const result = applyMoveToDraft(draft, playerId, step);
+      if (!result.ok) return result;
+    }
+    return { ok: true };
+  }
+  if (move.type === 'advance-phase') {
+    draft.phaseIndex = 3;
+    return { ok: true };
+  }
+  if (['advance-land', 'play-land'].includes(move.type)) {
+    if (move.type === 'advance-land') draft.phaseIndex = 3;
+    const found = findSimCard(player, move.cardId);
+    if (!found || found.zone !== 'hand' || !isLand(found.card) || !landPlayLegality(draft, playerId, found.card).legal) return { ok: false };
+    const card = found.cards.splice(found.index, 1)[0];
+    const entry = move.entryPlan || landEntryPlan(card, player, { opponentCount: Math.max(1, Object.keys(draft.players).length - 1), payLife: 'auto' });
+    card.tapped = Boolean(entry.tapped);
+    player.life -= Number(entry.lifePaid || 0);
+    player.zones.battlefield.push(card);
+    player.landPlaysThisTurn += 1;
+    draft._coach.newPermanents.push(card.instanceId);
+    draft._coach.actionNotes.push(`${card.name} entered ${card.tapped ? 'tapped' : 'untapped'}${entry.lifePaid ? ` after paying ${entry.lifePaid} life` : ''}`);
+    return { ok: true };
+  }
+  if (['cast-permanent', 'cast-spell', 'cast-commander'].includes(move.type)) {
+    const sourceZone = move.type === 'cast-commander' ? 'command' : 'hand';
+    const found = findSimCard(player, move.cardId);
+    if (!found || found.zone !== sourceZone) return { ok: false };
+    const tax = sourceZone === 'command' ? 2 * Number(player.commanderCastCount[found.card.instanceId] || 0) : 0;
+    if (!payApproximateMana(player, found.card, tax, move.paymentPlan)) return { ok: false };
+    const card = found.cards.splice(found.index, 1)[0];
+    draft._coach.castCards.push(card.instanceId);
+    draft._coach.lastCastCardId = card.instanceId;
+    if (sourceZone === 'command') player.commanderCastCount[card.instanceId] = Number(player.commanderCastCount[card.instanceId] || 0) + 1;
+    if (move.type === 'cast-spell') {
+      player.zones.graveyard.push(card);
+      applyApproximateOracleEffect(draft, playerId, card);
+    } else {
+      card.summoningSick = isCreature(card);
+      card.tapped = false;
+      player.zones.battlefield.push(card);
+      draft._coach.newPermanents.push(card.instanceId);
+      if (cardTraits(card).enterTrigger) applyApproximateOracleEffect(draft, playerId, card, { enterOnly: true });
+    }
+    return { ok: true };
+  }
+  if (move.type === 'activate-ability') {
+    const found = findSimCard(player, move.cardId);
+    if (!found || found.zone !== 'battlefield') return { ok: false };
+    const traits = cardTraits(found.card);
+    if (traits.tapAbility) found.card.tapped = true;
+    applyApproximateOracleEffect(draft, playerId, found.card, { activatedOnly: true });
+    return { ok: true };
+  }
+  if (move.type === 'attack') {
+    applyVisibleCombat(draft, playerId, move.cardIds || []);
+    return { ok: true };
+  }
+  if (move.type === 'hold') return { ok: true };
+  return { ok: true };
+}
+
+function applyApproximateOracleEffect(draft, playerId, card, options = {}) {
+  const opponentId = otherPlayerId(draft, playerId);
+  const traits = cardTraits(card);
+  let virtual = 0;
+  const record = { virtual: 0, moves: [] };
+  if (traits.draw) virtual += 3.4;
+  if (traits.tutor) virtual += 4.0;
+  if (traits.tokenMaker) virtual += 2.2;
+  if (traits.recursion) virtual += 2.3;
+  if (traits.graveyardInteraction) virtual += 1.4;
+  if (traits.protectionSpell) virtual += 2.0;
+  if (traits.combatTrick) virtual += 1.4;
+  if (traits.counterspell && !options.enterOnly) virtual += 1.2;
+  if (traits.targetedRemoval && !options.enterOnly) {
+    const targets = draft.players[opponentId].zones.battlefield;
+    const target = [...targets].sort((a, b) => permanentValue(b, targets, draft.players[playerId].zones.battlefield) - permanentValue(a, targets, draft.players[playerId].zones.battlefield))[0];
+    if (target) {
+      targets.splice(targets.findIndex((item) => item.instanceId === target.instanceId), 1);
+      draft.players[opponentId].zones.graveyard.push(target);
+      record.moves.push({ cardId: target.instanceId, playerId: opponentId, from: 'battlefield', to: 'graveyard' });
+      virtual += 1.0;
+      draft._coach.actionNotes.push(`${card.name} can answer ${target.name}`);
+    }
+  }
+  if (traits.boardWipe && !options.enterOnly) {
+    record.moves.push(...applyBoardWipe(draft, playerId, { knownSpell: true }));
+  }
+  draft._coach.virtual[playerId] = Number(draft._coach.virtual[playerId] || 0) + virtual;
+  record.virtual = virtual;
+  draft._coach.effectsBySource[card.instanceId] = record;
+}
+
+function undoSourceEffects(draft, playerId, sourceCardId) {
+  const record = draft._coach?.effectsBySource?.[sourceCardId];
+  if (!record) return;
+  draft._coach.virtual[playerId] = Number(draft._coach.virtual[playerId] || 0) - Number(record.virtual || 0);
+  for (const move of [...(record.moves || [])].reverse()) {
+    const player = draft.players[move.playerId];
+    const index = player.zones[move.to].findIndex((card) => card.instanceId === move.cardId);
+    if (index < 0) continue;
+    const [card] = player.zones[move.to].splice(index, 1);
+    player.zones[move.from].push(card);
+  }
+  delete draft._coach.effectsBySource[sourceCardId];
+}
+
+function chooseBlockersForAttack(draft, playerId, attackers) {
+  const opponentId = otherPlayerId(draft, playerId);
+  const attackBoard = draft.players[playerId].zones.battlefield;
+  const blockBoard = draft.players[opponentId].zones.battlefield;
+  const available = blockBoard.filter((card) => isCreature(card) && !card.tapped);
+  const assignments = new Map();
+  const orderedAttackers = [...attackers].sort((a, b) => permanentValue(b, attackBoard, blockBoard) - permanentValue(a, attackBoard, blockBoard));
+  for (const attacker of orderedAttackers) {
+    const legal = available.filter((blocker) => canBlock(attacker, blocker, blockBoard, attackBoard));
+    if (!legal.length) continue;
+    const traits = cardTraits(attacker, attackBoard);
+    if (traits.menace) {
+      if (legal.length < 2) continue;
+      const pairs = [];
+      for (let i = 0; i < legal.length; i += 1) for (let j = i + 1; j < legal.length; j += 1) pairs.push([legal[i], legal[j]]);
+      pairs.sort((a, b) => combatTradeScore(attacker, a, attackBoard, blockBoard) - combatTradeScore(attacker, b, attackBoard, blockBoard));
+      const pair = pairs[0];
+      if (pair && combatTradeScore(attacker, pair, attackBoard, blockBoard) <= effectiveStats(attacker, attackBoard).power * 1.2) {
+        assignments.set(attacker.instanceId, pair);
+        for (const blocker of pair) available.splice(available.findIndex((item) => item.instanceId === blocker.instanceId), 1);
+      }
+      continue;
+    }
+    legal.sort((a, b) => combatTradeScore(attacker, [a], attackBoard, blockBoard) - combatTradeScore(attacker, [b], attackBoard, blockBoard));
+    const blocker = legal[0];
+    const noBlockDamage = effectiveStats(attacker, attackBoard).power;
+    if (combatTradeScore(attacker, [blocker], attackBoard, blockBoard) <= noBlockDamage * 1.25) {
+      assignments.set(attacker.instanceId, [blocker]);
+      available.splice(available.findIndex((item) => item.instanceId === blocker.instanceId), 1);
+    }
+  }
+  return assignments;
+}
+
+function applyVisibleCombat(draft, playerId, cardIds) {
+  const opponentId = otherPlayerId(draft, playerId);
+  const attackBoard = draft.players[playerId].zones.battlefield;
+  const blockBoard = draft.players[opponentId].zones.battlefield;
+  const attackers = attackBoard.filter((card) => cardIds.includes(card.instanceId));
+  const assignments = chooseBlockersForAttack(draft, playerId, attackers);
+  const deadAttackers = new Set();
+  const deadBlockers = new Set();
+  let totalDamage = 0;
+  for (const attacker of attackers) {
+    const traits = cardTraits(attacker);
+    attacker.tapped = !traits.vigilance;
+    const blockers = assignments.get(attacker.instanceId) || [];
+    const outcome = combatOutcome(attacker, blockers, attackBoard, blockBoard);
+    totalDamage += outcome.playerDamage;
+    if (outcome.attackerDies) deadAttackers.add(attacker.instanceId);
+    outcome.blockersDie.forEach((id) => deadBlockers.add(id));
+    draft.players[playerId].life += outcome.lifelinkGain;
+    if (traits.attackTrigger) draft._coach.virtual[playerId] += 1.25;
+    if (outcome.playerDamage > 0 && traits.combatDamageTrigger) draft._coach.virtual[playerId] += 2.0;
+    if (attacker.commander && outcome.playerDamage > 0) {
+      const sourceId = (attacker.mutationPile || []).find((part) => part.commander)?.instanceId || attacker.instanceId; draft.players[opponentId].commanderDamage[sourceId] = Number(draft.players[opponentId].commanderDamage[sourceId] || 0) + outcome.playerDamage;
+    }
+  }
+  draft.players[opponentId].life -= totalDamage;
+  draft._coach.combatDamage += totalDamage;
+  for (const card of attackBoard.filter((item) => deadAttackers.has(item.instanceId))) draft.players[playerId].zones.graveyard.push(card);
+  for (const card of blockBoard.filter((item) => deadBlockers.has(item.instanceId))) draft.players[opponentId].zones.graveyard.push(card);
+  draft.players[playerId].zones.battlefield = attackBoard.filter((item) => !deadAttackers.has(item.instanceId));
+  draft.players[opponentId].zones.battlefield = blockBoard.filter((item) => !deadBlockers.has(item.instanceId));
+}
+
+function bestTarget(player, opponent) {
+  return [...player.zones.battlefield]
+    .filter((card) => {
+      const traits = cardTraits(card);
+      return !traits.hexproof && !traits.shroud;
+    })
+    .sort((a, b) => permanentValue(b, player.zones.battlefield, opponent.zones.battlefield) - permanentValue(a, player.zones.battlefield, opponent.zones.battlefield))[0] || null;
+}
+
+function removePermanent(player, target) {
+  const index = player.zones.battlefield.findIndex((card) => card.instanceId === target.instanceId);
+  if (index < 0) return false;
+  const [removed] = player.zones.battlefield.splice(index, 1);
+  player.zones.graveyard.push(removed);
+  return true;
+}
+
+function applyBoardWipe(draft, perspectiveId, { knownSpell = false } = {}) {
+  const opponentId = otherPlayerId(draft, perspectiveId);
+  const moves = [];
+  for (const playerId of [perspectiveId, opponentId]) {
+    const player = draft.players[playerId];
+    const survivors = [];
+    const dead = [];
+    for (const card of player.zones.battlefield) {
+      if (!isCreature(card) || cardTraits(card).indestructible) survivors.push(card);
+      else dead.push(card);
+    }
+    player.zones.battlefield = survivors;
+    player.zones.graveyard.push(...dead);
+    moves.push(...dead.map((card) => ({ cardId: card.instanceId, playerId, from: 'battlefield', to: 'graveyard' })));
+  }
+  draft._coach.actionNotes.push(knownSpell ? 'resolved a visible board wipe' : 'sampled a plausible board wipe next turn');
+  return moves;
+}
+
+function respondToMove(draft, playerId, move, scenario, rng) {
+  const opponentId = otherPlayerId(draft, playerId);
+  const player = draft.players[playerId];
+  const opponent = draft.players[opponentId];
+  const castMove = move.type === 'sequence'
+    ? [...(move.steps || [])].reverse().find((step) => ['cast-permanent', 'cast-spell', 'cast-commander'].includes(step.type))
+    : (['cast-permanent', 'cast-spell', 'cast-commander'].includes(move.type) ? move : null);
+
+  if (castMove && scenario.categories.has('counterspell')) {
+    const card = cardById(draft, castMove.cardId);
+    if (card && rng() < 0.78) {
+      undoSourceEffects(draft, playerId, card.instanceId);
+      const found = findSimCard(player, card.instanceId);
+      if (found?.zone === 'battlefield') {
+        const countered = found.cards.splice(found.index, 1)[0];
+        player.zones.graveyard.push(countered);
+      }
+      draft._coach.virtual[playerId] -= Math.max(1.5, permanentValue(card, player.zones.battlefield, opponent.zones.battlefield) * 0.65);
+      draft._coach.actionNotes.push(`sampled ${opponent.name} countering ${card.name}`);
+    }
+  }
+
+  if (scenario.categories.has('removal') && rng() < 0.72) {
+    const target = bestTarget(player, opponent);
+    if (target) {
+      const traits = cardTraits(target);
+      const wardResistance = traits.ward ? 0.22 : 0;
+      const protectionResistance = traits.protection ? 0.24 : 0;
+      if (rng() > wardResistance + protectionResistance && removePermanent(player, target)) {
+        draft._coach.actionNotes.push(`sampled removal on ${target.name}`);
+      }
+    }
+  }
+
+  if (move.type === 'attack' || (move.type === 'sequence' && move.steps.some((step) => step.type === 'attack'))) {
+    if (scenario.categories.has('combatTrick')) {
+      draft._coach.virtual[playerId] -= 3.0 + rng() * 2.5;
+      draft._coach.actionNotes.push('sampled an opposing combat trick');
+    }
+    if (scenario.categories.has('protection')) {
+      draft._coach.virtual[playerId] -= 1.8 + rng() * 1.8;
+      draft._coach.actionNotes.push('sampled protection changing combat');
+    }
+    if (scenario.categories.has('flashThreat')) {
+      draft._coach.virtual[playerId] -= 1.6 + rng() * 2.2;
+      draft._coach.actionNotes.push('sampled a flash blocker');
+    }
+  }
+
+  if (scenario.categories.has('boardWipe')) {
+    const ourCreatures = player.zones.battlefield.filter((card) => isCreature(card) && !cardTraits(card).indestructible);
+    const theirCreatures = opponent.zones.battlefield.filter((card) => isCreature(card) && !cardTraits(card).indestructible);
+    const ourValue = ourCreatures.reduce((sum, card) => sum + permanentValue(card, player.zones.battlefield, opponent.zones.battlefield), 0);
+    const theirValue = theirCreatures.reduce((sum, card) => sum + permanentValue(card, opponent.zones.battlefield, player.zones.battlefield), 0);
+    if (ourValue > theirValue * 0.78 && rng() < 0.62) applyBoardWipe(draft, playerId);
+  }
+
+  if (scenario.categories.has('graveyardInteraction')) {
+    const graveyardValue = player.zones.graveyard.reduce((sum, card) => sum + (cardTraits(card).recursion || cardTraits(card).deathTrigger ? 0.8 : 0.12), 0);
+    draft._coach.virtual[playerId] -= Math.min(4, graveyardValue);
+  }
+  if (scenario.categories.has('engine')) draft._coach.virtual[opponentId] += 2.2 + rng() * 2.0;
+}
+
+function strategicAdjustment(state, playerId, move, risk) {
+  const player = state.players[playerId];
+  const earlyTurn = Number(state.turnNumber || 1) <= 5;
+  const availableLand = hasAvailableLandDrop(state, playerId);
+  const includesLand = ['play-land', 'advance-land'].includes(move.type)
+    || (move.type === 'sequence' && (move.steps || []).some((step) => ['play-land', 'advance-land'].includes(step.type)));
+  let adjustment = 0;
+  if (includesLand) adjustment += earlyTurn ? 12 : 7.5;
+  const beginningWithLand = ['untap', 'upkeep', 'draw'].includes(phaseId(state)) && player.zones.hand.some((card) => isLand(card));
+  if (move.type === 'hold' && (availableLand || beginningWithLand)) adjustment -= earlyTurn ? 15 : 9;
+  if (move.type === 'advance-phase') adjustment += 2;
+  if (move.type === 'hold' && state.turnNumber <= 3 && !playerHasUsefulInstant(player)) adjustment -= 3;
+
+  const cards = moveCards(state, move);
+  for (const card of cards) adjustment += commanderSynergy(player, card);
+  if (move.type === 'sequence') adjustment += 0.8;
+  if (move.type === 'attack') adjustment += (move.cardIds || []).reduce((sum, id) => sum + Math.max(-2, visibleAttackValue(state, playerId, cardById(state, id)) * 0.45), 0);
+
+  const paymentPlans = move.type === 'sequence'
+    ? (move.steps || []).map((step) => step.paymentPlan).filter(Boolean)
+    : [move.paymentPlan].filter(Boolean);
+  for (const plan of paymentPlans) {
+    if (plan.preservedColors?.length) adjustment += Math.min(1.2, plan.preservedColors.length * 0.35);
+    if (playerHasUsefulInstant(player) && plan.sources?.length && !plan.preservedColors?.length) adjustment -= 0.65;
+  }
+  const landEntries = move.type === 'sequence'
+    ? (move.steps || []).filter((step) => ['play-land', 'advance-land'].includes(step.type)).map((step) => step.entryPlan)
+    : (['play-land', 'advance-land'].includes(move.type) ? [move.entryPlan] : []);
+  if (landEntries.some((entry) => entry?.tapped)) adjustment -= earlyTurn ? 0.8 : 0.35;
+  if (landEntries.some((entry) => entry && !entry.tapped)) adjustment += 0.45;
+
+  const boardWipeRisk = risk.categories.boardWipe.probability;
+  if (['cast-permanent', 'cast-commander', 'sequence'].includes(move.type) && boardWipeRisk > 0.28) {
+    const newCreatureCount = cards.filter(isCreature).length;
+    adjustment -= newCreatureCount * boardWipeRisk * 3.2;
+  }
+  return adjustment;
+}
+
+function moveCards(state, move) {
+  if (move.type === 'sequence') return (move.steps || []).map((step) => cardById(state, step.cardId)).filter(Boolean);
+  const card = cardById(state, move.cardId);
+  return card ? [card] : [];
+}
+
+function commanderSynergy(player, card) {
+  const commanders = player.zones.command.length ? player.zones.command : player.zones.battlefield.filter((permanent) => permanent.commander);
+  let score = 0;
+  for (const commander of commanders) {
+    const commanderText = String(commander.oracleText || '').toLocaleLowerCase();
+    const cardText = String(card.oracleText || '').toLocaleLowerCase();
+    const subtypes = String(card.typeLine || '').split('—')[1]?.trim().split(/\s+/) || [];
+    if (subtypes.some((subtype) => subtype.length > 3 && commanderText.includes(subtype.toLocaleLowerCase()))) score += 1.5;
+    if (/ninjutsu|combat damage/.test(commanderText) && (cardTraits(card).unblockable || cardTraits(card).flying || cardTraits(card).menace)) score += 1.4;
+    if (/graveyard|dies|zombie/.test(commanderText) && (/graveyard|dies|zombie/.test(cardText) || /Zombie/.test(card.typeLine || ''))) score += 1.2;
+    if (/artifact/.test(commanderText) && /Artifact/.test(card.typeLine || '')) score += 1.0;
+    if (/enchantment/.test(commanderText) && /Enchantment/.test(card.typeLine || '')) score += 1.0;
+  }
+  return Math.min(3.5, score);
+}
+
+function playerHasUsefulInstant(player) {
+  return player.zones.hand.some((card) => {
+    const traits = cardTraits(card);
+    return traits.instant && (traits.counterspell || traits.targetedRemoval || traits.protectionSpell || traits.combatTrick);
+  });
+}
+
+function hasAvailableLandDrop(state, playerId) {
+  const player = state.players[playerId];
+  return ['main1', 'main2'].includes(phaseId(state))
+    && player.zones.hand.some((card) => isLand(card) && landPlayLegality(state, playerId, card).legal);
+}
+
+function playerScore(player, opponent, virtual = 0) {
+  let score = Number(player.life || 0) * 0.34 - Number(player.poison || 0) * 3.8 + player.zones.hand.length * 2.25 + player.zones.library.length * 0.012 + virtual;
+  const lowLife = player.life <= 12;
+  for (const card of player.zones.battlefield) score += permanentValue(card, player.zones.battlefield, opponent.zones.battlefield, { lowLife });
+  for (const card of player.zones.graveyard) {
+    const traits = cardTraits(card);
+    score += traits.recursion || traits.deathTrigger ? 0.38 : 0.05;
+  }
+  for (const card of player.zones.command) score += card.commander ? 1.0 : 0.2;
+  for (const card of player.zones.exile) {
+    if (/cast .* from exile|play .* from exile|suspend|foretell|adventure/i.test(card.oracleText || '')) score += 0.35;
+  }
+  const mana = manaDevelopmentSnapshot(player);
+  score += mana.nextTurn * 0.48 + mana.available * 0.24 + mana.colors.length * 0.10;
+  if (playerHasUsefulInstant(player) && mana.available > 0) score += 0.55;
+  const highestCommanderDamage = Math.max(0, ...Object.values(player.commanderDamage || {}).map(Number));
+  score -= highestCommanderDamage * 0.68;
+  if (player.life <= 0 || player.poison >= 10 || highestCommanderDamage >= 21 || player.lost) score -= 1000;
+  return score;
+}
+
+function boardScore(state, playerId) {
+  const opponentId = otherPlayerId(state, playerId);
+  return playerScore(state.players[playerId], state.players[opponentId], state._coach?.virtual?.[playerId] || 0)
+    - playerScore(state.players[opponentId], state.players[playerId], state._coach?.virtual?.[opponentId] || 0);
+}
+
+function estimatedManaCapacity(player) {
+  return manaDevelopmentSnapshot(player).available;
+}
+
+function rulesAwareResourceAdjustment(state, playerId) {
+  const opponentId = otherPlayerId(state, playerId);
+  const ours = manaDevelopmentSnapshot(state.players[playerId]);
+  const theirs = manaDevelopmentSnapshot(state.players[opponentId]);
+  return (ours.available - theirs.available) * 0.10
+    + (ours.nextTurn - theirs.nextTurn) * 0.08
+    + (ours.untappedSourceCount - theirs.untappedSourceCount) * 0.08;
+}
+
+function moveExposure(move, risk) {
+  const categories = risk.categories;
+  let probability = 0;
+  if (['cast-permanent', 'cast-commander', 'cast-spell'].includes(move.type)) {
+    probability = 1 - (1 - categories.counterspell.probability) * (1 - categories.removal.probability * (move.type === 'cast-spell' ? 0.15 : 1));
+  }
+  if (move.type === 'sequence') {
+    const casts = move.steps.filter((step) => step.type.startsWith('cast')).length;
+    probability = 1 - Math.pow((1 - categories.counterspell.probability) * (1 - categories.removal.probability * 0.65), Math.max(1, casts));
+    probability = Math.max(probability, categories.boardWipe.probability * 0.7);
+  }
+  if (move.type === 'attack') {
+    probability = 1 - (1 - categories.combatTrick.probability) * (1 - categories.protection.probability) * (1 - categories.flashThreat.probability);
+  }
+  if (move.type === 'hold') probability = 0.06;
+  return clamp(probability, 0, 0.98);
+}
+
+function riskLabel(probability) {
+  if (probability >= 0.6) return 'High';
+  if (probability >= 0.32) return 'Moderate';
+  if (probability >= 0.14) return 'Low–moderate';
+  return 'Low';
+}
+
+function relevantRisks(move, risk) {
+  const keys = move.type === 'attack'
+    ? ['combatTrick', 'protection', 'flashThreat', 'removal']
+    : ['counterspell', 'removal', 'boardWipe'];
+  return keys.map((key) => risk.categories[key]).filter((entry) => entry.probability > 0.08).sort((a, b) => b.probability - a.probability);
+}
+
+function visibleReasonsForMove(state, playerId, move) {
+  const player = state.players[playerId];
+  const opponent = state.players[otherPlayerId(state, playerId)];
+  const reasons = [];
+  if (['play-land', 'advance-land'].includes(move.type)) {
+    reasons.push('Makes the normal land drop and permanently increases future mana without spending mana.');
+    if (move.entryPlan?.tapped) reasons.push(`${cardById(state, move.cardId)?.name || 'The land'} enters tapped, so it will not produce mana this turn.`);
+    else reasons.push(`${cardById(state, move.cardId)?.name || 'The land'} is available as an untapped mana source this turn.`);
+  }
+  if (move.type === 'sequence') reasons.push('Uses sequencing and the exact remaining untapped mana sources rather than evaluating each spell in isolation.');
+  const plans = move.type === 'sequence' ? (move.steps || []).map((step) => step.paymentPlan).filter(Boolean) : [move.paymentPlan].filter(Boolean);
+  for (const plan of plans.slice(0, 2)) {
+    if (plan.sources?.length) reasons.push(`Payment uses ${plan.sources.map((source) => `${source.name} for ${source.label}${source.activationManaCost ? ` after ${source.activationManaCost}` : ''}${source.sacrificeSource ? ' and sacrifices it' : ''}`).join(', ')}.`);
+    if (plan.preservedColors?.length) reasons.push(`The payment leaves ${plan.preservedColors.join('/')} available for visible instant-speed options.`);
+  }
+  for (const card of moveCards(state, move)) {
+    const traits = cardTraits(card);
+    const abilities = [];
+    if (traits.flying) abilities.push('flying');
+    if (traits.reach) abilities.push('reach');
+    if (traits.menace) abilities.push('menace');
+    if (traits.fear || traits.intimidate || traits.shadow || traits.horsemanship || traits.skulk || traits.landwalk?.length) abilities.push('conditional evasion');
+    if (traits.deathtouch) abilities.push('deathtouch');
+    if (traits.firstStrike) abilities.push('first strike');
+    if (traits.doubleStrike) abilities.push('double strike');
+    if (traits.trample) abilities.push('trample');
+    if (traits.lifelink) abilities.push('lifelink');
+    if (traits.infect || traits.toxic) abilities.push(traits.infect ? 'infect' : `toxic ${traits.toxic}`);
+    if (traits.indestructible) abilities.push('indestructible');
+    if (traits.hexproof || traits.ward || traits.protectionFrom?.length) abilities.push(traits.hexproof ? 'hexproof' : traits.ward ? `ward ${traits.wardCost || ''}`.trim() : 'protection');
+    if (traits.deathTrigger) abilities.push('a death trigger');
+    if (traits.attackTrigger) abilities.push('an attack trigger');
+    if (traits.combatDamageTrigger) abilities.push('a combat-damage trigger');
+    if (traits.activatedAbility) abilities.push('an activated ability');
+    if (traits.staticEffect) abilities.push('a static effect');
+    if (traits.targetedRemoval) abilities.push('targeted removal');
+    if (traits.draw) abilities.push('card draw');
+    const keywordFacts = keywordSummary(card);
+    if (abilities.length) reasons.push(`${card.name} contributes ${abilities.slice(0, 5).join(', ')}.`);
+    else if (keywordFacts.length) reasons.push(`${card.name} has ${keywordFacts.slice(0, 5).join(', ')}.`);
+    const synergy = commanderSynergy(player, card);
+    if (synergy >= 1) reasons.push(`${card.name} directly supports the visible commander/deck plan.`);
+  }
+  if (move.type === 'attack') {
+    const attackers = (move.cardIds || []).map((id) => cardById(state, id)).filter(Boolean);
+    const blockers = opponent.zones.battlefield.filter((card) => isCreature(card) && !card.tapped);
+    const evasive = attackers.filter((card) => {
+      const traits = cardTraits(card, state.players[playerId].zones.battlefield);
+      return traits.flying || traits.unblockable || traits.menace;
+    });
+    if (evasive.length) reasons.push(`${evasive.map((card) => card.name).join(', ')} has relevant evasion against the visible blockers.`);
+    if (!blockers.length) reasons.push('The opponent has no untapped visible creature blockers.');
+  }
+  if (move.type === 'hold' && playerHasUsefulInstant(player)) reasons.push('Holding preserves a visible instant-speed answer in your hand.');
+  return reasons.slice(0, 5);
+}
+
+function memoryReasons(risk) {
+  const reasons = [];
+  if (risk.publicMemory.knownHand.length) reasons.push(`Known in the opponent's hand: ${risk.publicMemory.knownHand.join(', ')}.`);
+  const used = Object.entries(risk.publicMemory.usedInteraction || {});
+  if (used.length) reasons.push(`Already observed: ${used.map(([type, count]) => `${count} ${INTERACTION_MODELS[type]?.label || type}`).join(', ')}.`);
+  if (risk.publicMemory.behavior?.consecutivePassesWithOpenMana) reasons.push(`The opponent has repeatedly passed with mana open (${risk.publicMemory.behavior.consecutivePassesWithOpenMana} consecutive turn(s)).`);
+  return reasons.slice(0, 3);
+}
+
+function explainMove(state, playerId, move, average, risk, responseStats) {
+  const exposure = moveExposure(move, risk);
+  const relevant = relevantRisks(move, risk);
+  const visibleReasons = visibleReasonsForMove(state, playerId, move);
+  const publicReasons = memoryReasons(risk);
+  const riskText = relevant.length
+    ? `${relevant.map((entry) => `${Math.round(entry.probability * 100)}% ${entry.label}`).join('; ')} based on open mana, hand size, colors, and public history.`
+    : 'No major instant-speed interaction is strongly suggested by the current public information.';
+  const headline = visibleReasons[0] || (average >= 0 ? 'This line improves the visible position.' : 'This line limits immediate downside but may lose tempo.');
+  return {
+    headline,
+    visibleReasons,
+    publicMemoryReasons: publicReasons,
+    hiddenRisk: riskText,
+    riskLevel: riskLabel(exposure),
+    riskProbability: exposure,
+    sampledResponses: responseStats,
+  };
+}
+
+function evaluateMove(state, info, risk, playerId, move, rollouts, seed) {
+  let total = 0;
+  let high = -Infinity;
+  let low = Infinity;
+  const scores = [];
+  const responseCounts = {};
+  const baseSimulation = simulationStateFromInformationSet(state, info);
+  const profile = buildStrategyProfile(state.players[playerId]);
+  const actionResult = applyTacticalAction(baseSimulation, playerId, move, { autoResolve: true });
+  if (!actionResult.ok) {
+    return {
+      ...move, score: -999, range: [-999, -999], stdev: 0, riskProbability: 1,
+      explanationDetails: explainMove(state, playerId, move, -999, risk, {}),
+    };
+  }
+  const deterministicState = actionResult.state;
+  for (let i = 0; i < rollouts; i += 1) {
+    const rng = mulberry32(seed + i * 2654435761 + hashString(move.label));
+    const simulated = deepClone(deterministicState);
+    const scenario = sampleHiddenScenario(risk, rng);
+    for (const category of scenario.categories) responseCounts[category] = Number(responseCounts[category] || 0) + 1;
+    respondToMove(simulated, playerId, move, scenario, rng);
+    const score = tacticalStateScore(simulated, playerId, profile)
+      + strategicAdjustment(state, playerId, move, risk)
+      + actionStrategyBonus(move, state, playerId, profile);
+    scores.push(score);
+    total += score;
+    high = Math.max(high, score);
+    low = Math.min(low, score);
+  }
+  const average = total / Math.max(1, rollouts);
+  const variance = scores.reduce((sum, score) => sum + (score - average) ** 2, 0) / Math.max(1, scores.length);
+  const stdev = Math.sqrt(variance);
+  const responseStats = Object.fromEntries(Object.entries(responseCounts).map(([key, count]) => [key, Number((count / Math.max(1, rollouts)).toFixed(3))]));
+  const explanationDetails = explainMove(state, playerId, move, average, risk, responseStats);
+  explanationDetails.strategy = `Visible plan: ${strategyLabel(profile)}.`;
+  if (!explanationDetails.visibleReasons.includes(explanationDetails.strategy)) explanationDetails.visibleReasons.push(explanationDetails.strategy);
+  return {
+    ...move,
+    score: Number(average.toFixed(2)),
+    range: [Number(low.toFixed(1)), Number(high.toFixed(1))],
+    stdev: Number(stdev.toFixed(2)),
+    riskProbability: moveExposure(move, risk),
+    explanationDetails,
+  };
+}
+
+function analyzePosition(state, playerId = state.activePlayerId, rollouts = state.settings.coachRollouts || 450) {
+  ensureKnowledge(state);
+  const informationSet = buildInformationSet(state, playerId);
+  const risk = buildInteractionRisk(state, playerId);
+  const moves = possibleMoves(state, playerId);
+  const seed = analysisSeed(state, playerId);
+  const perMoveRollouts = Math.max(40, Math.min(240, Number(rollouts || 80)));
+  const results = moves.map((move) => evaluateMove(state, informationSet, risk, playerId, move, perMoveRollouts, seed));
+  results.sort((a, b) => b.score - a.score);
+
+  const best = results[0];
+  const second = results[1];
+  if (best) {
+    const margin = second ? best.score - second.score : Math.max(1, Math.abs(best.score) * 0.15);
+    const uncertainty = best.stdev + best.riskProbability * 6;
+    best.confidence = Math.round(clamp(56 + margin * 4.5 + Math.sqrt(perMoveRollouts) * 0.7 - uncertainty * 2.2, 20, 96));
+    const safer = results
+      .slice(1)
+      .filter((result) => result.riskProbability + 0.08 < best.riskProbability && result.score >= best.score - 5.5)
+      .sort((a, b) => (a.riskProbability - b.riskProbability) || (b.score - a.score))[0];
+    best.saferAlternative = safer ? { label: safer.label, score: safer.score, riskLevel: riskLabel(safer.riskProbability) } : null;
+    best.explanation = best.explanationDetails.headline;
+  }
+  for (const result of results.slice(1)) {
+    result.confidence = Math.round(clamp(48 + Math.sqrt(perMoveRollouts) * 0.5 - result.stdev * 1.8 - result.riskProbability * 18, 18, 88));
+    result.saferAlternative = null;
+    result.explanation = result.explanationDetails.headline;
+  }
+
+  return {
+    moves,
+    results,
+    baseline: tacticalStateScore(simulationStateFromInformationSet(state, informationSet), playerId, buildStrategyProfile(state.players[playerId])),
+    rollouts: perMoveRollouts,
+    searchType: 'Rules-aware tactical information-set Monte Carlo search (3-ply beam look-ahead)',
+    informationSetAudit: informationSet.audit,
+    risk,
+  };
+}
+
+async function evaluateMoveAsync(state, info, risk, playerId, move, rollouts, seed, options = {}) {
+  let total = 0;
+  let high = -Infinity;
+  let low = Infinity;
+  let completed = 0;
+  const scores = [];
+  const responseCounts = {};
+  const baseSimulation = simulationStateFromInformationSet(state, info);
+  const profile = buildStrategyProfile(state.players[playerId]);
+  const actionResult = applyTacticalAction(baseSimulation, playerId, move, { autoResolve: true });
+  if (!actionResult.ok) {
+    return {
+      ...move, score: -999, range: [-999, -999], stdev: 0, riskProbability: 1, samplesUsed: 0,
+      explanationDetails: explainMove(state, playerId, move, -999, risk, {}),
+    };
+  }
+  const deterministicState = actionResult.state;
+  const minSamples = Math.min(16, Math.max(8, Math.floor(rollouts / 4)));
+  let lastYield = coachNow();
+  for (let i = 0; i < rollouts; i += 1) {
+    if (options.shouldCancel?.()) return null;
+    const rng = mulberry32(seed + i * 2654435761 + hashString(move.label));
+    const simulated = deepClone(deterministicState);
+    const scenario = sampleHiddenScenario(risk, rng);
+    for (const category of scenario.categories) responseCounts[category] = Number(responseCounts[category] || 0) + 1;
+    respondToMove(simulated, playerId, move, scenario, rng);
+    const score = tacticalStateScore(simulated, playerId, profile)
+      + strategicAdjustment(state, playerId, move, risk)
+      + actionStrategyBonus(move, state, playerId, profile);
+    scores.push(score);
+    total += score;
+    high = Math.max(high, score);
+    low = Math.min(low, score);
+    completed += 1;
+
+    const now = coachNow();
+    if (now - lastYield >= 10) {
+      await coachYield();
+      lastYield = coachNow();
+      if (options.shouldCancel?.()) return null;
+    }
+    if (coachNow() >= Number(options.deadline || Infinity) && completed >= minSamples) break;
+  }
+  const average = total / Math.max(1, completed);
+  const variance = scores.reduce((sum, score) => sum + (score - average) ** 2, 0) / Math.max(1, scores.length);
+  const stdev = Math.sqrt(variance);
+  const responseStats = Object.fromEntries(Object.entries(responseCounts).map(([key, count]) => [key, Number((count / Math.max(1, completed)).toFixed(3))]));
+  const explanationDetails = explainMove(state, playerId, move, average, risk, responseStats);
+  explanationDetails.strategy = `Visible plan: ${strategyLabel(profile)}.`;
+  if (!explanationDetails.visibleReasons.includes(explanationDetails.strategy)) explanationDetails.visibleReasons.push(explanationDetails.strategy);
+  return {
+    ...move,
+    score: Number(average.toFixed(2)),
+    range: [Number(low.toFixed(1)), Number(high.toFixed(1))],
+    stdev: Number(stdev.toFixed(2)),
+    riskProbability: moveExposure(move, risk),
+    samplesUsed: completed,
+    explanationDetails,
+  };
+}
+
+function finalizeCoachResults(results, perMoveRollouts) {
+  results.sort((a, b) => b.score - a.score);
+  const best = results[0];
+  const second = results[1];
+  if (best) {
+    const margin = second ? best.score - second.score : Math.max(1, Math.abs(best.score) * 0.15);
+    const uncertainty = best.stdev + best.riskProbability * 6;
+    best.confidence = Math.round(clamp(56 + margin * 4.5 + Math.sqrt(Math.max(1, best.samplesUsed || perMoveRollouts)) * 0.7 - uncertainty * 2.2, 20, 96));
+    const safer = results
+      .slice(1)
+      .filter((result) => result.riskProbability + 0.08 < best.riskProbability && result.score >= best.score - 5.5)
+      .sort((a, b) => (a.riskProbability - b.riskProbability) || (b.score - a.score))[0];
+    best.saferAlternative = safer ? { label: safer.label, score: safer.score, riskLevel: riskLabel(safer.riskProbability) } : null;
+    best.explanation = best.explanationDetails.headline;
+  }
+  for (const result of results.slice(1)) {
+    result.confidence = Math.round(clamp(48 + Math.sqrt(Math.max(1, result.samplesUsed || perMoveRollouts)) * 0.5 - result.stdev * 1.8 - result.riskProbability * 18, 18, 88));
+    result.saferAlternative = null;
+    result.explanation = result.explanationDetails.headline;
+  }
+}
+
+async function analyzePositionAsync(state, playerId = state.activePlayerId, rollouts = state.settings.coachRollouts || 80, options = {}) {
+  const startedAt = coachNow();
+  const maxDurationMs = Math.max(3000, Math.min(12000, Number(options.maxDurationMs || 7500)));
+  const deadline = startedAt + maxDurationMs;
+  const shouldCancel = typeof options.shouldCancel === 'function' ? options.shouldCancel : () => false;
+  const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
+  ensureKnowledge(state);
+  const informationSet = buildInformationSet(state, playerId);
+  const risk = buildInteractionRisk(state, playerId);
+  const complexity = visibleCoachComplexity(state, playerId);
+  const requestedRollouts = Math.max(40, Math.min(240, Number(rollouts || 80)));
+  const perMoveRollouts = complexity >= 30 ? Math.min(requestedRollouts, 40) : complexity >= 20 ? Math.min(requestedRollouts, 60) : requestedRollouts;
+  const seed = analysisSeed(state, playerId);
+
+  onProgress('Finding legal plays without blocking the table…');
+  const moves = await possibleMovesAsync(state, playerId, { deadline, shouldCancel, onProgress });
+  if (shouldCancel()) return null;
+  const results = [];
+  const minimumResults = Math.min(complexity >= 30 ? 4 : 6, moves.length);
+
+  for (let index = 0; index < moves.length; index += 1) {
+    if (shouldCancel()) return null;
+    if (coachNow() >= deadline && results.length >= minimumResults) break;
+    onProgress(`Analyzing line ${index + 1} of ${moves.length}…`);
+    const result = await evaluateMoveAsync(state, informationSet, risk, playerId, moves[index], perMoveRollouts, seed, {
+      deadline,
+      shouldCancel,
+    });
+    if (result) results.push(result);
+    await coachYield();
+  }
+
+  finalizeCoachResults(results, perMoveRollouts);
+  const elapsedMs = Math.round(coachNow() - startedAt);
+  return {
+    moves,
+    results,
+    baseline: tacticalStateScore(simulationStateFromInformationSet(state, informationSet), playerId, buildStrategyProfile(state.players[playerId])),
+    rollouts: perMoveRollouts,
+    requestedRollouts,
+    elapsedMs,
+    truncated: results.length < moves.length,
+    searchType: 'Responsive rules-aware tactical information-set search with cooperative yielding',
+    informationSetAudit: informationSet.audit,
+    risk,
+  };
+}
+
+function defenseAdvice(state) {
+  const attackerPlayer = Object.values(state.players).find((player) => player.zones.battlefield.some((card) => card.attacking));
+  if (!attackerPlayer) return null;
+  const defenderId = otherPlayerId(state, attackerPlayer.id);
+  const defender = state.players[defenderId];
+  const attackers = attackerPlayer.zones.battlefield.filter((card) => card.attacking);
+  const blockers = defender.zones.battlefield.filter((card) => isCreature(card) && !card.tapped);
+  const assignments = [];
+  const unused = [...blockers];
+  const ordered = [...attackers].sort((a, b) => permanentValue(b, attackerPlayer.zones.battlefield, defender.zones.battlefield) - permanentValue(a, attackerPlayer.zones.battlefield, defender.zones.battlefield));
+  let expectedDamage = 0;
+
+  for (const attacker of ordered) {
+    const legal = unused.filter((blocker) => canBlock(attacker, blocker, defender.zones.battlefield, attackerPlayer.zones.battlefield));
+    const traits = cardTraits(attacker, attackerPlayer.zones.battlefield);
+    let chosen = [];
+    if (traits.menace && legal.length >= 2) {
+      const pairs = [];
+      for (let i = 0; i < legal.length; i += 1) for (let j = i + 1; j < legal.length; j += 1) pairs.push([legal[i], legal[j]]);
+      pairs.sort((a, b) => combatTradeScore(attacker, a, attackerPlayer.zones.battlefield, defender.zones.battlefield) - combatTradeScore(attacker, b, attackerPlayer.zones.battlefield, defender.zones.battlefield));
+      chosen = pairs[0] || [];
+    } else if (legal.length) {
+      legal.sort((a, b) => combatTradeScore(attacker, [a], attackerPlayer.zones.battlefield, defender.zones.battlefield) - combatTradeScore(attacker, [b], attackerPlayer.zones.battlefield, defender.zones.battlefield));
+      chosen = [legal[0]];
+    }
+    const outcome = combatOutcome(attacker, chosen, attackerPlayer.zones.battlefield, defender.zones.battlefield);
+    expectedDamage += Number(outcome.lifeDamage || outcome.playerDamage || 0) + Number(outcome.poisonDamage || 0) * 2;
+    if (chosen.length) {
+      const attackerValue = permanentValue(attacker, attackerPlayer.zones.battlefield, defender.zones.battlefield);
+      const blockerValue = chosen.reduce((sum, blocker) => sum + permanentValue(blocker, defender.zones.battlefield, attackerPlayer.zones.battlefield), 0);
+      const deathtouchWarning = chosen.some((blocker) => cardTraits(blocker).deathtouch);
+      assignments.push({
+        attacker: attacker.name,
+        attackerId: attacker.instanceId,
+        blocker: chosen.map((card) => card.name).join(' + '),
+        blockerIds: chosen.map((card) => card.instanceId),
+        reason: deathtouchWarning
+          ? `deathtouch makes this block trade up despite the blocker's size`
+          : outcome.attackerDies && blockerValue < attackerValue
+            ? 'trades lower-value material for the more valuable attacker'
+            : outcome.playerDamage === 0
+              ? 'prevents the most useful visible attack'
+              : `limits trample damage to ${outcome.playerDamage}`,
+      });
+      for (const blocker of chosen) unused.splice(unused.findIndex((card) => card.instanceId === blocker.instanceId), 1);
+    }
+  }
+  return { attackerName: attackerPlayer.name, defenderId, defenderName: defender.name, assignments, expectedDamage };
+}
+
+
+return { buildInformationSet, possibleMoves, possibleMovesAsync, buildInteractionRisk, analyzePosition, analyzePositionAsync, defenseAdvice };
+})();
+
+// ---- game.js ----
+__modules["./game.js"] = (() => {
+const { PHASES, ZONE_LABELS } = __modules["./constants.js"];
+const { drawCards, findCard, updateState } = __modules["./state.js"];
+const { recordPublicEvent, recordTurnPass, recordZoneTransition } = __modules["./knowledge.js"];
+const { applySpellPayment, attackLegality, canPayMana, landEntryPlan, landPlayLegality, maximumHandSize, moveLegality, planManaPayment, spellCastLegality, spendMana, stackDestination } = __modules["./rules.js"];
+const { canActivateManaChoice, deepClone, formatManaBundle, isCreature, isLand, isPermanent, manaProductionChoices, shuffle, uid } = __modules["./utils.js"];
+const { cardTraits } = __modules["./card-evaluation.js"];
+
+function opponentPlayerIds(state, playerId) {
+  return Object.keys(state.players || {}).filter((id) => id !== playerId && !state.players[id]?.lost);
+}
+function otherPlayerId(state, playerId) {
+  return opponentPlayerIds(state, playerId)[0];
+}
+
+function gameTurnOrder(state) {
+  const explicit = Array.isArray(state?.turnOrder)
+    ? state.turnOrder.filter((id) => state.players?.[id] && !state.players[id].lost)
+    : [];
+  const fallback = Object.keys(state?.players || {}).filter((id) => !state.players[id].lost);
+  return explicit.length ? explicit : fallback;
+}
+
+function nextTurnPlayerId(state, playerId) {
+  const order = gameTurnOrder(state);
+  if (!order.length) return playerId;
+  const index = order.indexOf(playerId);
+  return order[(index >= 0 ? index + 1 : 0) % order.length] || order[0];
+}
+
+function isAura(card) { return /\bAura\b/i.test(String(card?.typeLine || '')); }
+function isEquipment(card) { return /\bEquipment\b/i.test(String(card?.typeLine || '')); }
+function isFortification(card) { return /\bFortification\b/i.test(String(card?.typeLine || '')); }
+function battlefieldCards(draft) { return Object.values(draft.players || {}).flatMap((player) => player.zones?.battlefield || []); }
+
+function enchantLine(card) {
+  return oracleAbilityLines(card).find((line) => /^enchant\b/i.test(line)) || '';
+}
+
+function auraTargetLegality(aura, target, state) {
+  if (!isAura(aura)) return { legal: false, reason: 'That permanent is not an Aura.' };
+  if (!target) return { legal: false, reason: 'Choose something for the Aura to enchant.' };
+  const line = enchantLine(aura);
+  if (!line) return { legal: true, reason: '' };
+  const rule = line.replace(/^enchant\s+/i, '').toLowerCase();
+  if (/\bplayer\b/.test(rule)) return { legal: false, reason: 'This Aura enchants a player. Player attachments still use the manual-effect tool.' };
+  const type = String(target.typeLine || '').toLowerCase();
+  const sourceController = aura.controller || aura.owner;
+  const targetController = target.controller || target.owner;
+  if (/\byou control\b/.test(rule) && targetController !== sourceController) return { legal: false, reason: 'This Aura can enchant only something you control.' };
+  if (/\b(?:an opponent|opponent) controls\b/.test(rule) && targetController === sourceController) return { legal: false, reason: 'This Aura must enchant something an opponent controls.' };
+  if (/\btapped\b/.test(rule) && !/\buntapped\b/.test(rule) && !target.tapped) return { legal: false, reason: 'This Aura requires a tapped object.' };
+  if (/\buntapped\b/.test(rule) && target.tapped) return { legal: false, reason: 'This Aura requires an untapped object.' };
+  if (/\bnonland permanent\b/.test(rule) && /\bland\b/.test(type)) return { legal: false, reason: 'This Aura cannot enchant a land.' };
+
+  const explicitTypes = ['creature', 'land', 'artifact', 'enchantment', 'planeswalker', 'battle'];
+  const requested = explicitTypes.filter((name) => new RegExp(`\\b${name}\\b`, 'i').test(rule));
+  if (requested.length && !requested.some((name) => new RegExp(`\\b${name}\\b`, 'i').test(type))) {
+    return { legal: false, reason: `This Aura can enchant only ${requested.join(' or ')} permanents.` };
+  }
+  if (/\bpermanent\b/.test(rule) && !type) return { legal: false, reason: 'This Aura needs a permanent.' };
+  return { legal: true, reason: '' };
+}
+
+function attachmentTargetLegality(source, target, state) {
+  if (!source || !target) return { legal: false, reason: 'Choose two battlefield permanents.' };
+  if (source.instanceId === target.instanceId) return { legal: false, reason: 'A permanent cannot attach to itself this way.' };
+  if (isAura(source)) return auraTargetLegality(source, target, state);
+  if (isEquipment(source)) {
+    if (!isCreature(target)) return { legal: false, reason: 'Equipment can attach only to a creature.' };
+    if ((target.controller || target.owner) !== (source.controller || source.owner)) return { legal: false, reason: 'Equip normally targets a creature you control. Use a card effect/manual override for unusual attachment effects.' };
+    return { legal: true, reason: '' };
+  }
+  if (isFortification(source)) {
+    if (!isLand(target)) return { legal: false, reason: 'A Fortification attaches to a land.' };
+    if ((target.controller || target.owner) !== (source.controller || source.owner)) return { legal: false, reason: 'Fortify normally targets a land you control.' };
+    return { legal: true, reason: '' };
+  }
+  return { legal: false, reason: 'Only Auras, Equipment, and Fortifications attach through this control.' };
+}
+
+function movePermanentControlInDraft(draft, instanceId, newControllerId, { reason = 'card effect', emit = true } = {}) {
+  const located = findCard(instanceId, draft);
+  if (!located || located.zone !== 'battlefield' || !draft.players[newControllerId]) return null;
+  const permanent = located.card;
+  const oldControllerId = permanent.controller || located.playerId;
+  if (oldControllerId === newControllerId) return permanent;
+  const moved = located.container.splice(located.index, 1)[0];
+  for (const player of Object.values(draft.players)) {
+    for (const other of player.zones.battlefield) {
+      if (other.blocking === moved.instanceId) other.blocking = null;
+      other.blockedBy = (other.blockedBy || []).filter((id) => id !== moved.instanceId);
+    }
+  }
+  moved.controller = newControllerId;
+  moved.attacking = false;
+  moved.blocking = null;
+  moved.blockedBy = [];
+  if (isCreature(moved)) moved.summoningSick = true;
+  moved.controlChangedTurn = Number(draft.turnNumber || 1);
+  draft.players[newControllerId].zones.battlefield.push(moved);
+  recordPublicEvent(draft, { type: 'control_changed', actorId: newControllerId, subjectPlayerId: moved.owner, card: moved, fromControllerId: oldControllerId, toControllerId: newControllerId, reason, meaningful: true });
+  if (emit) emitGameEvent(draft, { type: 'control-change', actorId: newControllerId, card: moved, fromControllerId: oldControllerId, toControllerId: newControllerId });
+  return moved;
+}
+
+function auraControlsEnchantedObject(aura) {
+  return /\byou control enchanted (?:creature|permanent)\b/i.test(String(aura?.oracleText || ''));
+}
+
+function releaseAuraControlEffect(draft, aura) {
+  const info = aura?.auraControlEffect;
+  if (!info?.targetId) return;
+  const target = findCard(info.targetId, draft);
+  if (target && target.zone === 'battlefield' && (target.card.controller || target.playerId) === info.appliedControllerId && draft.players[info.previousControllerId]) {
+    movePermanentControlInDraft(draft, target.card.instanceId, info.previousControllerId, { reason: `${aura.name} stopped controlling it` });
+  }
+  delete aura.auraControlEffect;
+}
+
+function applyAuraControlEffect(draft, aura) {
+  if (!auraControlsEnchantedObject(aura) || !aura.attachedTo) return;
+  const target = findCard(aura.attachedTo, draft);
+  if (!target || target.zone !== 'battlefield') return;
+  const desiredController = aura.controller || aura.owner;
+  const existing = aura.auraControlEffect;
+  const previousControllerId = existing?.targetId === target.card.instanceId
+    ? existing.previousControllerId
+    : (target.card.controller || target.playerId);
+  if (existing?.targetId && existing.targetId !== target.card.instanceId) releaseAuraControlEffect(draft, aura);
+  aura.auraControlEffect = { targetId: target.card.instanceId, previousControllerId, appliedControllerId: desiredController };
+  movePermanentControlInDraft(draft, target.card.instanceId, desiredController, { reason: `${aura.name} controls enchanted object` });
+}
+
+function applyAuraControlEffects(draft) {
+  for (const aura of battlefieldCards(draft).filter((card) => isAura(card) && card.attachedTo && auraControlsEnchantedObject(card))) applyAuraControlEffect(draft, aura);
+}
+
+function putAuraIntoOwnersGraveyard(draft, aura, reason = 'became unattached') {
+  const initial = findCard(aura.instanceId, draft);
+  if (!initial || initial.zone !== 'battlefield') return;
+  const priorTargetId = initial.card.attachedTo || null;
+  releaseAuraControlEffect(draft, initial.card);
+  if (priorTargetId) {
+    const priorTarget = findCard(priorTargetId, draft);
+    if (priorTarget) priorTarget.card.attachments = (priorTarget.card.attachments || []).filter((id) => id !== aura.instanceId);
+  }
+  const located = findCard(aura.instanceId, draft);
+  if (!located || located.zone !== 'battlefield') return;
+  const moved = located.container.splice(located.index, 1)[0];
+  moved.attachedTo = null;
+  moved.tapped = false;
+  moved.attacking = false;
+  moved.blocking = null;
+  moved.blockedBy = [];
+  const owner = draft.players[moved.owner] || draft.players[moved.controller];
+  owner.zones.graveyard.push(moved);
+  recordZoneTransition(draft, { card: moved, actorId: moved.controller, subjectPlayerId: moved.owner, fromZone: 'battlefield', toZone: 'graveyard' });
+  enqueueBattlefieldLeaveEffects(draft, moved, 'graveyard');
+  draft.log.unshift({ id: uid('log'), time: new Date().toISOString(), text: `${moved.name}: ${reason}; Aura moved to its owner's graveyard.` });
+}
+
+function revalidateAuraAttachments(draft) {
+  const auras = battlefieldCards(draft).filter(isAura);
+  for (const aura of [...auras]) {
+    if (!aura.attachedTo) {
+      putAuraIntoOwnersGraveyard(draft, aura, 'was not attached to anything');
+      continue;
+    }
+    const target = findCard(aura.attachedTo, draft);
+    if (!target || target.zone !== 'battlefield' || !auraTargetLegality(aura, target.card, draft).legal) {
+      putAuraIntoOwnersGraveyard(draft, aura, target ? 'was attached illegally' : 'was no longer attached to a battlefield object');
+    }
+  }
+}
+
+function legalAuraTargets(aura, state) {
+  return battlefieldCards(state).filter((target) => target.instanceId !== aura?.instanceId && auraTargetLegality(aura, target, state).legal);
+}
+
+function clearCardRelations(draft, card) {
+  if (isAura(card)) releaseAuraControlEffect(draft, card);
+  const orphanAuras = [];
+  for (const player of Object.values(draft.players)) {
+    for (const permanent of player.zones.battlefield) {
+      if (permanent.attachedTo === card.instanceId) {
+        permanent.attachedTo = null;
+        if (isAura(permanent)) orphanAuras.push(permanent.instanceId);
+      }
+      permanent.attachments = (permanent.attachments || []).filter((id) => id !== card.instanceId);
+      if (permanent.blocking === card.instanceId) permanent.blocking = null;
+      permanent.blockedBy = (permanent.blockedBy || []).filter((id) => id !== card.instanceId);
+    }
+  }
+  for (const auraId of orphanAuras) {
+    const aura = findCard(auraId, draft)?.card;
+    if (aura) putAuraIntoOwnersGraveyard(draft, aura, 'the enchanted object left the battlefield');
+  }
+}
+
+function oracleAbilityLines(card) {
+  return String(card?.oracleText || '')
+    .split(/\n+/)
+    .flatMap((line) => line.split(/(?<=[.!?])\s+(?=[A-Z{])/))
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function compactManaCost(raw = '') { return String(raw || '').replace(/\s+/g, '').trim(); }
+
+function keywordAbilityCost(card, keywordPattern) {
+  const text = String(card?.oracleText || '');
+  const match = text.match(new RegExp(`(?:^|\\n)${keywordPattern}\\s+((?:\\{[^}]+\\})+)`, 'i'));
+  return compactManaCost(match?.[1] || '');
+}
+
+function ninjutsuCostForCard(state, card) {
+  const printed = keywordAbilityCost(card, '(?:commander\\s+)?ninjutsu');
+  if (printed) return printed;
+  const player = state.players?.[card?.controller || card?.owner];
+  for (const permanent of player?.zones?.battlefield || []) {
+    const match = String(permanent.oracleText || '').match(/(?:each|every) creature card in your hand has (?:commander\s+)?ninjutsu\s+((?:\{[^}]+\})+)/i);
+    if (match) return compactManaCost(match[1]);
+  }
+  return '';
+}
+function mutateCostForCard(card) {
+  const normal = keywordAbilityCost(card, 'mutate');
+  if (normal) return normal;
+  // Defensive fallback for alternate printings/importers that flatten Oracle text
+  // or preserve the Mutate keyword but format line breaks differently.
+  const text = String(card?.oracleText || card?.oracle_text || '');
+  const loose = text.match(/\bMutate\s+((?:\{[^}]+\})+)/i);
+  if (loose?.[1]) return compactManaCost(loose[1]);
+  if ([...(card?.keywords || []), ...(card?.manualKeywords || [])].some((value) => /^Mutate$/i.test(String(value).trim()))) {
+    const anywhere = text.match(/((?:\{[^}]+\})+)\s*\(If you cast this spell for its mutate cost/i);
+    if (anywhere?.[1]) return compactManaCost(anywhere[1]);
+  }
+  return '';
+}
+function isHumanCreature(card) {
+  if (!/\bCreature\b/i.test(card?.typeLine || '')) return false;
+  if (/(?:—|-)\s*[^\n]*\bHuman\b/i.test(card?.typeLine || '')) return true;
+  const abilities = [...(card?.keywords || []), ...(card?.manualKeywords || [])].join(' ');
+  return /\bChangeling\b/i.test(abilities) || /(?:^|\n)Changeling(?:\s|$|\()/i.test(String(card?.oracleText || ''));
+}
+
+function topLevelCardOccurrences(draft, instanceId) {
+  const matches = [];
+  for (const [playerId, player] of Object.entries(draft.players || {})) {
+    for (const [zone, cards] of Object.entries(player.zones || {})) {
+      if (!Array.isArray(cards)) continue;
+      for (let index = 0; index < cards.length; index += 1) {
+        if (cards[index]?.instanceId === instanceId) matches.push({ playerId, zone, cards, index, card: cards[index] });
+      }
+    }
+  }
+  return matches;
+}
+
+function extractUniqueTopLevelCard(draft, instanceId, preferredZone = '') {
+  const matches = topLevelCardOccurrences(draft, instanceId);
+  if (!matches.length) return null;
+  const preferred = matches.find((item) => item.zone === preferredZone) || matches[0];
+  const chosenCard = preferred.card;
+  const chosenZone = preferred.zone;
+  // Remove every top-level occurrence of this physical card ID. This is a
+  // defensive invariant repair for older saves/network races that created a
+  // duplicate reference. Mutation components are intentionally not scanned.
+  for (const player of Object.values(draft.players || {})) {
+    for (const cards of Object.values(player.zones || {})) {
+      if (!Array.isArray(cards)) continue;
+      for (let i = cards.length - 1; i >= 0; i -= 1) if (cards[i]?.instanceId === instanceId) cards.splice(i, 1);
+    }
+  }
+  return { card: chosenCard, fromZone: chosenZone };
+}
+
+function pendingNinjutsuAbility(state, sourceCardId) {
+  return (state.stack || []).find((item) => item?._specialAbility === 'ninjutsu' && item.sourceCardId === sourceCardId) || null;
+}
+
+function ninjutsuOptions(instanceId) {
+  const state = window.CommanderForge.getState();
+  const found = findCard(instanceId, state);
+  if (!found || found.zone !== 'hand' || !isCreature(found.card)) return [];
+  if (pendingNinjutsuAbility(state, instanceId)) return [];
+  const playerId = found.card.controller || found.card.owner;
+  if (state.activePlayerId !== playerId || PHASES[state.phaseIndex]?.id !== 'combat') return [];
+  const cost = ninjutsuCostForCard(state, found.card);
+  if (!cost) return [];
+  return (state.players[playerId]?.zones?.battlefield || [])
+    .filter((card) => card.attacking && !(card.blockedBy || []).length)
+    .map((attacker) => ({ attackerId: attacker.instanceId, attackerName: attacker.name, cost }));
+}
+
+function mutateStatus(instanceId) {
+  const state = window.CommanderForge.getState();
+  const found = findCard(instanceId, state);
+  const sourceZone = found?.zone || '';
+  if (!found || !isCreature(found.card)) return { hasMutate: false, canCastMutate: false, cost: '', targets: [], reason: '', sourceZone, commanderTax: 0, targetEligible: false };
+  const cost = mutateCostForCard(found.card);
+  if (!cost) return { hasMutate: false, canCastMutate: false, cost: '', targets: [], reason: '', sourceZone, commanderTax: 0, targetEligible: false };
+
+  const canCastMutate = ['hand', 'command'].includes(sourceZone);
+  const owner = state.players?.[found.card.owner];
+  const commanderTax = sourceZone === 'command' ? 2 * Number(owner?.commanderCastCount?.[found.card.instanceId] || 0) : 0;
+  const displayCost = commanderTax ? `${cost} + {${commanderTax}} commander tax` : cost;
+  const ownedCreatures = Object.values(state.players).flatMap((player) => player.zones.battlefield || [])
+    .filter((target) => target.owner === found.card.owner && isCreature(target));
+  const legalOwnedTargets = ownedCreatures.filter((target) => !isHumanCreature(target));
+  const targets = canCastMutate
+    ? legalOwnedTargets.map((target) => ({ targetId: target.instanceId, targetName: target.name, cost: displayCost, baseCost: cost, commanderTax }))
+    : [];
+
+  const targetEligible = sourceZone === 'battlefield' && !isHumanCreature(found.card);
+  let reason = '';
+  if (!canCastMutate) {
+    if (sourceZone === 'battlefield') reason = 'Mutate is an alternative casting cost, not an activated battlefield ability. This permanent can be a mutate target, but to use this card’s own mutate cost it must be cast as a spell (normally from your hand, or from the command zone if it is your commander).';
+    else reason = `This card has mutate, but Forge does not currently have a normal permission allowing it to be cast from ${sourceZone || 'this zone'}. If another card effect lets you cast it from there, use Test Override while that permission is being resolved.`;
+  } else if (!targets.length) {
+    reason = ownedCreatures.length
+      ? 'You own creature(s) on the battlefield, but every one is Human. A creature with Changeling is also Human and cannot be a mutate target.'
+      : 'You need a non-Human creature you own on the battlefield before you can cast this card for its mutate cost.';
+  }
+  return { hasMutate: true, canCastMutate, cost, displayCost, targets, reason, sourceZone, commanderTax, targetEligible, ownedTargets: legalOwnedTargets };
+}
+function mutateOptions(instanceId) {
+  return mutateStatus(instanceId).targets;
+}
+
+function mutationComponent(card) {
+  const copy = deepClone(card);
+  delete copy.mutationPile; delete copy.mutationTopIndex; delete copy.castAsMutate;
+  copy.attacking = false; copy.blocking = null; copy.blockedBy = []; copy.attachedTo = null; copy.attachments = []; copy.counters = {};
+  return copy;
+}
+function mergedMutationOracle(components) { return components.map((card) => String(card.oracleText || '').trim()).filter(Boolean).join('\n'); }
+function mutationCommanderSourceId(card) { return (card?.mutationPile || []).find((part) => part.commander)?.instanceId || card?.instanceId; }
+function triggerMutationEffects(draft, host) {
+  const components = host.mutationPile?.length ? host.mutationPile : [host];
+  for (const source of components) for (const line of oracleAbilityLines(source)) {
+    if (/whenever this creature mutates/i.test(line)) queuePendingEffect(draft, { sourceCard: host, controllerId: host.controller, kind: 'mutate-trigger', text: line, originKey: `mutate:${host.instanceId}:${Number(host.mutationCount || 0)}:${line}` });
+  }
+}
+
+function activateNinjutsu(instanceId, attackerId) {
+  const current = window.CommanderForge.getState();
+  const source = findCard(instanceId, current);
+  const attacker = findCard(attackerId, current);
+  if (!source || source.zone !== 'hand' || !isCreature(source.card)) return { ok: false, message: 'Ninjutsu must come from a creature card in your hand.' };
+  const playerId = source.card.controller || source.card.owner;
+  const option = ninjutsuOptions(instanceId).find((item) => item.attackerId === attackerId);
+  if (!option || !attacker || attacker.zone !== 'battlefield' || attacker.card.controller !== playerId) return { ok: false, message: 'Choose one of your unblocked attacking creatures after blockers are declared.' };
+  const payment = planManaPayment(current.players[playerId], option.cost, 0, { preserveColors: [] });
+  if (!payment.ok) return { ok: false, message: payment.reason || `You cannot pay ${option.cost} for ninjutsu.` };
+
+  let entered = false;
+  updateState((draft) => {
+    applySpellPayment(draft, playerId, { ...payment, finalManaCost: option.cost, convoke: [], improvise: [], delve: [], sacrifices: [], discards: [], lifePaid: Number(payment.lifePaid || 0) });
+
+    const returned = extractUniqueTopLevelCard(draft, attackerId, 'battlefield');
+    if (!returned || returned.fromZone !== 'battlefield') return;
+    const returnedCard = returned.card;
+    const ninjutsuDefenderId = returnedCard.attackTargetPlayerId || null;
+    clearCardRelations(draft, returnedCard);
+    returnedCard.attacking = false;
+    returnedCard.attackTargetPlayerId = null;
+    returnedCard.tapped = false;
+    returnedCard.blocking = null;
+    returnedCard.blockedBy = [];
+    returnedCard.controller = returnedCard.owner;
+    draft.players[returnedCard.owner].zones.hand.push(returnedCard);
+    recordZoneTransition(draft, { card: returnedCard, actorId: playerId, subjectPlayerId: returnedCard.owner, fromZone: 'battlefield', toZone: 'hand', castAttempt: false });
+
+    // The activation event happens after its costs are paid (so the returned
+    // attacker is already gone) but before the Ninja enters. This prevents both
+    // duplicate ninjutsu triggers and a Ninja from incorrectly seeing its own
+    // activation after it arrives on the battlefield.
+    emitGameEvent(draft, { type: 'ability-activated', actorId: playerId, card: deepClone(source.card), abilityKind: 'ninjutsu' });
+
+    // Commander Forge intentionally resolves Ninjutsu directly onto the table
+    // instead of exposing the activated ability in the visual stack. This keeps
+    // the tabletop UI simple while still paying the real activation cost and
+    // returning the unblocked attacker as part of the activation.
+    const extracted = extractUniqueTopLevelCard(draft, instanceId, 'hand');
+    if (!extracted || extracted.fromZone !== 'hand') return;
+    const ninja = extracted.card;
+    delete ninja.ninjutsuPendingId;
+    ninja.controller = playerId;
+    ninja.tapped = true;
+    ninja.attacking = true;
+    ninja.attackTargetPlayerId = ninjutsuDefenderId;
+    ninja.blocking = null;
+    ninja.blockedBy = [];
+    ninja.summoningSick = true;
+    ninja.enteredBattlefieldTurn = Number(draft.turnNumber || 1);
+    ninja._forgeEnterSerial = uid('enter');
+    draft.players[playerId].zones.battlefield.push(ninja);
+    recordZoneTransition(draft, { card: ninja, actorId: playerId, subjectPlayerId: ninja.owner, fromZone: 'hand', toZone: 'battlefield', castAttempt: false });
+    enqueueBattlefieldEntryEffects(draft, ninja, 'hand');
+
+    draft.priorityPlayerId = playerId;
+    draft.consecutivePasses = 0;
+    entered = true;
+  }, { log: `${source.card.name}: ninjutsu ${option.cost} resolved immediately, returning ${attacker.card.name} to hand and entering tapped and attacking.` });
+  return { ok: entered, message: entered ? `${source.card.name} entered tapped and attacking.` : 'Ninjutsu could not finish because one of its cards moved before resolution.' };
+}
+
+function castForMutate(instanceId, targetId, position = 'top', { force = false } = {}) {
+  const current = window.CommanderForge.getState();
+  const source = findCard(instanceId, current);
+  const target = findCard(targetId, current);
+  if (!source || !['hand', 'command'].includes(source.zone) || !isCreature(source.card)) return { ok: false, message: 'Mutate must be cast from a creature card in your hand or, if it is your commander, from the command zone.' };
+  const sourceZone = source.zone;
+  const cost = mutateCostForCard(source.card);
+  if (!cost) return { ok: false, message: 'No mutate cost was found on that card.' };
+  if (!target || target.zone !== 'battlefield' || target.card.owner !== source.card.owner || !isCreature(target.card) || isHumanCreature(target.card)) return { ok: false, message: 'Mutate needs a target non-Human creature with the same owner as the mutating spell.' };
+  const playerId = sourceZone === 'command' ? source.card.owner : (source.card.controller || source.card.owner);
+  const commanderTax = sourceZone === 'command' ? 2 * Number(current.players?.[playerId]?.commanderCastCount?.[source.card.instanceId] || 0) : 0;
+  const legality = force ? { legal: true, reasons: [], payment: null } : spellCastLegality(current, playerId, source.card, sourceZone, { alternativeManaCost: cost, useUntappedSources: current.settings.manaMode === 'auto' });
+  if (!legality.legal) return { ok: false, message: legality.reasons.join(' ') };
+
+  let merged = false;
+  updateState((draft) => {
+    const located = findCard(instanceId, draft);
+    if (!located) return;
+    const spell = located.container.splice(located.index, 1)[0];
+    if (!force && legality.payment?.ok) applySpellPayment(draft, playerId, legality.payment);
+    if (sourceZone === 'command') draft.players[playerId].commanderCastCount[spell.instanceId] = Number(draft.players[playerId].commanderCastCount[spell.instanceId] || 0) + 1;
+    draft.players[playerId].spellsCastThisTurn = Number(draft.players[playerId].spellsCastThisTurn || 0) + 1;
+    emitGameEvent(draft, { type: 'cast', actorId: playerId, card: spell });
+
+    // Forge resolves Mutate directly on the battlefield rather than exposing the
+    // mutating creature spell in the visual stack. The merged permanent still
+    // preserves the existing permanent's runtime state and fires mutate triggers.
+    const liveTarget = findCard(targetId, draft);
+    if (!liveTarget || liveTarget.zone !== 'battlefield' || liveTarget.card.owner !== spell.owner || !isCreature(liveTarget.card) || isHumanCreature(liveTarget.card)) {
+      spell.controller = playerId;
+      spell.summoningSick = true;
+      spell.tapped = false;
+      spell.attacking = false;
+      spell.blocking = null;
+      spell.blockedBy = [];
+      spell.enteredBattlefieldTurn = Number(draft.turnNumber || 1);
+      spell._forgeEnterSerial = uid('enter');
+      draft.players[playerId].zones.battlefield.push(spell);
+      enqueueBattlefieldEntryEffects(draft, spell, sourceZone);
+      merged = true;
+      return;
+    }
+
+    const host = liveTarget.card;
+    const existing = host.mutationPile?.length ? host.mutationPile.map((item) => deepClone(item)) : [mutationComponent(host)];
+    const added = mutationComponent(spell);
+    const components = [...existing, added];
+    const priorMutationCount = Number(host.mutationCount || Math.max(0, existing.length - 1));
+    const runtime = {
+      instanceId: host.instanceId,
+      owner: host.owner,
+      controller: host.controller,
+      tapped: host.tapped,
+      summoningSick: host.summoningSick,
+      attacking: host.attacking,
+      blocking: host.blocking,
+      blockedBy: [...(host.blockedBy || [])],
+      counters: deepClone(host.counters || {}),
+      notes: host.notes || '',
+      attachedTo: host.attachedTo || null,
+      attachments: [...(host.attachments || [])],
+      enteredBattlefieldTurn: host.enteredBattlefieldTurn,
+      commander: components.some((item) => Boolean(item.commander)),
+      damageMarked: Number(host.damageMarked || 0),
+      deathtouchDamaged: Boolean(host.deathtouchDamaged),
+      continuousEffects: deepClone(host.continuousEffects || []),
+    };
+    const topIndex = position === 'under' ? Number(host.mutationTopIndex || 0) : components.length - 1;
+    const top = components[topIndex] || components[0];
+    for (const key of ['name','manaCost','manaValue','typeLine','power','toughness','loyalty','defense','colors','colorIdentity','image','imageSmall','scryfallId','oracleId','producedMana']) {
+      if (top[key] !== undefined) host[key] = deepClone(top[key]);
+    }
+    host.keywords = [...new Set(components.flatMap((item) => item.keywords || []))];
+    host.oracleText = mergedMutationOracle(components);
+    Object.assign(host, runtime);
+    host.token = Boolean(top.token);
+    host.mutationPile = components;
+    host.mutationTopIndex = topIndex;
+    host.mutationCount = priorMutationCount + 1;
+    host.commanderComponentIds = components.filter((item) => item.commander).map((item) => item.instanceId);
+    triggerMutationEffects(draft, host);
+    draft.priorityPlayerId = playerId;
+    draft.consecutivePasses = 0;
+    merged = true;
+  }, { log: `${force ? '[TEST OVERRIDE] ' : ''}${source.card.name} mutated directly onto ${target.card.name} for ${cost}${commanderTax ? ` plus {${commanderTax}} commander tax` : ''}.` });
+  return { ok: merged, message: merged ? `${source.card.name} mutated onto ${target.card.name}.` : 'Mutate could not finish.' };
+}
+
+function fixedEffectAmount(value) {
+  const words = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+  const clean = String(value || '').toLowerCase();
+  return /^\d+$/.test(clean) ? Number(clean) : (words[clean] || 0);
+}
+
+function effectResolutionText(text = '') {
+  const raw = String(text || '').trim();
+  if (/^(?:when|whenever|at)\b/i.test(raw)) {
+    const comma = raw.indexOf(',');
+    if (comma >= 0) return raw.slice(comma + 1).trim();
+  }
+  const colon = raw.indexOf(':');
+  if (colon >= 0 && !/^https?:/i.test(raw)) return raw.slice(colon + 1).trim();
+  return raw;
+}
+
+function parseEffectCount(value, fallback = 1) {
+  const amount = fixedEffectAmount(value);
+  return amount > 0 ? amount : fallback;
+}
+
+function librarySearchDescriptor(text = '') {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!/\bsearch your library\b/i.test(clean)) return null;
+
+  // Split-destination searches such as Cultivate need more sequencing than this
+  // picker can safely infer. Leave those manual instead of doing the wrong move.
+  if (/\bput one (?:of them )?.*\bthe other\b/i.test(clean) || /\bone .* into your hand.*\bone .* onto the battlefield/i.test(clean)) return null;
+
+  const match = clean.match(/\bsearch your library for\s+(up to\s+)?(?:(a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+)?(.+?\bcard(?:s)?)(?=,|\s+and\s+put|\s+then\b|$)/i);
+  if (!match) return null;
+
+  const zeroAllowed = Boolean(match[1]);
+  const maxCount = Math.max(1, parseEffectCount(match[2], 1));
+  const filterText = String(match[3] || 'card')
+    .replace(/\bcards?\s*$/i, '')
+    .replace(/^an?\s+/i, '')
+    .trim();
+
+  let destination = null;
+  if (/\bput (?:it|that card|the card|them|those cards|the chosen card(?:s)?)\s+(?:onto|on) the battlefield\b/i.test(clean)) destination = 'battlefield';
+  else if (/\bput (?:it|that card|the card|them|those cards|the chosen card(?:s)?)\s+into your hand\b/i.test(clean)) destination = 'hand';
+  else if (/\bput (?:it|that card|the card|them|those cards|the chosen card(?:s)?)\s+into your graveyard\b/i.test(clean)) destination = 'graveyard';
+  else if (/\bput (?:it|that card|the card|them|those cards|the chosen card(?:s)?)\s+into exile\b/i.test(clean)) destination = 'exile';
+  else if (/\bput (?:it|that card|the card|them|those cards|the chosen card(?:s)?)\s+(?:on|onto) top(?: of (?:your|the) library)?\b/i.test(clean)
+    || /\bput (?:it|that card|the card|them|those cards|the chosen card(?:s)?)\s+on top\b/i.test(clean)) destination = 'library-top';
+
+  if (!destination) return null;
+  return {
+    filterText,
+    maxCount,
+    zeroAllowed,
+    destination,
+    tapped: destination === 'battlefield' && /\bbattlefield tapped\b/i.test(clean),
+    reveal: /\breveal (?:it|that card|them|those cards)\b/i.test(clean),
+    shuffle: /\bshuffle\b/i.test(clean),
+  };
+}
+
+function libraryCardMatchesSearch(card, descriptor) {
+  if (!card || !descriptor) return false;
+  const filter = String(descriptor.filterText || '').toLocaleLowerCase().trim();
+  const type = String(card.typeLine || '').toLocaleLowerCase();
+  const name = String(card.name || '').toLocaleLowerCase();
+  const oracle = String(card.oracleText || '').toLocaleLowerCase();
+
+  if (!filter || filter === 'card' || filter === 'any') return true;
+  if (/\bbasic\b/.test(filter) && !type.includes('basic')) return false;
+  if (/\bnonland\b/.test(filter) && isLand(card)) return false;
+  if (/\bbasic land\b/.test(filter) && !(type.includes('basic') && type.includes('land'))) return false;
+  else if (/\bland\b/.test(filter) && !type.includes('land')) return false;
+  if (/\bcreature\b/.test(filter) && !type.includes('creature')) return false;
+  if (/\bartifact\b/.test(filter) && !type.includes('artifact')) return false;
+  if (/\benchantment\b/.test(filter) && !type.includes('enchantment')) return false;
+  if (/\binstant\b/.test(filter) && !type.includes('instant')) return false;
+  if (/\bsorcery\b/.test(filter) && !type.includes('sorcery')) return false;
+  if (/\bplaneswalker\b/.test(filter) && !type.includes('planeswalker')) return false;
+  if (/\bbattle\b/.test(filter) && !type.includes('battle')) return false;
+  if (/\bpermanent\b/.test(filter) && !isPermanent(card)) return false;
+
+  const landSubtypes = ['plains', 'island', 'swamp', 'mountain', 'forest'];
+  const requestedSubtypes = landSubtypes.filter((subtype) => new RegExp(`\\b${subtype}\\b`, 'i').test(filter));
+  if (requestedSubtypes.length && !requestedSubtypes.some((subtype) => type.includes(subtype))) return false;
+
+  const mvExact = filter.match(/mana value\s+(\d+)/i);
+  const mvAtMost = filter.match(/mana value\s+(\d+)\s+or less/i);
+  const mvAtLeast = filter.match(/mana value\s+(\d+)\s+or greater/i);
+  const mv = Number(card.manaValue || 0);
+  if (mvAtMost && mv > Number(mvAtMost[1])) return false;
+  else if (mvAtLeast && mv < Number(mvAtLeast[1])) return false;
+  else if (mvExact && !/or less|or greater/i.test(filter) && mv !== Number(mvExact[1])) return false;
+
+  const named = filter.match(/\bnamed\s+(.+)$/i);
+  if (named && name !== named[1].trim().toLocaleLowerCase()) return false;
+  const textNeedle = filter.match(/\bwith\s+"([^"]+)"\s+in its text/i);
+  if (textNeedle && !oracle.includes(textNeedle[1].toLocaleLowerCase())) return false;
+  return true;
+}
+
+
+function effectCardFilterMatches(card, filterText = 'card') {
+  if (!card) return false;
+  const filter = String(filterText || 'card').toLocaleLowerCase().trim();
+  const type = String(card.typeLine || '').toLocaleLowerCase();
+  const name = String(card.name || '').toLocaleLowerCase();
+  if (!filter || /^(?:a |an )?card$/.test(filter) || filter === 'any card') return true;
+  if (/\bnonland\b/.test(filter) && isLand(card)) return false;
+  if (/\bbasic land\b/.test(filter) && !(type.includes('basic') && type.includes('land'))) return false;
+  else if (/\bland\b/.test(filter) && !type.includes('land')) return false;
+  if (/\bcreature\b/.test(filter) && !type.includes('creature')) return false;
+  if (/\bartifact\b/.test(filter) && !type.includes('artifact')) return false;
+  if (/\benchantment\b/.test(filter) && !type.includes('enchantment')) return false;
+  if (/\binstant\b/.test(filter) && !type.includes('instant')) return false;
+  if (/\bsorcery\b/.test(filter) && !type.includes('sorcery')) return false;
+  if (/\bplaneswalker\b/.test(filter) && !type.includes('planeswalker')) return false;
+  if (/\bpermanent\b/.test(filter) && !isPermanent(card)) return false;
+  const landSubtypes = ['plains', 'island', 'swamp', 'mountain', 'forest'];
+  const requestedSubtypes = landSubtypes.filter((subtype) => new RegExp(`\\b${subtype}\\b`, 'i').test(filter));
+  if (requestedSubtypes.length && !requestedSubtypes.some((subtype) => type.includes(subtype))) return false;
+  const named = filter.match(/\bnamed\s+(.+)$/i);
+  if (named && name !== named[1].trim().toLocaleLowerCase()) return false;
+  return true;
+}
+
+function graveyardMoveDescriptor(text = '') {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!/\b(?:return|put)\b/i.test(clean)) return null;
+
+  // Common recursion/reanimation wording. "A graveyard" and opponent-graveyard
+  // forms are useful for cards that steal/reanimate from another player.
+  const match = clean.match(/\b(?:return|put)\s+(up to\s+)?(?:(a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+)?(?:target\s+)?(.+?\bcard(?:s)?)\s+from\s+(your|a|an opponent's|target opponent's|that player's)\s+graveyard\b/i);
+  if (!match) return null;
+  const zeroAllowed = Boolean(match[1]) || /\byou may\b/i.test(clean);
+  const maxCount = Math.max(1, parseEffectCount(match[2], 1));
+  const filterText = String(match[3] || 'card').replace(/\bcards?\s*$/i, '').replace(/^an?\s+/i, '').trim();
+  const sourcePhrase = String(match[4] || 'your').toLocaleLowerCase();
+  const graveyardScope = sourcePhrase === 'your'
+    ? 'controller'
+    : ((sourcePhrase.includes('opponent') || sourcePhrase.includes('that player')) ? 'opponent' : 'any');
+  let destination = null;
+  if (/\b(?:to|onto) (?:the )?battlefield\b/i.test(clean)) destination = 'battlefield';
+  else if (/\bto your hand\b/i.test(clean)) destination = 'hand';
+  else if (/\bto exile\b|\binto exile\b/i.test(clean)) destination = 'exile';
+  else if (/\b(?:on|onto) top of your library\b/i.test(clean)) destination = 'library-top';
+  if (!destination) return null;
+  return {
+    filterText,
+    maxCount,
+    zeroAllowed,
+    destination,
+    graveyardScope,
+    tapped: destination === 'battlefield' && /\bbattlefield tapped\b/i.test(clean),
+  };
+}
+
+function simpleTokenDescriptor(text = '') {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  const countMatch = clean.match(/\bcreate\s+(a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+(.+?)\s+tokens?\b/i);
+  if (!countMatch) return null;
+  const amount = Math.max(1, parseEffectCount(countMatch[1], 1));
+  const body = String(countMatch[2] || '').trim();
+
+  const knownArtifacts = {
+    treasure: { name: 'Treasure', typeLine: 'Token Artifact — Treasure', oracleText: '{T}, Sacrifice this artifact: Add one mana of any color.' },
+    clue: { name: 'Clue', typeLine: 'Token Artifact — Clue', oracleText: '{2}, Sacrifice this artifact: Draw a card.' },
+    food: { name: 'Food', typeLine: 'Token Artifact — Food', oracleText: '{2}, {T}, Sacrifice this artifact: You gain 3 life.' },
+    blood: { name: 'Blood', typeLine: 'Token Artifact — Blood', oracleText: '{1}, {T}, Discard a card, Sacrifice this artifact: Draw a card.' },
+    map: { name: 'Map', typeLine: 'Token Artifact — Map', oracleText: '{1}, {T}, Sacrifice this artifact: Target creature you control explores. Activate only as a sorcery.' },
+    gold: { name: 'Gold', typeLine: 'Token Artifact — Gold', oracleText: 'Sacrifice this artifact: Add one mana of any color.' },
+  };
+  const knownKey = Object.keys(knownArtifacts).find((key) => new RegExp(`\\b${key}\\b`, 'i').test(body));
+  if (knownKey) return { amount, token: knownArtifacts[knownKey] };
+
+  const creature = body.match(/(?:(\d+)\/(\d+)\s+)?(?:(white|blue|black|red|green|colorless)\s+)?(.+?)\s+creature/i);
+  if (creature) {
+    const colorMap = { white: 'W', blue: 'U', black: 'B', red: 'R', green: 'G' };
+    const subtype = String(creature[4] || 'Creature').trim().replace(/\s+/g, ' ');
+    const color = String(creature[3] || '').toLocaleLowerCase();
+    return {
+      amount,
+      token: {
+        name: subtype.split(/\s+/).at(-1) || 'Creature',
+        typeLine: `Token Creature — ${subtype}`,
+        oracleText: '',
+        power: creature[1] || '1',
+        toughness: creature[2] || '1',
+        colors: colorMap[color] ? [colorMap[color]] : [],
+      },
+    };
+  }
+  return null;
+}
+
+function pendingEffectMoveAuthorization(state, card, fromZone, targetZone, targetPlayerId, libraryPosition = 'top') {
+  const actualDestination = targetZone === 'library' && libraryPosition === 'top' ? 'library-top' : targetZone;
+  for (const effect of state.pendingTriggers || []) {
+    if (effect.controllerId !== (card.controller || card.owner) && effect.controllerId !== targetPlayerId && fromZone !== 'graveyard') continue;
+    const text = effectResolutionText(effect.text || '');
+    if (fromZone === 'library') {
+      const desc = librarySearchDescriptor(text);
+      if (!desc || desc.maxCount !== 1 || desc.destination !== actualDestination) continue;
+      if (!libraryCardMatchesSearch(card, desc)) continue;
+      return { effect, kind: 'search-library', descriptor: desc };
+    }
+    if (fromZone === 'graveyard') {
+      const desc = graveyardMoveDescriptor(text);
+      if (!desc || desc.maxCount !== 1 || desc.destination !== actualDestination) continue;
+      const opponentIds = opponentPlayerIds(state, effect.controllerId);
+      if (desc.graveyardScope === 'controller' && card.owner !== effect.controllerId) continue;
+      if (desc.graveyardScope === 'opponent' && !opponentIds.includes(card.owner)) continue;
+      if (targetZone === 'battlefield' && targetPlayerId !== effect.controllerId) continue;
+      if (!effectCardFilterMatches(card, desc.filterText)) continue;
+      return { effect, kind: 'graveyard-move', descriptor: desc };
+    }
+    const smart = smartPendingEffectState(effect, state);
+    if (targetZone === 'graveyard' && smart.kind === 'sacrifice-permanent' && fromZone === 'battlefield' && Number(smart.amount || 1) === 1 && smart.cards.some((item) => item.instanceId === card.instanceId)) return { effect, kind: 'sacrifice-permanent', descriptor: smart };
+    if (targetZone === 'graveyard' && ['discard-card', 'hand-to-graveyard'].includes(smart.kind) && fromZone === 'hand' && Number(smart.amount || 1) === 1 && smart.cards.some((item) => item.instanceId === card.instanceId)) return { effect, kind: smart.kind, descriptor: smart };
+  }
+  return null;
+}
+
+function consumePendingMoveEffect(draft, authorization, card) {
+  if (!authorization?.effect?.id) return;
+  draft.pendingTriggers = draft.pendingTriggers.filter((item) => item.id !== authorization.effect.id);
+  draft.log.unshift({
+    id: uid('log'),
+    time: new Date().toISOString(),
+    text: `${authorization.effect.sourceName}: ${card.name} satisfied the pending ${authorization.kind.replaceAll('-', ' ')} effect.`,
+  });
+}
+
+function consumeMatchingCreatedTokenEffect(draft, playerId, tokenName, quantity = 1) {
+  const name = String(tokenName || '').toLocaleLowerCase();
+  const match = (draft.pendingTriggers || []).find((effect) => {
+    if (effect.controllerId !== playerId) return false;
+    const desc = simpleTokenDescriptor(effectResolutionText(effect.text || ''));
+    return desc && String(desc.token?.name || '').toLocaleLowerCase() === name && Number(desc.amount || 1) <= Number(quantity || 1);
+  });
+  if (!match) return null;
+  draft.pendingTriggers = draft.pendingTriggers.filter((item) => item.id !== match.id);
+  draft.log.unshift({ id: uid('log'), time: new Date().toISOString(), text: `${match.sourceName}: token creation effect completed.` });
+  return match;
+}
+
+function sacrificeCandidates(state, victimId, typeWord = 'permanent', sourceCardId = null, anotherOnly = false) {
+  return (state.players?.[victimId]?.zones?.battlefield || []).filter((card) => {
+    if (anotherOnly && sourceCardId && card.instanceId === sourceCardId) return false;
+    const type = String(card.typeLine || '').toLocaleLowerCase();
+    if (/creature/i.test(typeWord)) return type.includes('creature');
+    if (/artifact/i.test(typeWord)) return type.includes('artifact');
+    if (/enchantment/i.test(typeWord)) return type.includes('enchantment');
+    if (/land/i.test(typeWord)) return type.includes('land');
+    return true;
+  });
+}
+
+function smartPendingEffectState(effect, state) {
+  const text = effectResolutionText(effect?.text || '');
+
+  const librarySearch = librarySearchDescriptor(text);
+  if (librarySearch) {
+    const cards = (state.players?.[effect.controllerId]?.zones?.library || []).filter((card) => libraryCardMatchesSearch(card, librarySearch));
+    return { kind: 'search-library', cards, playerId: effect.controllerId, ...librarySearch };
+  }
+
+  const graveyardMove = graveyardMoveDescriptor(text);
+  if (graveyardMove) {
+    const opponentIds = opponentPlayerIds(state, effect.controllerId);
+    const graveyards = graveyardMove.graveyardScope === 'controller'
+      ? [state.players?.[effect.controllerId]?.zones?.graveyard || []]
+      : graveyardMove.graveyardScope === 'opponent'
+        ? opponentIds.map((id) => state.players?.[id]?.zones?.graveyard || [])
+        : Object.values(state.players || {}).map((player) => player.zones?.graveyard || []);
+    const cards = graveyards.flat().filter((card) => effectCardFilterMatches(card, graveyardMove.filterText));
+    return { kind: 'graveyard-move', cards, playerId: effect.controllerId, ...graveyardMove };
+  }
+
+  const tokenCreate = simpleTokenDescriptor(text);
+  if (tokenCreate) return { kind: 'create-token', cards: [], playerId: effect.controllerId, ...tokenCreate };
+
+  const multiReturn = text.match(/return any number of target creature cards with total power (\d+) or less from your graveyard to the battlefield/i);
+  if (multiReturn) {
+    const powerLimit = Number(multiReturn[1]);
+    const cards = (state.players?.[effect.controllerId]?.zones?.graveyard || []).filter(isCreature).map((card) => {
+      const numericPower = /^-?\d+$/.test(String(card.power || '').trim()) ? Number(card.power) : null;
+      return { ...card, _smartPower: numericPower };
+    });
+    return { kind: 'return-own-graveyard-creatures-total-power', cards, powerLimit, playerId: effect.controllerId, zeroAllowed: true };
+  }
+  if (/return target creature card from your graveyard to the battlefield/i.test(text)) {
+    const cards = (state.players?.[effect.controllerId]?.zones?.graveyard || []).filter(isCreature);
+    return { kind: 'return-own-graveyard-creature', cards, noResultReason: 'no-legal-target' };
+  }
+
+  const sacrificeImperative = text.match(/^\s*sacrifice\s+(?:(a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+)?(another\s+)?(creature|artifact|enchantment|land|permanent)s?\b/i);
+  const sacrificeSubject = text.match(/\b(you|target opponent|each opponent|that player)\s+sacrifices?\s+(?:(a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+)?(another\s+)?(creature|artifact|enchantment|land|permanent)s?\b/i);
+  if (sacrificeImperative || sacrificeSubject) {
+    const subject = sacrificeImperative ? 'you' : String(sacrificeSubject[1]).toLocaleLowerCase();
+    if (subject !== 'that player') {
+      const opponents = opponentPlayerIds(state, effect.controllerId);
+      if ((subject === 'target opponent' || subject === 'each opponent') && opponents.length > 1 && !effect.chosenPlayerId) {
+        return { kind: subject === 'target opponent' ? 'choose-opponent-sacrifice' : null, cards: [], victimIds: opponents, noResultReason: null };
+      }
+      const victimId = subject.includes('opponent') ? (effect.chosenPlayerId || opponents[0]) : effect.controllerId;
+      const amountToken = sacrificeImperative ? sacrificeImperative[1] : sacrificeSubject[2];
+      const anotherToken = sacrificeImperative ? sacrificeImperative[2] : sacrificeSubject[3];
+      const typeWord = sacrificeImperative ? sacrificeImperative[3] : sacrificeSubject[4];
+      const amount = parseEffectCount(amountToken, 1);
+      const cards = sacrificeCandidates(state, victimId, typeWord, effect.sourceCardId, Boolean(anotherToken));
+      return { kind: 'sacrifice-permanent', cards, victimId, amount, typeWord, noResultReason: 'no-permanent-to-sacrifice' };
+    }
+  }
+
+  const discardImperative = text.match(/^\s*discard\s+(?:(a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+)?cards?\b/i);
+  const discardSubject = text.match(/\b(you|target opponent|each opponent)\s+discards?\s+(?:(a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+)?cards?\b/i);
+  if (discardImperative || discardSubject) {
+    const subject = discardImperative ? 'you' : String(discardSubject[1]).toLocaleLowerCase();
+    const opponents = opponentPlayerIds(state, effect.controllerId);
+    if ((subject === 'target opponent' || subject === 'each opponent') && opponents.length > 1 && !effect.chosenPlayerId) {
+      return { kind: subject === 'target opponent' ? 'choose-opponent-discard' : null, cards: [], victimIds: opponents, noResultReason: null };
+    }
+    const victimId = subject.includes('opponent') ? (effect.chosenPlayerId || opponents[0]) : effect.controllerId;
+    const amount = parseEffectCount(discardImperative ? discardImperative[1] : discardSubject[2], 1);
+    const cards = [...(state.players?.[victimId]?.zones?.hand || [])];
+    return { kind: 'discard-card', cards, victimId, amount, noResultReason: 'no-card-to-discard' };
+  }
+
+
+  const handToGrave = text.match(/put\s+(?:(a|an|one|two|three|\d+)\s+)?cards?\s+from your hand into your graveyard/i);
+  if (handToGrave) {
+    const amount = parseEffectCount(handToGrave[1], 1);
+    const cards = [...(state.players?.[effect.controllerId]?.zones?.hand || [])];
+    return { kind: 'hand-to-graveyard', cards, victimId: effect.controllerId, amount, noResultReason: 'no-card-in-hand' };
+  }
+
+  const oldMill = text.match(/put the top\s+(a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+cards? of your library into your graveyard/i);
+  if (oldMill) return { kind: 'mill-cards', cards: [], amount: parseEffectCount(oldMill[1], 1), playerId: effect.controllerId };
+
+  const drawMatch = text.match(/\bdraw (a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+) cards?\b/i);
+  if (drawMatch) return { kind: 'draw-cards', cards: [], amount: fixedEffectAmount(drawMatch[1]), playerId: effect.controllerId };
+  const gainMatch = text.match(/\byou gain (a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+) life\b/i);
+  if (gainMatch) return { kind: 'gain-life', cards: [], amount: fixedEffectAmount(gainMatch[1]), playerId: effect.controllerId };
+  const loseMatch = text.match(/\byou lose (a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+) life\b/i);
+  if (loseMatch) return { kind: 'lose-life', cards: [], amount: fixedEffectAmount(loseMatch[1]), playerId: effect.controllerId };
+  const opponentsLose = text.match(/\beach opponent loses (a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+) life\b/i);
+  if (opponentsLose) return { kind: 'opponents-lose-life', cards: [], amount: fixedEffectAmount(opponentsLose[1]), playerId: effect.controllerId };
+  const millMatch = text.match(/\byou mill (a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+) cards?\b/i);
+  if (millMatch) return { kind: 'mill-cards', cards: [], amount: fixedEffectAmount(millMatch[1]), playerId: effect.controllerId };
+  return { kind: null, cards: [], noResultReason: null };
+}
+
+function resolveSmartPendingEffectNoResult(effectId) {
+  const current = window.CommanderForge.getState();
+  const effect = current.pendingTriggers.find((item) => item.id === effectId);
+  if (!effect) return { ok: false, message: 'Pending effect not found.' };
+  const smart = smartPendingEffectState(effect, current);
+  if (!smart.kind) return { ok: false, message: 'This effect still needs manual resolution.' };
+  if (smart.cards?.length) return { ok: false, message: 'A legal choice is available for this effect.' };
+  if (smart.kind === 'search-library' && !smart.zeroAllowed) return { ok: false, message: 'The search has no matching card. You can dismiss the effect if the search truly found nothing.' };
+
+  const labels = {
+    'return-own-graveyard-creature': 'No legal target; trigger removed.',
+    'sacrifice-permanent': 'Resolved with nothing available to sacrifice.',
+    'discard-card': 'Resolved with no card available to discard.',
+    'hand-to-graveyard': 'Resolved with no card available in hand.',
+    'search-library': 'Search resolved without choosing a card.',
+    'graveyard-move': 'Graveyard effect resolved without choosing a card.',
+  };
+  updateState((draft) => {
+    if (smart.kind === 'search-library' && smart.shuffle) draft.players[smart.playerId].zones.library = shuffle(draft.players[smart.playerId].zones.library);
+    draft.pendingTriggers = draft.pendingTriggers.filter((item) => item.id !== effectId);
+  }, { log: `${effect.sourceName}: ${labels[smart.kind] || 'effect resolved with no available choice.'}` });
+  return { ok: true, message: labels[smart.kind] || 'Resolved with no available choice.' };
+}
+
+function smartLibraryDestinationLabel(destination) {
+  if (destination === 'library-top') return 'top of library';
+  return ZONE_LABELS[destination] || destination;
+}
+
+function resolveSmartLibraryEffect(effectId, cardIds = []) {
+  const current = window.CommanderForge.getState();
+  const effect = current.pendingTriggers.find((item) => item.id === effectId);
+  if (!effect) return { ok: false, message: 'Pending effect not found.' };
+  const smart = smartPendingEffectState(effect, current);
+  if (smart.kind !== 'search-library') return { ok: false, message: 'This effect is not a supported library search.' };
+  const ids = [...new Set(cardIds || [])];
+  if (!ids.length && !smart.zeroAllowed) return { ok: false, message: `Choose ${smart.maxCount === 1 ? 'a card' : `up to ${smart.maxCount} cards`} for this search.` };
+  if (ids.length > Number(smart.maxCount || 1)) return { ok: false, message: `Choose at most ${smart.maxCount} card${smart.maxCount === 1 ? '' : 's'}.` };
+  const legal = new Set(smart.cards.map((card) => card.instanceId));
+  if (ids.some((id) => !legal.has(id))) return { ok: false, message: 'One of those cards no longer matches the library search.' };
+
+  const chosenNames = ids.map((id) => current.players[smart.playerId].zones.library.find((card) => card.instanceId === id)?.name).filter(Boolean);
+  const publicDestination = ['battlefield', 'graveyard', 'exile'].includes(smart.destination);
+  const revealNames = Boolean(smart.reveal || publicDestination);
+  updateState((draft) => {
+    const moved = [];
+    for (const id of ids) {
+      const library = draft.players[smart.playerId].zones.library;
+      const index = library.findIndex((card) => card.instanceId === id);
+      if (index < 0) continue;
+      const card = library.splice(index, 1)[0];
+      moved.push(card);
+      if (smart.destination === 'library-top') continue;
+      if (smart.destination === 'battlefield') {
+        card.controller = smart.playerId;
+        card.tapped = Boolean(smart.tapped);
+        card.summoningSick = isCreature(card);
+        card.enteredBattlefieldTurn = Number(draft.turnNumber || 1);
+        card.attacking = false;
+        card.attackTargetPlayerId = null;
+        card.blocking = null;
+        card.blockedBy = [];
+        draft.players[smart.playerId].zones.battlefield.push(card);
+      } else {
+        card.controller = card.owner;
+        card.tapped = false;
+        card.summoningSick = false;
+        draft.players[card.owner || smart.playerId].zones[smart.destination].push(card);
+      }
+      recordZoneTransition(draft, {
+        card,
+        actorId: smart.playerId,
+        subjectPlayerId: card.owner || smart.playerId,
+        fromZone: 'library',
+        toZone: smart.destination,
+        castAttempt: false,
+      });
+    }
+    if (smart.destination === 'battlefield' && moved.length) {
+      const batchSeen = new Set();
+      for (const card of moved) enqueueBattlefieldEntryEffects(draft, card, 'library-search', { batchSeen });
+    }
+    if (smart.shuffle) draft.players[smart.playerId].zones.library = shuffle(draft.players[smart.playerId].zones.library);
+    if (smart.destination === 'library-top' && moved.length) {
+      // The selected order is the top-to-bottom order. Keep the cards out of the
+      // shuffle, then place them on top exactly as the player selected them.
+      draft.players[smart.playerId].zones.library.unshift(...moved);
+    }
+    draft.pendingTriggers = draft.pendingTriggers.filter((item) => item.id !== effectId);
+  }, {
+    log: `${effect.sourceName}: searched the library${ids.length ? (revealNames ? ` for ${chosenNames.join(', ')}` : ` and chose ${ids.length} card${ids.length === 1 ? '' : 's'}`) : ' and chose no card'} → ${smartLibraryDestinationLabel(smart.destination)}${smart.tapped ? ' tapped' : ''}${smart.shuffle ? ', with the required shuffle' : ''}.`,
+  });
+  return { ok: true, message: ids.length ? `Search resolved: ${ids.length} card${ids.length === 1 ? '' : 's'} moved to ${smartLibraryDestinationLabel(smart.destination)}.` : 'Search resolved with no card chosen.' };
+}
+
+
+function resolveSmartPendingEffectMulti(effectId, cardIds = [], powerOverrides = {}) {
+  const current = window.CommanderForge.getState();
+  const effect = current.pendingTriggers.find((item) => item.id === effectId);
+  if (!effect) return { ok: false, message: 'Pending effect not found.' };
+  const smart = smartPendingEffectState(effect, current);
+  const ids = [...new Set(cardIds || [])];
+
+  if (smart.kind === 'return-own-graveyard-creatures-total-power') {
+    const legal = new Map(smart.cards.map((card) => [card.instanceId, card]));
+    if (ids.some((id) => !legal.has(id))) return { ok: false, message: 'One of the selected creature cards is no longer a legal target.' };
+    let totalPower = 0;
+    for (const id of ids) {
+      const card = legal.get(id);
+      let value = card._smartPower;
+      if (value === null || value === undefined) value = Number(powerOverrides?.[id]);
+      if (!Number.isFinite(value)) return { ok: false, message: `${card.name} has nonnumeric power in the graveyard. Enter its current power before resolving.` };
+      totalPower += value;
+    }
+    if (totalPower > Number(smart.powerLimit || 0)) return { ok: false, message: `Selected creatures have total power ${totalPower}; the limit is ${smart.powerLimit}.` };
+    updateState((draft) => {
+      const returned = [];
+      for (const id of ids) {
+        const located = findCard(id, draft);
+        if (!located || located.zone !== 'graveyard' || located.playerId !== effect.controllerId) continue;
+        const card = located.container.splice(located.index, 1)[0];
+        card.controller = effect.controllerId; card.tapped = false; card.summoningSick = true; card.enteredBattlefieldTurn = Number(draft.turnNumber || 1);
+        returned.push(card);
+      }
+      draft.players[effect.controllerId].zones.battlefield.push(...returned);
+      const batchSeen = new Set();
+      for (const card of returned) enqueueBattlefieldEntryEffects(draft, card, 'graveyard', { batchSeen });
+      draft.pendingTriggers = draft.pendingTriggers.filter((item) => item.id !== effectId);
+    }, { log: `${effect.sourceName}: returned ${ids.length} creature card${ids.length === 1 ? '' : 's'} with total power ${totalPower} from the graveyard to the battlefield.` });
+    return { ok: true, message: ids.length ? `Returned ${ids.length} creature card${ids.length === 1 ? '' : 's'}.` : 'Resolved with zero targets.' };
+  }
+
+  if (['sacrifice-permanent', 'discard-card', 'hand-to-graveyard'].includes(smart.kind)) {
+    const legal = new Set((smart.cards || []).map((card) => card.instanceId));
+    if (ids.some((id) => !legal.has(id))) return { ok: false, message: 'One of the selected cards is no longer a legal choice.' };
+    const needed = Math.min(Math.max(0, Number(smart.amount || 1)), legal.size);
+    if (ids.length !== needed) return { ok: false, message: `Choose exactly ${needed} card${needed === 1 ? '' : 's'} for this effect.` };
+    const names = ids.map((id) => smart.cards.find((card) => card.instanceId === id)?.name).filter(Boolean);
+    updateState((draft) => {
+      for (const id of ids) {
+        const located = findCard(id, draft);
+        if (!located) continue;
+        const card = located.container.splice(located.index, 1)[0];
+        const fromZone = located.zone;
+        if (fromZone === 'battlefield') {
+          const leaving = deepClone(card);
+          clearCardRelations(draft, card);
+          enqueueBattlefieldLeaveEffects(draft, leaving, 'graveyard');
+        }
+        card.controller = card.owner;
+        card.tapped = false;
+        card.attacking = false;
+        card.attackTargetPlayerId = null;
+        card.blocking = null;
+        card.blockedBy = [];
+        draft.players[card.owner].zones.graveyard.push(card);
+        recordZoneTransition(draft, {
+          card,
+          actorId: effect.controllerId,
+          subjectPlayerId: card.owner,
+          fromZone,
+          toZone: 'graveyard',
+          castAttempt: false,
+        });
+        if (smart.kind === 'discard-card') emitGameEvent(draft, { type: 'discard', actorId: smart.victimId, card });
+      }
+      draft.pendingTriggers = draft.pendingTriggers.filter((item) => item.id !== effectId);
+      revalidateAuraAttachments(draft);
+    }, { log: `${effect.sourceName}: ${smart.kind === 'sacrifice-permanent' ? 'sacrificed' : smart.kind === 'discard-card' ? 'discarded' : 'put into the graveyard'} ${names.join(', ') || 'the required card(s)'}.` });
+    return { ok: true, message: `${names.join(', ') || 'Card selection'} moved to the graveyard.` };
+  }
+
+  return { ok: false, message: 'This effect is not a supported multi-card choice.' };
+}
+
+function resolveSmartPendingEffect(effectId, cardId) {
+  const current = window.CommanderForge.getState();
+  const effect = current.pendingTriggers.find((item) => item.id === effectId);
+  if (!effect) return { ok: false, message: 'Pending effect not found.' };
+  const smart = smartPendingEffectState(effect, current);
+  if (smart.kind === 'create-token') {
+    updateState((draft) => {
+      draft.pendingTriggers = draft.pendingTriggers.filter((item) => item.id !== effectId);
+    }, { log: `${effect.sourceName}: token creation effect resolved.` });
+    createToken(effect.controllerId, smart.token || { name: 'Token', typeLine: 'Token' }, { quantity: Math.max(1, Number(smart.amount || 1)) });
+    return { ok: true, message: `Created ${smart.amount > 1 ? `${smart.amount} ` : ''}${smart.token?.name || 'token'}${smart.amount > 1 ? ' tokens' : ' token'}.` };
+  }
+  if (smart.kind === 'graveyard-move') {
+    if (!smart.cards.length) return resolveSmartPendingEffectNoResult(effectId);
+    if (Number(smart.maxCount || 1) !== 1) return { ok: false, message: 'Use manual movement for multi-card graveyard effects for now.' };
+    const target = smart.cards.find((card) => card.instanceId === cardId);
+    if (!target) return { ok: false, message: 'Choose a matching card from your graveyard.' };
+    updateState((draft) => {
+      const located = findCard(cardId, draft);
+      if (!located || located.zone !== 'graveyard') return;
+      const card = located.container.splice(located.index, 1)[0];
+      const destination = smart.destination;
+      if (destination === 'battlefield') {
+        card.controller = effect.controllerId;
+        card.tapped = Boolean(smart.tapped);
+        card.summoningSick = isCreature(card);
+        card.enteredBattlefieldTurn = Number(draft.turnNumber || 1);
+        card.attacking = false;
+        card.attackTargetPlayerId = null;
+        card.blocking = null;
+        card.blockedBy = [];
+        draft.players[effect.controllerId].zones.battlefield.push(card);
+        recordZoneTransition(draft, { card, actorId: effect.controllerId, subjectPlayerId: card.owner, fromZone: 'graveyard', toZone: 'battlefield', castAttempt: false });
+        enqueueBattlefieldEntryEffects(draft, card, 'graveyard');
+      } else if (destination === 'library-top') {
+        card.controller = card.owner;
+        card.tapped = false;
+        draft.players[card.owner].zones.library.unshift(card);
+        recordZoneTransition(draft, { card, actorId: effect.controllerId, subjectPlayerId: card.owner, fromZone: 'graveyard', toZone: 'library', libraryPosition: 'top', castAttempt: false });
+      } else {
+        card.controller = card.owner;
+        card.tapped = false;
+        draft.players[card.owner].zones[destination].push(card);
+        recordZoneTransition(draft, { card, actorId: effect.controllerId, subjectPlayerId: card.owner, fromZone: 'graveyard', toZone: destination, castAttempt: false });
+      }
+      draft.pendingTriggers = draft.pendingTriggers.filter((item) => item.id !== effectId);
+    }, { log: `${effect.sourceName}: moved ${target.name} from the graveyard to ${smartLibraryDestinationLabel(smart.destination)}.` });
+    return { ok: true, message: `${target.name} moved from the graveyard.` };
+  }
+  if (smart.kind === 'return-own-graveyard-creature') {
+    if (!smart.cards.length) return resolveSmartPendingEffectNoResult(effectId);
+    const target = findCard(cardId, current);
+    if (!target || !smart.cards.some((card) => card.instanceId === cardId)) return { ok: false, message: 'Choose a creature card from your graveyard.' };
+    updateState((draft) => {
+      const located = findCard(cardId, draft); const card = located.container.splice(located.index, 1)[0];
+      card.controller = effect.controllerId; card.tapped = false; card.summoningSick = true; card.enteredBattlefieldTurn = Number(draft.turnNumber || 1);
+      draft.players[effect.controllerId].zones.battlefield.push(card);
+      enqueueBattlefieldEntryEffects(draft, card, 'graveyard');
+      draft.pendingTriggers = draft.pendingTriggers.filter((item) => item.id !== effectId);
+    }, { log: `${effect.sourceName}: returned ${target.card.name} from the graveyard to the battlefield.` });
+    return { ok: true };
+  }
+  if (['sacrifice-permanent', 'discard-card', 'hand-to-graveyard'].includes(smart.kind)) {
+    if (!smart.cards.length) return resolveSmartPendingEffectNoResult(effectId);
+    if (Number(smart.amount || 1) !== 1) return { ok: false, message: `Choose ${Math.min(Number(smart.amount || 1), smart.cards.length)} cards before resolving this effect.` };
+    return resolveSmartPendingEffectMulti(effectId, [cardId]);
+  }
+  if (['draw-cards', 'gain-life', 'lose-life', 'opponents-lose-life', 'mill-cards'].includes(smart.kind)) {
+    updateState((draft) => {
+      draft.pendingTriggers = draft.pendingTriggers.filter((item) => item.id !== effectId);
+      const amount = Math.max(0, Number(smart.amount || 0));
+      if (smart.kind === 'draw-cards') {
+        for (let i = 0; i < amount; i += 1) {
+          drawCards(draft, smart.playerId, 1);
+          emitGameEvent(draft, { type: 'draw', actorId: smart.playerId, amount: 1 });
+        }
+      }
+      if (smart.kind === 'gain-life' || smart.kind === 'lose-life') {
+        const delta = smart.kind === 'gain-life' ? amount : -amount;
+        draft.players[smart.playerId].life += delta;
+        emitGameEvent(draft, { type: delta > 0 ? 'life-gain' : 'life-loss', actorId: smart.playerId, amount: Math.abs(delta) });
+        checkLosses(draft);
+      }
+      if (smart.kind === 'opponents-lose-life') {
+        for (const playerId of Object.keys(draft.players)) if (playerId !== smart.playerId) {
+          draft.players[playerId].life -= amount;
+          emitGameEvent(draft, { type: 'life-loss', actorId: playerId, causedByPlayerId: smart.playerId, amount });
+        }
+        checkLosses(draft);
+      }
+      if (smart.kind === 'mill-cards') {
+        for (let i = 0; i < amount; i += 1) {
+          const card = draft.players[smart.playerId].zones.library.shift();
+          if (!card) break;
+          draft.players[smart.playerId].zones.graveyard.push(card);
+          recordPublicEvent(draft, { type: 'milled', actorId: smart.playerId, subjectPlayerId: smart.playerId, card, fromZone: 'library', toZone: 'graveyard', meaningful: true });
+          emitGameEvent(draft, { type: 'mill', actorId: smart.playerId, card, amount: 1 });
+        }
+      }
+    }, { log: `${effect.sourceName}: ${smart.kind.replaceAll('-', ' ')} resolved automatically.` });
+    return { ok: true };
+  }
+  return { ok: false, message: 'This effect still needs manual resolution.' };
+}
+
+function effectConditionText(text = '') {
+  const match = String(text).match(/\b(if|only if|as long as|unless)\b(.+?)(?:[.;]|$)/i);
+  return match ? `${match[1]}${match[2]}`.trim() : '';
+}
+
+function makePendingEffect(draft, {
+  sourceCard = null,
+  controllerId = null,
+  kind = 'manual',
+  text = 'Resolve this effect manually.',
+  conditionText = '',
+  optional = false,
+  originKey = '',
+} = {}) {
+  const normalizedCondition = conditionText || effectConditionText(text);
+  return {
+    id: uid('effect'),
+    sourceCardId: sourceCard?.instanceId || null,
+    sourceName: sourceCard?.name || 'Manual effect',
+    controllerId: controllerId || sourceCard?.controller || draft.activePlayerId,
+    kind,
+    text,
+    conditionText: normalizedCondition,
+    conditionStatus: normalizedCondition ? 'unconfirmed' : 'not-required',
+    optional: Boolean(optional || /\byou may\b/i.test(text)),
+    originKey: String(originKey || ''),
+    createdTurn: draft.turnNumber,
+    createdPhase: PHASES[draft.phaseIndex]?.id || 'untap',
+  };
+}
+
+function pendingEffectExists(draft, sourceCardId, kind, text) {
+  return draft.pendingTriggers.some((effect) =>
+    effect.sourceCardId === sourceCardId
+    && effect.kind === kind
+    && effect.text === text
+  );
+}
+
+function queuePendingEffect(draft, effectData) {
+  const effect = makePendingEffect(draft, effectData);
+  if (effect.originKey) {
+    const existing = draft.pendingTriggers.find((item) => item.originKey && item.originKey === effect.originKey);
+    if (existing) return existing;
+  }
+  const smart = smartPendingEffectState(effect, draft);
+  const noChoiceKinds = new Set(['return-own-graveyard-creature', 'graveyard-move', 'sacrifice-permanent', 'discard-card', 'hand-to-graveyard']);
+  if (noChoiceKinds.has(smart.kind) && !smart.cards.length) {
+    const targetless = smart.noResultReason === 'no-legal-target';
+    const text = targetless
+      ? `${effect.sourceName}: trigger had no legal target, so it was removed without effect.`
+      : `${effect.sourceName}: effect had no available card/permanent and resolved with no effect.`;
+    draft.log.unshift({ id: uid('log'), time: new Date().toISOString(), text });
+    return { ...effect, skipped: true, skipReason: smart.noResultReason };
+  }
+  // Do not collapse identical triggers. Magic can create multiple copies of the
+  // same triggered ability from separate cards/events, and each must resolve.
+  draft.pendingTriggers.push(effect);
+  return effect;
+}
+
+function triggerConditionClause(line = '') {
+  const raw = String(line || '').trim();
+  if (!/^(?:when|whenever|at)\b/i.test(raw)) return '';
+  const comma = raw.indexOf(',');
+  return (comma >= 0 ? raw.slice(0, comma) : raw).trim();
+}
+
+function triggerCardDescriptorMatches(line, card) {
+  const text = String(line || '').toLowerCase();
+  const type = String(card?.typeLine || '').toLowerCase();
+  if (/\bnoncreature spell\b/.test(text) && /creature/.test(type)) return false;
+  if (/\bcreature spell\b/.test(text) && !/creature/.test(type)) return false;
+  if (/\bartifact spell\b/.test(text) && !/artifact/.test(type)) return false;
+  if (/\benchantment spell\b/.test(text) && !/enchantment/.test(type)) return false;
+  if (/\binstant(?: or sorcery)? spell\b/.test(text) && !(/instant/.test(type) || (/or sorcery/.test(text) && /sorcery/.test(type)))) return false;
+  if (/\bsorcery(?: or instant)? spell\b/.test(text) && !(/sorcery/.test(type) || (/or instant/.test(text) && /instant/.test(type)))) return false;
+  if (/\bnonland\b/.test(text) && /land/.test(type)) return false;
+  return true;
+}
+
+function triggerPerspectiveMatches(line, sourceCard, event) {
+  const text = String(line || '').toLowerCase();
+  const controller = sourceCard?.controller || sourceCard?.owner;
+  const actor = event.actorId;
+  if (!actor) return true;
+
+  const youDidIt = /\byou\s+(?:cast|draw|gain|lose|attack|activate|mill|discard)/.test(text)
+    || /\bwhenever you\s+(?:cast|draw|gain|lose|attack|activate|mill|discard)/.test(text);
+  if (youDidIt && controller !== actor) return false;
+
+  const opponentDidIt = /\b(?:an|each|target)?\s*opponent\s+(?:casts?|draws?|gains?|loses?|attacks?|activates?|mills?|discards?)/.test(text);
+  if (opponentDidIt && controller === actor) return false;
+  return true;
+}
+
+function lineMatchesGameEvent(line, sourceCard, event) {
+  const condition = triggerConditionClause(line);
+  const text = condition.toLowerCase();
+  if (!condition || !/^when(?:ever)?\b/i.test(condition)) return false;
+  if (!triggerPerspectiveMatches(condition, sourceCard, event)) return false;
+
+  // Until the rules engine tracks per-turn ordinal events precisely, do not
+  // guess at "first/second/third time" triggers. Missing a complex trigger is
+  // safer than firing one at the wrong time.
+  if (/\b(?:first|second|third|fourth|fifth)\b.*\b(?:time|card|spell|creature)\b/.test(text)) return false;
+
+  if (event.type === 'cast') {
+    if (!/\bcasts?\b|\bcast\b/.test(text)) return false;
+    if (/\bthis spell\b/.test(text) && sourceCard.instanceId !== event.card?.instanceId) return false;
+    if (!triggerCardDescriptorMatches(condition, event.card)) return false;
+    return true;
+  }
+
+  if (event.type === 'draw') {
+    return /\b(?:you|opponent|an opponent|each opponent|a player|each player)\s+draws?\b/.test(text)
+      || /\bwhenever you draw\b/.test(text);
+  }
+
+  if (event.type === 'life-gain') {
+    return /\b(?:you|opponent|an opponent|each opponent|a player|each player)\s+gains?\s+(?:\d+\s+)?life\b/.test(text)
+      || /\bwhenever you gain life\b/.test(text);
+  }
+
+  if (event.type === 'life-loss') {
+    return /\b(?:you|opponent|an opponent|each opponent|a player|each player)\s+loses?\s+(?:\d+\s+)?life\b/.test(text)
+      || /\bwhenever you lose life\b/.test(text);
+  }
+
+  if (event.type === 'attack') {
+    if (!/\battacks?\b|\battack\b/.test(text)) return false;
+    if (/\bone or more\b/.test(text)) return false; // needs batched attacker declaration
+    if (/\bthis creature attacks\b/.test(text)) return sourceCard.instanceId === event.card?.instanceId;
+    if (!cardMatchesEventSubject(event.card, condition)) return false;
+    return triggerSubjectControlMatches(condition, sourceCard, event.card);
+  }
+
+  if (event.type === 'ability-activated') {
+    return /\b(?:you|opponent|an opponent|a player)\s+activates?\b.*\babilit/.test(text);
+  }
+
+  if (event.type === 'counter-added') {
+    if (!/\bcounter(?:s)?\b.*\bput\b|\bput\b.*\bcounter/.test(text)) return false;
+    if (/\b(?:this|it)\b/.test(text)) return sourceCard.instanceId === event.card?.instanceId;
+    return cardMatchesEventSubject(event.card, condition) && triggerSubjectControlMatches(condition, sourceCard, event.card);
+  }
+
+  if (event.type === 'tapped') {
+    if (!/\bbecomes? tapped\b/.test(text)) return false;
+    return cardMatchesEventSubject(event.card, condition) && triggerSubjectControlMatches(condition, sourceCard, event.card);
+  }
+
+  if (event.type === 'mill') {
+    return /\b(?:you|opponent|an opponent|a player)\s+mills?\b/.test(text)
+      || /\bput\b.*\bfrom (?:your|a|that player's) library\b.*\binto (?:your|their|a) graveyard\b/.test(text);
+  }
+
+  if (event.type === 'discard') {
+    return /\b(?:you|opponent|an opponent|a player)\s+discards?\b/.test(text);
+  }
+
+  if (event.type === 'control-change') {
+    if (!/\bgains? control\b/.test(text)) return false;
+    if (/\byou gain control\b/.test(text) && (sourceCard.controller || sourceCard.owner) !== event.toControllerId) return false;
+    return cardMatchesEventSubject(event.card, condition);
+  }
+  return false;
+}
+
+function emitGameEvent(draft, event) {
+  draft._forgeEventSequence = Number(draft._forgeEventSequence || 0) + 1;
+  const eventSerial = event._forgeEventSerial || `${draft.turnNumber}:${draft.phaseIndex}:${draft._forgeEventSequence}`;
+  event._forgeEventSerial = eventSerial;
+  const sources = battlefieldCards(draft);
+  // A spell can have a "when you cast this spell" ability while it is on the
+  // stack. Other event subjects should not become temporary trigger sources.
+  if (event.type === 'cast' && event.card && !sources.some((card) => card.instanceId === event.card.instanceId)) sources.push(event.card);
+  const seen = new Set();
+  for (const sourceCard of sources) {
+    for (const line of oracleAbilityLines(sourceCard)) {
+      if (!lineMatchesGameEvent(line, sourceCard, event)) continue;
+      const key = `${sourceCard.instanceId}|${event.type}|${line}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      queuePendingEffect(draft, {
+        sourceCard,
+        controllerId: sourceCard.controller || sourceCard.owner,
+        kind: `${event.type}-trigger`,
+        text: line,
+        originKey: `event:${eventSerial}:${sourceCard.instanceId}:${line}`,
+      });
+    }
+  }
+}
+
+function cardMatchesEventSubject(card, phrase = '') {
+  const type = String(card?.typeLine || '').toLowerCase();
+  const normalized = phrase.toLowerCase();
+  if (normalized.includes('noncreature') && type.includes('creature')) return false;
+  if (normalized.includes('creature') && !normalized.includes('noncreature') && !type.includes('creature')) return false;
+  if (normalized.includes('artifact') && !type.includes('artifact')) return false;
+  if (normalized.includes('enchantment') && !type.includes('enchantment')) return false;
+  if (normalized.includes('land') && !normalized.includes('nonland') && !type.includes('land')) return false;
+  if (normalized.includes('nonland') && type.includes('land')) return false;
+  if (normalized.includes('permanent') && !isPermanent(card)) return false;
+  if (normalized.includes('nontoken') && card?.token) return false;
+  if (/\btoken\b/.test(normalized) && !normalized.includes('nontoken') && !card?.token) return false;
+  return true;
+}
+
+function triggerSubjectControlMatches(line, sourceCard, subjectCard) {
+  const text = String(line || '').toLowerCase();
+  const sourceController = sourceCard?.controller || sourceCard?.owner;
+  const subjectController = subjectCard?.controller || subjectCard?.owner;
+  if (/\b(?:you control|under your control)\b/.test(text) && sourceController !== subjectController) return false;
+  if (/\b(?:an opponent controls|opponent controls|under an opponent's control)\b/.test(text) && sourceController === subjectController) return false;
+  return true;
+}
+
+function enqueueBattlefieldEntryEffects(draft, enteringCard, originalZone, options = {}) {
+  if (originalZone === 'battlefield') return;
+  // Every actual battlefield entry gets a fresh serial. Trigger prompts use it
+  // to distinguish a real new entry from a stale re-render of the same event.
+  enteringCard._forgeEnterSerial = uid('enter');
+  const allPermanents = Object.values(draft.players).flatMap((player) => player.zones.battlefield);
+  const batchSeen = options.batchSeen || null;
+  for (const sourceCard of allPermanents) {
+    for (const line of oracleAbilityLines(sourceCard)) {
+      const condition = triggerConditionClause(line);
+      const lower = condition.toLowerCase();
+      if (!/^when(?:ever)?\b/i.test(condition) || !/\benters(?: the battlefield)?\b/i.test(condition)) continue;
+
+      const sourceSpecific = /\bthis (?:permanent|creature|artifact|enchantment|land|token) enters\b/i.test(condition)
+        || lower.includes(`${String(sourceCard.name || '').toLowerCase()} enters`);
+      const allowsOther = /\bor\s+(?:another|other)\b/i.test(condition);
+      if (sourceSpecific && sourceCard.instanceId !== enteringCard.instanceId && !allowsOther) continue;
+      if (!sourceSpecific && /\b(?:another|other)\b/i.test(condition) && sourceCard.instanceId === enteringCard.instanceId) continue;
+      if (!sourceSpecific && !cardMatchesEventSubject(enteringCard, condition)) continue;
+      if (!triggerSubjectControlMatches(condition, sourceCard, enteringCard)) continue;
+
+      if (/\bone or more\b/i.test(condition) && batchSeen) {
+        const batchKey = `${sourceCard.instanceId}|${line}`;
+        if (batchSeen.has(batchKey)) continue;
+        batchSeen.add(batchKey);
+      }
+
+      queuePendingEffect(draft, {
+        sourceCard,
+        controllerId: sourceCard.controller || sourceCard.owner,
+        kind: 'battlefield-trigger',
+        text: line,
+        originKey: `etb:${enteringCard._forgeEnterSerial || enteringCard.instanceId}:${sourceCard.instanceId}:${line}`,
+      });
+    }
+  }
+}
+
+function enqueueBattlefieldLeaveEffects(draft, leavingCard, destinationZone = 'removed') {
+  leavingCard._forgeLeaveSerial = uid('leave');
+  const allSources = [
+    ...Object.values(draft.players).flatMap((player) => player.zones.battlefield),
+    leavingCard,
+  ].filter((card, index, cards) => cards.findIndex((candidate) => candidate.instanceId === card.instanceId) === index);
+  const seen = new Set();
+  for (const sourceCard of allSources) {
+    for (const line of oracleAbilityLines(sourceCard)) {
+      const condition = triggerConditionClause(line);
+      const lower = condition.toLowerCase();
+      if (!/^when(?:ever)?\b/i.test(condition)) continue;
+      const ownCard = sourceCard.instanceId === leavingCard.instanceId;
+      const sourceSpecific = /\b(?:this|it)\b.*\b(?:dies|leaves the battlefield|is exiled)\b/i.test(condition)
+        || lower.includes(String(sourceCard.name || '').toLowerCase());
+      const allowsOther = /\bor\s+(?:another|other)\b/i.test(condition);
+      if (sourceSpecific && !ownCard && !allowsOther) continue;
+      if (!sourceSpecific && /\b(?:another|other)\b/i.test(condition) && ownCard) continue;
+      if (!sourceSpecific && !cardMatchesEventSubject(leavingCard, condition)) continue;
+      if (!triggerSubjectControlMatches(condition, sourceCard, leavingCard)) continue;
+
+      const diesTrigger = destinationZone === 'graveyard' && /\bdies\b/i.test(condition);
+      const graveyardTrigger = destinationZone === 'graveyard' && /\bput into a graveyard from the battlefield\b/i.test(condition);
+      const leavesTrigger = /\bleaves the battlefield\b/i.test(condition);
+      const exileTrigger = destinationZone === 'exile' && /\bis exiled\b/i.test(condition);
+      if (!(diesTrigger || graveyardTrigger || leavesTrigger || exileTrigger)) continue;
+
+      const key = `${sourceCard.instanceId}|${destinationZone}|${line}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      queuePendingEffect(draft, {
+        sourceCard,
+        controllerId: sourceCard.controller || sourceCard.owner,
+        kind: destinationZone === 'graveyard' ? 'death-trigger' : 'leave-battlefield-trigger',
+        text: line,
+        originKey: `leave:${leavingCard._forgeLeaveSerial}:${sourceCard.instanceId}:${destinationZone}:${line}`,
+      });
+    }
+  }
+}
+
+function phaseLineMatches(line, phaseId, sourceControllerId, activePlayerId) {
+  const condition = triggerConditionClause(line);
+  const text = condition.toLowerCase();
+  if (!/^at\b/i.test(condition) || !text.includes('at the beginning of')) return false;
+  const phasePatterns = {
+    upkeep: /\bupkeep\b/,
+    draw: /\bdraw step\b/,
+    combat: /\b(beginning of combat|combat on)\b/,
+    end: /\b(end step|end of turn)\b/,
+  };
+  if (!phasePatterns[phaseId]?.test(text)) return false;
+  if (/\byour\b/.test(text) && !/\beach player'?s|each upkeep|each end step/i.test(text)) return sourceControllerId === activePlayerId;
+  if (/each opponent'?s/.test(text)) return sourceControllerId !== activePlayerId;
+  return true;
+}
+
+function enqueuePhaseEffects(draft, phaseId) {
+  const activePlayerId = draft.activePlayerId;
+  const seen = new Set();
+  for (const player of Object.values(draft.players)) {
+    for (const sourceCard of player.zones.battlefield) {
+      for (const line of oracleAbilityLines(sourceCard)) {
+        if (!phaseLineMatches(line, phaseId, sourceCard.controller || sourceCard.owner, activePlayerId)) continue;
+        const key = `${sourceCard.instanceId}|${phaseId}|${line}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        queuePendingEffect(draft, {
+          sourceCard,
+          controllerId: sourceCard.controller || sourceCard.owner,
+          kind: `${phaseId}-trigger`,
+          text: line,
+          originKey: `phase:${draft.turnNumber}:${phaseId}:${sourceCard.instanceId}:${line}`,
+        });
+      }
+    }
+  }
+}
+
+function activatedAbilityLines(card) {
+  return oracleAbilityLines(card).filter((line) => {
+    if (!line.includes(':')) return false;
+    if (/add \{[WUBRGC]\}/i.test(line) && /^\s*\{T\}/i.test(line)) return false;
+    return true;
+  });
+}
+
+function phaseAdvanceBlocker(state) {
+  if (state.openingHands?.active) return 'Keep or mulligan both opening hands before starting the first turn.';
+  if (state.stack.length) return 'Resolve or counter every instant/sorcery on the stack before advancing.';
+  // Pending helper effects deliberately do not lock the table. Engine 6 is
+  // still expanding card coverage, so a misunderstood Oracle instruction must
+  // never trap the player in a phase or make the board untouchable.
+  if (PHASES[state.phaseIndex]?.id === 'end') {
+    const player = state.players[state.activePlayerId];
+    const maximum = maximumHandSize(state, state.activePlayerId);
+    if (!maximum.unlimited && player.zones.hand.length > maximum.value) {
+      return `${player.name} must discard down to ${maximum.label} card${maximum.value === 1 ? '' : 's'} before ending the turn.`;
+    }
+  }
+  if (PHASES[state.phaseIndex]?.id === 'combat') {
+    const attackers = Object.values(state.players).flatMap((player) => player.zones.battlefield).filter((card) => card.attacking);
+    if (attackers.length) return 'Combat is still marked as active. Resolve combat manually or stop the attackers before advancing.';
+  }
+  return '';
+}
+
+function removeToken(instanceId, { died = false, destination = 'removed' } = {}) {
+  const current = window.CommanderForge.getState();
+  const found = findCard(instanceId, current);
+  if (!found) return { ok: false, message: 'Token not found.' };
+  if (!found.card.token) return { ok: false, message: 'Only tokens can use this action.' };
+  const fromZone = found.zone;
+  const transientDestination = died ? 'graveyard' : destination;
+  updateState((draft) => {
+    const located = findCard(instanceId, draft);
+    if (!located) return;
+    const token = located.container.splice(located.index, 1)[0];
+    if (fromZone === 'battlefield') {
+      recordZoneTransition(draft, {
+        card: token,
+        actorId: token.controller,
+        subjectPlayerId: token.owner,
+        fromZone,
+        toZone: transientDestination,
+      });
+      enqueueBattlefieldLeaveEffects(draft, token, transientDestination);
+      clearCardRelations(draft, token);
+    } else {
+      recordPublicEvent(draft, {
+        type: 'token_ceased',
+        actorId: token.controller,
+        subjectPlayerId: token.owner,
+        card: token,
+        fromZone,
+        toZone: 'removed',
+        meaningful: false,
+      });
+    }
+    if (draft.selected?.instanceId === instanceId) draft.selected = null;
+  }, { log: died
+    ? `${found.card.name} died, then ceased to exist as a state-based action.`
+    : `${found.card.name} left ${ZONE_LABELS[fromZone] || fromZone} and ceased to exist.` });
+  return { ok: true, message: died ? 'Token died and ceased to exist.' : 'Token removed.' };
+}
+
+function changeControl(instanceId, newControllerId) {
+  const current = window.CommanderForge.getState();
+  const found = findCard(instanceId, current);
+  if (!found || found.zone !== 'battlefield') return { ok: false, message: 'Only a battlefield permanent can change control.' };
+  if (!current.players[newControllerId]) return { ok: false, message: 'That player is not in this game.' };
+  if ((found.card.controller || found.playerId) === newControllerId) return { ok: true, message: `${found.card.name} is already controlled by that player.` };
+  const oldControllerId = found.card.controller || found.playerId;
+  updateState((draft) => {
+    const moved = movePermanentControlInDraft(draft, instanceId, newControllerId, { reason: 'manual/card-effect control change' });
+    if (!moved) return;
+    revalidateAuraAttachments(draft);
+    applyAuraControlEffects(draft);
+  }, { log: `${found.card.name}: control changed from ${current.players[oldControllerId]?.name || oldControllerId} to ${current.players[newControllerId]?.name || newControllerId}. Ownership did not change.` });
+  return { ok: true, message: `${found.card.name} is now controlled by ${current.players[newControllerId]?.name || newControllerId}.` };
+}
+
+function castAuraTargeting(instanceId, targetId, { force = false } = {}) {
+  const current = window.CommanderForge.getState();
+  const found = findCard(instanceId, current);
+  if (!found || !['hand', 'command'].includes(found.zone) || !isAura(found.card)) return { ok: false, message: 'Choose an Aura in your hand or command zone.' };
+  const playerId = found.card.controller || found.card.owner;
+  return moveCard(instanceId, playerId, 'stack', { auraTargetId: targetId, force, skipPayment: force, testOverride: force });
+}
+
+function castPublicCardForFree(instanceId, playerId, { targetId = null } = {}) {
+  const current = window.CommanderForge.getState();
+  const found = findCard(instanceId, current);
+  if (!found || !['graveyard', 'exile'].includes(found.zone)) return { ok: false, message: 'Free-cast helper currently works from a public graveyard or exile zone.' };
+  if (isLand(found.card)) return { ok: false, message: 'Lands are played, not cast. Use “Play land under your control” instead.' };
+  if (!current.players[playerId]) return { ok: false, message: 'Player not found.' };
+  if (isAura(found.card)) {
+    const target = targetId ? findCard(targetId, current) : null;
+    const auraAsCaster = { ...found.card, controller: playerId };
+    if (!target || target.zone !== 'battlefield' || !auraTargetLegality(auraAsCaster, target.card, current).legal) return { ok: false, message: 'Choose a legal target for this Aura spell.' };
+  }
+  updateState((draft) => {
+    const located = findCard(instanceId, draft);
+    if (!located) return;
+    const card = located.container.splice(located.index, 1)[0];
+    card.controller = playerId;
+    card.attacking = false;
+    card.attackTargetPlayerId = null;
+    card.blocking = null;
+    card.blockedBy = [];
+    card.castWithoutPayingManaCost = true;
+    if (isAura(card)) card.auraTargetId = targetId;
+    draft.stack.push(card);
+    draft.players[playerId].spellsCastThisTurn = Number(draft.players[playerId].spellsCastThisTurn || 0) + 1;
+    if (!isCreature(card)) draft.players[playerId].noncreatureSpellsCastThisTurn = Number(draft.players[playerId].noncreatureSpellsCastThisTurn || 0) + 1;
+    draft.priorityPlayerId = playerId;
+    draft.consecutivePasses = 0;
+    emitGameEvent(draft, { type: 'cast', actorId: playerId, card });
+    recordPublicEvent(draft, { type: 'cast_from_other_zone', actorId: playerId, subjectPlayerId: card.owner, card, fromZone: located.zone, toZone: 'stack', meaningful: true });
+  }, { log: `${current.players[playerId].name} cast ${found.card.name} from ${ZONE_LABELS[found.zone]} without paying its mana cost. ${found.card.name} is still owned by ${current.players[found.card.owner]?.name || found.card.owner}.` });
+  return { ok: true, message: `${found.card.name} is on the stack under ${current.players[playerId].name}'s control.` };
+}
+
+function putPublicCardOntoBattlefield(instanceId, playerId, { tapped = false, targetId = null } = {}) {
+  const current = window.CommanderForge.getState();
+  const found = findCard(instanceId, current);
+  if (!found || !['graveyard', 'exile'].includes(found.zone)) return { ok: false, message: 'This helper puts a public graveyard/exile card onto the battlefield.' };
+  if (!isPermanent(found.card)) return { ok: false, message: 'Only permanent cards can be put onto the battlefield.' };
+  if (isAura(found.card)) {
+    const target = targetId ? findCard(targetId, current) : null;
+    const auraAsController = { ...found.card, controller: playerId };
+    if (!target || target.zone !== 'battlefield' || !auraTargetLegality(auraAsController, target.card, current).legal) return { ok: false, message: 'Choose a legal object for this Aura to enchant.' };
+  }
+  updateState((draft) => {
+    const located = findCard(instanceId, draft);
+    if (!located) return;
+    const card = located.container.splice(located.index, 1)[0];
+    const fromZone = located.zone;
+    card.controller = playerId;
+    card.tapped = Boolean(tapped);
+    card.attacking = false;
+    card.attackTargetPlayerId = null;
+    card.blocking = null;
+    card.blockedBy = [];
+    card.summoningSick = isCreature(card);
+    card.enteredBattlefieldTurn = Number(draft.turnNumber || 1);
+    draft.players[playerId].zones.battlefield.push(card);
+    if (isAura(card)) {
+      const target = findCard(targetId, draft);
+      if (target && target.zone === 'battlefield') {
+        card.attachedTo = target.card.instanceId;
+        card.wasAttached = true;
+        target.card.attachments ||= [];
+        if (!target.card.attachments.includes(card.instanceId)) target.card.attachments.push(card.instanceId);
+        applyAuraControlEffect(draft, card);
+      }
+    }
+    recordZoneTransition(draft, { card, actorId: playerId, subjectPlayerId: card.owner, fromZone, toZone: 'battlefield', castAttempt: false });
+    enqueueBattlefieldEntryEffects(draft, card, fromZone);
+    revalidateAuraAttachments(draft);
+  }, { log: `${found.card.name} was put onto the battlefield under ${current.players[playerId].name}'s control. Ownership remains with ${current.players[found.card.owner]?.name || found.card.owner}.` });
+  return { ok: true };
+}
+
+function playPublicLand(instanceId, playerId) {
+  const current = window.CommanderForge.getState();
+  const found = findCard(instanceId, current);
+  if (!found || !['graveyard', 'exile'].includes(found.zone) || !isLand(found.card)) return { ok: false, message: 'Choose a land card in a public graveyard/exile zone.' };
+  const allowance = landPlayLegality(current, playerId, found.card);
+  if (!allowance.legal) return { ok: false, message: allowance.reasons.join(' ') };
+  updateState((draft) => {
+    const located = findCard(instanceId, draft);
+    const card = located.container.splice(located.index, 1)[0];
+    const fromZone = located.zone;
+    card.controller = playerId;
+    card.tapped = false;
+    card.summoningSick = false;
+    card.enteredBattlefieldTurn = Number(draft.turnNumber || 1);
+    draft.players[playerId].zones.battlefield.push(card);
+    draft.players[playerId].landPlaysThisTurn = Number(draft.players[playerId].landPlaysThisTurn || 0) + 1;
+    recordZoneTransition(draft, { card, actorId: playerId, subjectPlayerId: card.owner, fromZone, toZone: 'battlefield', castAttempt: false });
+    enqueueBattlefieldEntryEffects(draft, card, fromZone);
+  }, { log: `${current.players[playerId].name} played ${found.card.name} from ${ZONE_LABELS[found.zone]}. Ownership remains unchanged.` });
+  return { ok: true };
+}
+
+function moveCard(instanceId, targetPlayerId, targetZone, { force = false, libraryPosition = 'top', enterTapped = false, countsAsLandPlay = true, xValue = null, auraTargetId = null, skipPayment = false, testOverride = false } = {}) {
+  const currentState = window.CommanderForge.getState();
+  const source = findCard(instanceId, currentState);
+  if (!source) return { ok: false, message: 'Card not found.' };
+  const earlyPendingMoveAuthorization = !force
+    ? pendingEffectMoveAuthorization(currentState, source.card, source.zone, targetZone, targetPlayerId, libraryPosition)
+    : null;
+  if (source.zone === 'battlefield' && targetZone === 'battlefield') {
+    const currentController = source.card.controller || source.playerId;
+    if (currentController !== targetPlayerId) return changeControl(instanceId, targetPlayerId);
+    return { ok: true, message: `${source.card.name} is already on that battlefield.` };
+  }
+
+  // Tokens may enter nonbattlefield zones briefly, but state-based actions make
+  // them cease to exist before anyone receives priority. Keep those zones clean.
+  if (source.card.token && targetZone !== 'battlefield') {
+    if (earlyPendingMoveAuthorization) {
+      updateState((draft) => consumePendingMoveEffect(draft, earlyPendingMoveAuthorization, source.card), { snapshot: false });
+    }
+    return removeToken(instanceId, {
+      died: source.zone === 'battlefield' && targetZone === 'graveyard',
+      destination: targetZone,
+    });
+  }
+
+  const targetPlayer = currentState.players[targetPlayerId];
+  const pendingMoveAuthorization = earlyPendingMoveAuthorization;
+  if (pendingMoveAuthorization?.descriptor?.tapped && targetZone === 'battlefield') enterTapped = true;
+  const castAttempt = ['hand', 'command'].includes(source.zone)
+    && (targetZone === 'stack' || (targetZone === 'battlefield' && !isLand(source.card)));
+  const tax = source.zone === 'command' ? 2 * (targetPlayer.commanderCastCount[source.card.instanceId] || 0) : 0;
+  let autoPlan = null;
+  let castLegality = null;
+  const legalityState = currentState;
+  const landPlayAttempt = source.zone === 'hand' && targetZone === 'battlefield' && isLand(source.card) && countsAsLandPlay;
+  const landPlan = source.zone === 'hand' && targetZone === 'battlefield' && isLand(source.card)
+    ? landEntryPlan(source.card, targetPlayer, {
+        opponentCount: Math.max(1, Object.keys(currentState.players).length - 1),
+        payLife: enterTapped ? false : 'auto',
+      })
+    : null;
+
+  if (isAura(source.card) && ['hand', 'command'].includes(source.zone) && ['stack', 'battlefield'].includes(targetZone)) {
+    const auraTarget = auraTargetId ? findCard(auraTargetId, currentState) : null;
+    if (!auraTarget || auraTarget.zone !== 'battlefield' || !auraTargetLegality(source.card, auraTarget.card, currentState).legal) {
+      const count = legalAuraTargets(source.card, currentState).length;
+      return { ok: false, message: count ? `Choose what ${source.card.name} will enchant from its Aura actions before casting it.` : `${source.card.name} has no legal object to enchant right now.` };
+    }
+  }
+  if (isAura(source.card) && !['hand', 'command', 'stack', 'battlefield'].includes(source.zone) && targetZone === 'battlefield') {
+    const auraTarget = auraTargetId ? findCard(auraTargetId, currentState) : null;
+    if (!auraTarget || auraTarget.zone !== 'battlefield' || !auraTargetLegality(source.card, auraTarget.card, currentState).legal) {
+      return { ok: false, message: `Choose a legal object for ${source.card.name} to enchant before putting the Aura onto the battlefield.` };
+    }
+  }
+
+  if (castAttempt && !skipPayment && /\{X\}/i.test(source.card.manaCost || '') && xValue === null) {
+    const answer = prompt(`Choose X for ${source.card.name}:`, String(source.card.castXValue ?? 0));
+    if (answer === null) return { ok: false, message: 'Cast cancelled.' };
+    xValue = Math.floor(Number(answer));
+    if (!Number.isFinite(xValue) || xValue < 0) return { ok: false, message: 'X must be a whole number of 0 or more.' };
+  }
+
+  if (landPlayAttempt && currentState.settings.enforceLandPlays !== false && !force) {
+    const landLegality = landPlayLegality(currentState, targetPlayerId, source.card);
+    if (!landLegality.legal) {
+      return {
+        ok: false,
+        message: `${landLegality.reasons.join(' ')} Use “Put by card effect” only when an effect puts a land onto the battlefield without playing it.`,
+      };
+    }
+  }
+
+  if (castAttempt && !skipPayment) {
+    castLegality = spellCastLegality(currentState, targetPlayerId, source.card, source.zone, {
+      useUntappedSources: currentState.settings.manaMode === 'auto',
+      xValue: xValue ?? 0,
+    });
+    autoPlan = castLegality.payment;
+  }
+
+  if (castAttempt && skipPayment) castLegality = { legal: true, reasons: [], payment: null };
+
+  // Normal play enforces commander casting costs. Test overrides may deliberately
+  // bypass the cost so players can construct a board state for practice.
+  if (source.zone === 'command' && castAttempt && !castLegality?.legal && !force && !currentState.settings.testOverrides && currentState.settings.rulesMode !== 'free') {
+    return { ok: false, message: castLegality?.reasons?.join(' ') || "The commander's current cost cannot be paid." };
+  }
+
+  const legality = moveLegality(legalityState, source.card, source, targetPlayerId, targetZone, { xValue: xValue ?? 0 });
+  if (!legality.legal && !force && !pendingMoveAuthorization) {
+    if (currentState.settings.rulesMode === 'strict' && !currentState.settings.testOverrides) return { ok: false, message: legality.reasons.join(' ') };
+    const usingTestOverride = Boolean(currentState.settings.testOverrides);
+    const reasonText = legality.reasons.join('\n');
+    return {
+      ok: false,
+      requiresOverride: true,
+      message: reasonText,
+      overridePrompt: {
+        title: 'Override required',
+        kicker: usingTestOverride ? 'TEST OVERRIDE' : 'MANUAL OVERRIDE',
+        icon: usingTestOverride ? '🧪' : '⚠',
+        confirmLabel: usingTestOverride ? 'Use Test Override' : 'Override anyway',
+        cancelLabel: 'Cancel',
+        variant: usingTestOverride ? 'override' : '',
+      },
+      retry: () => moveCard(instanceId, targetPlayerId, targetZone, {
+        force: true,
+        libraryPosition,
+        enterTapped,
+        countsAsLandPlay,
+        xValue,
+        auraTargetId,
+        skipPayment: usingTestOverride ? true : skipPayment,
+        testOverride: usingTestOverride || testOverride,
+      }),
+    };
+  }
+
+  const sourceIsMerged = source.zone === 'battlefield' && (source.card.mutationPile || []).length > 1;
+  let mergedCommanderToCommand = false;
+  if (source.card.commander && source.zone !== 'command' && ['graveyard', 'exile', 'hand', 'library'].includes(targetZone) && currentState.settings.confirmCommanderMoves) {
+    const label = sourceIsMerged ? `${source.card.name} contains your commander.` : `${source.card.name} is a commander.`;
+    const toCommand = confirm(`${label}
+
+Press OK to move ${sourceIsMerged ? 'the commander component' : 'it'} to the command zone.
+Press Cancel to leave ${sourceIsMerged ? 'the commander component' : 'it'} in ${ZONE_LABELS[targetZone]}.`);
+    if (sourceIsMerged) mergedCommanderToCommand = toCommand;
+    else if (toCommand) targetZone = 'command';
+  }
+
+  const autoManaText = !skipPayment && autoPlan?.sources?.length
+    ? ` Auto-paid by tapping ${autoPlan.sources.map((item) => `${item.name} for ${item.label || formatManaBundle(item.mana)}`).join(', ')}.`
+    : '';
+  const battlefieldEntryText = targetZone === 'battlefield'
+    ? ` ${enterTapped || landPlan?.tapped ? 'Entered tapped' : 'Entered untapped'}${landPlan?.lifePaid ? ` after paying ${landPlan.lifePaid} life` : ''}.`
+    : '';
+
+  if (pendingMoveAuthorization && ui.libraryEffectPicker?.effectId === pendingMoveAuthorization.effect.id) ui.libraryEffectPicker = null;
+  updateState((draft) => {
+    const located = findCard(instanceId, draft);
+    if (!located) return;
+    const card = located.container.splice(located.index, 1)[0];
+    const originalZone = located.zone;
+    const ownerZone = ['hand', 'graveyard', 'library', 'exile', 'command'].includes(targetZone);
+    const destinationPlayerId = ownerZone ? (card.owner || targetPlayerId) : targetPlayerId;
+    const destinationPlayer = draft.players[destinationPlayerId] || draft.players[targetPlayerId];
+
+    // A merged permanent is one battlefield object. It leaves once, then its
+    // physical components are placed into their appropriate zones separately.
+    if (originalZone === 'battlefield' && targetZone !== 'battlefield' && (card.mutationPile || []).length > 1) {
+      const leavingPermanent = deepClone(card);
+      clearCardRelations(draft, card);
+      enqueueBattlefieldLeaveEffects(draft, leavingPermanent, targetZone);
+      recordZoneTransition(draft, { card: leavingPermanent, actorId: targetPlayerId, subjectPlayerId: leavingPermanent.owner, fromZone: originalZone, toZone: targetZone, libraryPosition, castAttempt: false });
+      const parts = card.mutationPile.map((component) => mutationComponent(component));
+      for (const part of parts) {
+        part.controller = part.owner;
+        part.tapped = false;
+        part.summoningSick = false;
+        part.attacking = false;
+        part.blocking = null;
+        part.blockedBy = [];
+        part.counters = {};
+        part.mutationPile = [];
+        part.mutationTopIndex = 0;
+        part.mutationCount = 0;
+        const owner = draft.players[part.owner] || destinationPlayer;
+        const partDestination = part.commander && mergedCommanderToCommand ? 'command' : targetZone;
+        recordPublicEvent(draft, { type: 'merged_component_move', actorId: targetPlayerId, subjectPlayerId: part.owner, card: part, fromZone: originalZone, toZone: partDestination, meaningful: true });
+        if (part.token) continue; // Token components cease to exist after changing zones.
+        if (partDestination === 'library') {
+          if (libraryPosition === 'bottom') owner.zones.library.push(part);
+          else owner.zones.library.unshift(part);
+        } else owner.zones[partDestination].push(part);
+      }
+      draft.selected = null;
+      return;
+    }
+
+    if (castAttempt && autoPlan?.ok && !skipPayment) applySpellPayment(draft, targetPlayerId, autoPlan);
+    if (castAttempt && /\{X\}/i.test(card.manaCost || '')) card.castXValue = Math.max(0, Math.floor(Number(xValue || 0)));
+
+    if (targetZone === 'stack') {
+      card.controller = targetPlayerId;
+      card.attacking = false;
+      if (isAura(card)) card.auraTargetId = auraTargetId;
+      if (['hand', 'command'].includes(originalZone)) {
+        if (originalZone === 'command') destinationPlayer.commanderCastCount[card.instanceId] = (destinationPlayer.commanderCastCount[card.instanceId] || 0) + 1;
+        destinationPlayer.spellsCastThisTurn = Number(destinationPlayer.spellsCastThisTurn || 0) + 1;
+        if (!isCreature(card)) destinationPlayer.noncreatureSpellsCastThisTurn = Number(destinationPlayer.noncreatureSpellsCastThisTurn || 0) + 1;
+      }
+      draft.stack.push(card);
+      draft.priorityPlayerId = targetPlayerId;
+      draft.consecutivePasses = 0;
+      emitGameEvent(draft, { type: 'cast', actorId: targetPlayerId, card });
+    } else {
+      card.controller = targetPlayerId;
+      card.attacking = false;
+      if (targetZone === 'battlefield') {
+        if (isLand(card) && originalZone === 'hand' && countsAsLandPlay) destinationPlayer.landPlaysThisTurn += 1;
+        if (!isLand(card) && ['hand', 'command'].includes(originalZone)) {
+          if (originalZone === 'command') destinationPlayer.commanderCastCount[card.instanceId] = (destinationPlayer.commanderCastCount[card.instanceId] || 0) + 1;
+          destinationPlayer.spellsCastThisTurn = Number(destinationPlayer.spellsCastThisTurn || 0) + 1;
+          if (!isCreature(card)) destinationPlayer.noncreatureSpellsCastThisTurn = Number(destinationPlayer.noncreatureSpellsCastThisTurn || 0) + 1;
+        }
+        card.summoningSick = isCreature(card);
+        card.enteredBattlefieldTurn = Number(draft.turnNumber || 1);
+        card.stackFresh = Boolean(isLand(card) || card.token);
+        if (isLand(card) && originalZone === 'hand' && landPlan) {
+          card.tapped = Boolean(enterTapped || landPlan.tapped);
+          destinationPlayer.life -= Number(landPlan.lifePaid || 0);
+        } else card.tapped = Boolean(enterTapped);
+      } else {
+        card.summoningSick = false;
+        card.tapped = false;
+      }
+      if (targetZone === 'library') {
+        if (libraryPosition === 'bottom') destinationPlayer.zones.library.push(card);
+        else destinationPlayer.zones.library.unshift(card);
+      } else destinationPlayer.zones[targetZone].push(card);
+      if (targetZone === 'battlefield' && isAura(card)) {
+        const target = auraTargetId ? findCard(auraTargetId, draft) : null;
+        if (target && target.zone === 'battlefield' && auraTargetLegality(card, target.card, draft).legal) {
+          card.attachedTo = target.card.instanceId;
+          card.wasAttached = true;
+          target.card.attachments ||= [];
+          if (!target.card.attachments.includes(card.instanceId)) target.card.attachments.push(card.instanceId);
+          applyAuraControlEffect(draft, card);
+        }
+      }
+    }
+    if (originalZone === 'battlefield' && targetZone !== 'battlefield') clearCardRelations(draft, card);
+    recordZoneTransition(draft, {
+      card,
+      actorId: targetPlayerId,
+      subjectPlayerId: card.owner,
+      fromZone: originalZone,
+      toZone: targetZone,
+      libraryPosition,
+      castAttempt,
+    });
+    if (pendingMoveAuthorization) {
+      consumePendingMoveEffect(draft, pendingMoveAuthorization, card);
+      if (pendingMoveAuthorization.kind === 'search-library' && pendingMoveAuthorization.descriptor?.shuffle) {
+        const searchPlayerId = pendingMoveAuthorization.effect.controllerId;
+        if (draft.players?.[searchPlayerId]) draft.players[searchPlayerId].zones.library = shuffle(draft.players[searchPlayerId].zones.library);
+      }
+    }
+    if (targetZone === 'battlefield') {
+      enqueueBattlefieldEntryEffects(draft, card, originalZone);
+      revalidateAuraAttachments(draft);
+    } else if (originalZone === 'battlefield') revalidateAuraAttachments(draft);
+    draft.selected = { instanceId: card.instanceId };
+  }, { log: `${pendingMoveAuthorization ? '[CARD EFFECT] ' : (testOverride ? '[TEST OVERRIDE] ' : '')}${source.card.name}: ${ZONE_LABELS[source.zone]} → ${ZONE_LABELS[targetZone]}.${skipPayment && castAttempt ? ' Cost intentionally bypassed.' : autoManaText}${battlefieldEntryText}` });
+  return { ok: true, message: pendingMoveAuthorization ? 'Card moved as part of the pending card effect.' : (testOverride ? 'Test override applied.' : (autoManaText ? autoManaText.trim() : 'Card moved.')) };
+}
+
+function testOverrideMove(instanceId, targetPlayerId, targetZone, { libraryPosition = 'top', enterTapped = false, auraTargetId = null } = {}) {
+  const current = window.CommanderForge.getState();
+  if (!current.settings.testOverrides) return { ok: false, message: 'Enable Test Override controls in Tools first.' };
+  const found = findCard(instanceId, current);
+  if (!found) return { ok: false, message: 'Card not found.' };
+  if (!current.players[targetPlayerId]) return { ok: false, message: 'Player not found.' };
+  return moveCard(instanceId, targetPlayerId, targetZone, {
+    force: true,
+    skipPayment: true,
+    testOverride: true,
+    countsAsLandPlay: false,
+    libraryPosition,
+    enterTapped,
+    auraTargetId,
+  });
+}
+
+function tapForMana(instanceId, choiceIndex = 0) {
+  const current = window.CommanderForge.getState();
+  const found = findCard(instanceId, current);
+  if (!found || found.zone !== 'battlefield') return { ok: false, message: 'Only battlefield permanents can produce mana here.' };
+  if (found.card.tapped) return { ok: false, message: `${found.card.name} is already tapped.` };
+  const controller = current.players[found.card.controller];
+  const choices = manaProductionChoices(found.card, { player: controller });
+  const choice = choices[Number(choiceIndex)];
+  if (!choice) return { ok: false, message: `${found.card.name} does not have that listed mana choice.` };
+  if (!canActivateManaChoice(found.card, choice, controller)) return { ok: false, message: `${found.card.name} cannot activate that mana ability right now.` };
+  if (choice.activationManaCost && !canPayMana(controller.mana, choice.activationManaCost, 0).ok) return { ok: false, message: `You need ${choice.activationManaCost} already floating to activate this mana ability.` };
+
+  updateState((draft) => {
+    const located = findCard(instanceId, draft);
+    if (!located) return;
+    const player = draft.players[located.card.controller];
+    if (choice.activationManaCost) player.mana = spendMana(player.mana, choice.activationManaCost, 0);
+    player.life -= Number(choice.lifeCost || 0);
+    if (choice.discardCost && player.zones.hand.length) player.zones.graveyard.push(player.zones.hand.shift());
+    for (const color of ['W', 'U', 'B', 'R', 'G', 'C']) player.mana[color] = Number(player.mana[color] || 0) + Number(choice.mana?.[color] || 0);
+    if (choice.sacrificeSource) {
+      const [sacrificed] = located.container.splice(located.index, 1);
+      player.zones.graveyard.push(sacrificed);
+      clearCardRelations(draft, sacrificed);
+    } else if (choice.requiresTap !== false) located.card.tapped = true;
+  }, { log: `${found.card.name} produced ${choice.label || formatManaBundle(choice.mana)}${choice.activationManaCost ? ` after paying ${choice.activationManaCost}` : ''}${choice.lifeCost ? ` and ${choice.lifeCost} life` : ''}.` });
+  return { ok: true, message: `Added ${choice.label || formatManaBundle(choice.mana)} mana.` };
+}
+
+function toggleTap(instanceId, { mana = true } = {}) {
+  const current = window.CommanderForge.getState();
+  const found = findCard(instanceId, current);
+  if (!found || found.zone !== 'battlefield') return { ok: false, message: 'Only battlefield permanents can be tapped here.' };
+  if (!found.card.tapped && mana && ['assisted', 'auto'].includes(current.settings.manaMode)) {
+    const choices = manaProductionChoices(found.card, { player: current.players[found.card.controller] });
+    if (choices.length === 1) return tapForMana(instanceId, 0);
+    if (choices.length > 1) return { ok: false, message: `Choose ${choices.map((choice) => choice.label).join(' or ')} from the card menu.` };
+  }
+  updateState((draft) => {
+    const located = findCard(instanceId, draft);
+    located.card.tapped = !located.card.tapped;
+    emitGameEvent(draft, { type: located.card.tapped ? 'tapped' : 'untapped', actorId: located.card.controller, card: located.card });
+    revalidateAuraAttachments(draft);
+  }, { log: `${found.card.name} ${found.card.tapped ? 'untapped' : 'tapped'}.` });
+  return { ok: true };
+}
+
+function toggleAttack(instanceId, targetPlayerId = null) {
+  const current = window.CommanderForge.getState();
+  const found = findCard(instanceId, current);
+  if (!found) return { ok: false, message: 'Card not found.' };
+  const declaring = !found.card.attacking;
+  if (declaring) {
+    const legality = attackLegality(current, found.card);
+    if (!legality.legal) {
+      if (current.settings.rulesMode === 'strict') return { ok: false, message: legality.reasons.join(' ') };
+      if (!confirm(`${legality.reasons.join('\n')}\n\nMark as attacking anyway?`)) return { ok: false, message: 'Cancelled.' };
+    }
+    const opponents = Object.keys(current.players || {}).filter((id) => id !== found.card.controller && !current.players[id].lost);
+    if (opponents.length > 1 && !targetPlayerId) {
+      return { ok: false, needsAttackTarget: true, cardId: instanceId, choices: opponents };
+    }
+    targetPlayerId ||= opponents[0] || null;
+    if (!targetPlayerId || !opponents.includes(targetPlayerId)) return { ok: false, message: 'Choose a legal player to attack.' };
+  }
+  const defenderName = targetPlayerId ? current.players[targetPlayerId]?.name : current.players[found.card.attackTargetPlayerId]?.name;
+  updateState((draft) => {
+    const located = findCard(instanceId, draft);
+    located.card.attacking = !located.card.attacking;
+    located.card.blocking = null;
+    if (located.card.attacking) {
+      located.card.attackTargetPlayerId = targetPlayerId;
+      const hasVigilance = Boolean(cardTraits(located.card, draft.players[located.card.controller]?.zones?.battlefield || []).vigilance);
+      const becameTapped = !hasVigilance && !located.card.tapped;
+      if (!hasVigilance) located.card.tapped = true;
+      if (becameTapped) emitGameEvent(draft, { type: 'tapped', actorId: located.card.controller, card: located.card });
+      emitGameEvent(draft, { type: 'attack', actorId: located.card.controller, targetPlayerId, card: located.card });
+      recordPublicEvent(draft, {
+        type: 'attack', actorId: located.card.controller, subjectPlayerId: targetPlayerId || located.card.controller,
+        card: located.card, cards: [located.card], meaningful: true,
+      });
+    } else {
+      located.card.attackTargetPlayerId = null;
+      recordPublicEvent(draft, { type: 'attack_cancelled', actorId: located.card.controller, subjectPlayerId: located.card.controller, card: located.card });
+    }
+  }, { log: `${found.card.name} ${found.card.attacking ? 'stopped attacking' : `attacks ${defenderName || 'an opponent'}`}.` });
+  return { ok: true };
+}
+
+
+function addCounter(instanceId, counter, delta) {
+  const current = window.CommanderForge.getState();
+  const found = findCard(instanceId, current);
+  if (!found) return;
+  updateState((draft) => {
+    const located = findCard(instanceId, draft);
+    const next = Math.max(0, Number(located.card.counters[counter] || 0) + delta);
+    if (next === 0) delete located.card.counters[counter];
+    else located.card.counters[counter] = next;
+    if (delta > 0) emitGameEvent(draft, { type: 'counter-added', actorId: located.card.controller, card: located.card, counter, amount: delta });
+  }, { log: `${found.card.name}: ${delta > 0 ? 'added' : 'removed'} ${counter} counter.` });
+}
+
+function updateManualKeyword(instanceId, keyword, enabled = true) {
+  const current = window.CommanderForge.getState();
+  const found = findCard(instanceId, current);
+  const clean = String(keyword || '').trim().replace(/\s+/g, ' ');
+  if (!found || !clean) return { ok: false, message: 'Choose a keyword ability first.' };
+  updateState((draft) => {
+    const located = findCard(instanceId, draft);
+    const values = [...(located.card.manualKeywords || [])];
+    const existingIndex = values.findIndex((value) => value.toLocaleLowerCase() === clean.toLocaleLowerCase());
+    if (enabled && existingIndex < 0) values.push(clean);
+    if (!enabled && existingIndex >= 0) values.splice(existingIndex, 1);
+    located.card.manualKeywords = values;
+  }, { log: `${found.card.name}: ${enabled ? 'gained' : 'lost'} ${clean}.` });
+  return { ok: true };
+}
+
+
+function tokenXml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[char]));
+}
+
+function tokenImageData(token) {
+  const frame = token.frameColor || '#1f3329';
+  const accent = token.accentColor || '#d4a654';
+  const text = token.textColor || '#f4f1e8';
+  const name = tokenXml(token.name || 'Token');
+  const type = tokenXml(token.typeLine || 'Token Creature');
+  const isCreatureToken = /(?:^|\s)Creature(?:\s|$)/i.test(String(token.typeLine || ''));
+  const stats = isCreatureToken ? `${tokenXml(token.power ?? 1)}/${tokenXml(token.toughness ?? 1)}` : '';
+  const statsBox = isCreatureToken ? `<rect x="354" y="605" width="104" height="56" rx="14" fill="${accent}"/><text x="406" y="644" text-anchor="middle" fill="#11160f" font-family="Arial,sans-serif" font-size="31" font-weight="800">${stats}</text>` : '';
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="500" height="700" viewBox="0 0 500 700"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${frame}"/><stop offset="1" stop-color="#0b0f0c"/></linearGradient></defs><rect width="500" height="700" rx="38" fill="url(#g)"/><rect x="22" y="22" width="456" height="656" rx="28" fill="none" stroke="${accent}" stroke-width="8"/><rect x="42" y="42" width="416" height="82" rx="18" fill="#000000" fill-opacity=".35"/><text x="64" y="94" fill="${text}" font-family="Arial,sans-serif" font-size="36" font-weight="700">${name}</text><circle cx="250" cy="330" r="142" fill="none" stroke="${accent}" stroke-width="12" opacity=".75"/><path d="M250 176l35 105 111 2-89 66 32 106-89-63-89 63 32-106-89-66 111-2z" fill="${accent}" opacity=".28"/><rect x="42" y="520" width="416" height="88" rx="18" fill="#000000" fill-opacity=".42"/><text x="64" y="572" fill="${text}" font-family="Arial,sans-serif" font-size="25">${type}</text>${statsBox}</svg>`;
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+function createToken(playerId, token, options = {}) {
+  const quantity = Math.max(1, Math.min(100, Math.floor(Number(options.quantity || 1))));
+  const tokenFaces = deepClone(token.tokenFaces || []);
+  const firstFace = tokenFaces[0] || null;
+  const makeCard = () => {
+    const fallbackImage = tokenImageData(token);
+    return {
+      instanceId: uid('token'),
+      scryfallId: token.scryfallId || null,
+      oracleId: token.oracleId || null,
+      name: firstFace?.name || token.name || 'Token',
+      manaCost: firstFace?.manaCost || token.manaCost || '',
+      manaValue: Number(token.manaValue || 0),
+      typeLine: firstFace?.typeLine || token.typeLine || 'Token Creature',
+      oracleText: firstFace?.oracleText || token.oracleText || '',
+      power: String(firstFace?.power ?? token.power ?? ''),
+      toughness: String(firstFace?.toughness ?? token.toughness ?? ''),
+      loyalty: String(firstFace?.loyalty ?? token.loyalty ?? ''),
+      keywords: [...(token.keywords || [])],
+      colors: [...(firstFace?.colors || token.colors || [])],
+      colorIdentity: [...(token.colorIdentity || token.colors || [])],
+      producedMana: [...(token.producedMana || [])],
+      legalities: {},
+      layout: token.layout || 'token',
+      image: firstFace?.image || token.image || fallbackImage,
+      imageSmall: firstFace?.imageSmall || token.imageSmall || firstFace?.image || token.image || fallbackImage,
+      backImage: token.backImage || tokenFaces[1]?.image || null,
+      tokenFaces,
+      activeTokenFace: 0,
+      owner: playerId,
+      controller: playerId,
+      tapped: Boolean(options.tapped ?? token.tapped),
+      summoningSick: /(?:^|\s)Creature(?:\s|$)/i.test(firstFace?.typeLine || token.typeLine || ''),
+      attacking: false,
+      blocking: null,
+      blockedBy: [],
+      faceDown: false,
+      token: true,
+      predefinedToken: Boolean(token.scryfallId || token.oracleId || token.tokenFaces?.length),
+      stackFresh: true,
+      enteredBattlefieldTurn: Number(window.CommanderForge.getState().turnNumber || 1),
+      commander: false,
+      counters: {},
+      notes: '',
+      attachedTo: null,
+      attachments: [],
+      tokenStyle: token.image ? null : { frameColor: token.frameColor || '#1f3329', accentColor: token.accentColor || '#d4a654', textColor: token.textColor || '#f4f1e8' },
+    };
+  };
+  const cards = Array.from({ length: quantity }, makeCard);
+  updateState((draft) => {
+    const batchSeen = new Set();
+    for (const card of cards) {
+      draft.players[playerId].zones.battlefield.push(card);
+      enqueueBattlefieldEntryEffects(draft, card, 'token-created', { batchSeen });
+    }
+    // If the player created the token manually from the normal token tool while
+    // a matching trigger (for example Thieves' Tools -> Treasure) was waiting,
+    // count that as completing the effect instead of leaving a stale prompt.
+    consumeMatchingCreatedTokenEffect(draft, playerId, cards[0]?.name, quantity);
+  }, {
+    log: `${draftName(playerId)} created ${quantity > 1 ? `${quantity} ${cards[0].name} tokens` : `a ${cards[0].name} token`}.`,
+  });
+  return quantity === 1 ? cards[0] : cards;
+}
+
+function draftName(playerId) {
+  return window.CommanderForge.getState().players[playerId]?.name || 'Player';
+}
+
+function copyAsToken(instanceId) {
+  const current = window.CommanderForge.getState();
+  const found = findCard(instanceId, current);
+  if (!found) return;
+  updateState((draft) => {
+    const located = findCard(instanceId, draft);
+    const copy = deepClone(located.card);
+    copy.instanceId = uid('copy');
+    copy.token = true;
+    copy.predefinedToken = false;
+    copy.stackFresh = true;
+    copy.enteredBattlefieldTurn = Number(draft.turnNumber || 1);
+    copy.commander = false;
+    copy.tapped = false;
+    copy.attacking = false;
+    copy.blocking = null;
+    copy.blockedBy = [];
+    copy.attachedTo = null;
+    copy.attachments = [];
+    copy.summoningSick = isCreature(copy);
+    copy.counters = {};
+    draft.players[located.card.controller].zones.battlefield.push(copy);
+    enqueueBattlefieldEntryEffects(draft, copy, 'token-copy');
+  }, { log: `Created a token copy of ${found.card.name}.` });
+}
+
+function adjustPlayer(playerId, field, delta) {
+  updateState((draft) => {
+    const player = draft.players[playerId];
+    player[field] = Number(player[field] || 0) + delta;
+    if (field === 'poison') player[field] = Math.max(0, player[field]);
+    if (field === 'life' && Number(delta)) emitGameEvent(draft, { type: Number(delta) > 0 ? 'life-gain' : 'life-loss', actorId: playerId, amount: Math.abs(Number(delta)) });
+    checkLosses(draft);
+  }, { log: `${draftName(playerId)}: ${field} ${delta >= 0 ? '+' : ''}${delta}.` });
+}
+
+function adjustCommanderDamage(targetPlayerId, sourceCardId, delta) {
+  updateState((draft) => {
+    const target = draft.players[targetPlayerId];
+    target.commanderDamage[sourceCardId] = Math.max(0, Number(target.commanderDamage[sourceCardId] || 0) + delta);
+    checkLosses(draft);
+  }, { log: `${draftName(targetPlayerId)}: commander damage ${delta >= 0 ? '+' : ''}${delta}.` });
+}
+
+function adjustMana(playerId, color, delta) {
+  updateState((draft) => {
+    const player = draft.players[playerId];
+    player.mana[color] = Math.max(0, Number(player.mana[color] || 0) + delta);
+  }, { snapshot: false });
+}
+
+function clearMana(playerId) {
+  updateState((draft) => { draft.players[playerId].mana = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 }; }, { log: `${draftName(playerId)} cleared their mana pool.` });
+}
+
+function draw(playerId, amount = 1) {
+  updateState((draft) => {
+    for (let i = 0; i < amount; i += 1) {
+      drawCards(draft, playerId, 1);
+      emitGameEvent(draft, { type: 'draw', actorId: playerId, amount: 1 });
+    }
+  }, { log: `${draftName(playerId)} drew ${amount} card${amount === 1 ? '' : 's'}.` });
+}
+
+function mill(playerId, amount = 1) {
+  updateState((draft) => {
+    const player = draft.players[playerId];
+    for (let i = 0; i < amount; i += 1) {
+      const card = player.zones.library.shift();
+      if (!card) break;
+      player.zones.graveyard.push(card);
+      emitGameEvent(draft, { type: 'mill', actorId: playerId, card, amount: 1 });
+      recordPublicEvent(draft, {
+        type: 'milled',
+        actorId: playerId,
+        subjectPlayerId: playerId,
+        card,
+        fromZone: 'library',
+        toZone: 'graveyard',
+        meaningful: true,
+      });
+    }
+  }, { log: `${draftName(playerId)} milled ${amount} card${amount === 1 ? '' : 's'}.` });
+}
+
+function shuffleLibrary(playerId) {
+  updateState((draft) => {
+    draft.players[playerId].zones.library = shuffle(draft.players[playerId].zones.library);
+    recordPublicEvent(draft, {
+      type: 'shuffled',
+      actorId: playerId,
+      subjectPlayerId: playerId,
+      meaningful: true,
+    });
+  }, { log: `${draftName(playerId)} shuffled their library.` });
+}
+
+function nextPhase() {
+  const current = window.CommanderForge.getState();
+  const blocked = phaseAdvanceBlocker(current);
+  if (blocked) {
+    if (!current.settings.testOverrides) return { ok: false, message: blocked };
+    const proceed = confirm(`${blocked}
+
+Test Override is enabled. Advance the phase anyway?`);
+    if (!proceed) return { ok: false, message: 'Phase advance cancelled.' };
+  }
+
+  const nextIndex = (current.phaseIndex + 1) % PHASES.length;
+  updateState((draft) => {
+    if (nextIndex === 0) {
+      recordTurnPass(draft, draft.activePlayerId);
+      for (const player of Object.values(draft.players)) {
+        player.zones.battlefield.forEach((card) => { card.stackFresh = false; });
+      }
+      draft.turnNumber += 1;
+      draft.activePlayerId = nextTurnPlayerId(draft, draft.activePlayerId);
+      const active = draft.players[draft.activePlayerId];
+      active.landPlaysThisTurn = 0;
+      active.spellsCastThisTurn = 0;
+      active.noncreatureSpellsCastThisTurn = 0;
+      active.zones.battlefield.forEach((card) => {
+        card.tapped = false;
+        card.attacking = false;
+        card.attackTargetPlayerId = null;
+        card.blocking = null;
+        card.blockedBy = [];
+        card.summoningSick = false;
+        card.damageMarked = 0;
+        card.deathtouchDamaged = false;
+        card.abilityActivationsThisTurn = {};
+      });
+      active.mana = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+      revalidateAuraAttachments(draft);
+    }
+    draft.phaseIndex = nextIndex;
+    draft.priorityPlayerId = draft.activePlayerId;
+    draft.consecutivePasses = 0;
+    const active = draft.players[draft.activePlayerId];
+    if (PHASES[nextIndex].id === 'draw' && draft.settings.autoDraw) {
+      const skipOpeningDraw = Object.keys(draft.players || {}).length === 2 && Number(draft.turnNumber || 1) === 1;
+      if (skipOpeningDraw) {
+        draft.log.unshift({
+          id: uid('log'),
+          time: new Date().toISOString(),
+          text: `${active.name} skipped the first-turn draw in this 1v1 game.`,
+        });
+      } else { drawCards(draft, active.id, 1); emitGameEvent(draft, { type: 'draw', actorId: active.id, amount: 1 }); }
+    }
+    if (PHASES[nextIndex].id !== 'combat') {
+      active.zones.battlefield.forEach((card) => {
+        card.attacking = false;
+        card.attackTargetPlayerId = null;
+        card.blocking = null;
+        card.blockedBy = [];
+      });
+    }
+    enqueuePhaseEffects(draft, PHASES[nextIndex].id);
+  }, { log: nextIndex === 0 ? `Turn passed to ${current.players[nextTurnPlayerId(current, current.activePlayerId)]?.name || 'next player'}.` : `Phase: ${PHASES[nextIndex].label}.` });
+  return { ok: true };
+}
+
+function setPhase(index, { force = false } = {}) {
+  const current = window.CommanderForge.getState();
+  const blocked = phaseAdvanceBlocker(current);
+  if (blocked && !force) return { ok: false, message: blocked };
+  const safeIndex = Math.max(0, Math.min(PHASES.length - 1, index));
+  updateState((draft) => {
+    draft.phaseIndex = safeIndex;
+    draft.priorityPlayerId = draft.activePlayerId;
+    draft.consecutivePasses = 0;
+    enqueuePhaseEffects(draft, PHASES[safeIndex].id);
+  }, { log: `Phase set to ${PHASES[safeIndex].label}.` });
+  return { ok: true };
+}
+
+function switchActivePlayer() {
+  const current = window.CommanderForge.getState();
+  const next = nextTurnPlayerId(current, current.activePlayerId);
+  updateState((draft) => { draft.activePlayerId = next; draft.priorityPlayerId = next; }, { log: `${current.players[next].name} is now active.` });
+}
+
+function resolveStackTop() {
+  const current = window.CommanderForge.getState(); const card = current.stack.at(-1);
+  if (!card) return { ok: false, message: 'The stack is empty.' };
+  if (card._specialAbility === 'ninjutsu') {
+    let entered = false;
+    updateState((draft) => {
+      const ability = draft.stack.pop();
+      const handHasSource = Boolean(draft.players?.[ability.owner]?.zones?.hand?.some((item) => item.instanceId === ability.sourceCardId));
+      if (handHasSource) {
+        const extracted = extractUniqueTopLevelCard(draft, ability.sourceCardId, 'hand');
+        if (extracted?.card && extracted.fromZone === 'hand') {
+          const ninja = extracted.card;
+          delete ninja.ninjutsuPendingId;
+          ninja.controller = ability.controller;
+          ninja.tapped = true;
+          ninja.attacking = true;
+          ninja.blocking = null;
+          ninja.blockedBy = [];
+          ninja.summoningSick = true;
+          ninja.enteredBattlefieldTurn = Number(draft.turnNumber || 1);
+          draft.players[ability.controller].zones.battlefield.push(ninja);
+          recordZoneTransition(draft, { card: ninja, actorId: ability.controller, subjectPlayerId: ninja.owner, fromZone: 'hand', toZone: 'battlefield', castAttempt: false });
+          enqueueBattlefieldEntryEffects(draft, ninja, 'hand');
+          entered = true;
+        }
+      }
+      draft.priorityPlayerId = draft.activePlayerId;
+      draft.consecutivePasses = 0;
+    }, { log: `${card.sourceCardName || card.name}: ninjutsu ability resolved.` });
+    return { ok: true, message: entered ? 'Ninjutsu resolved. The Ninja entered tapped and attacking.' : 'Ninjutsu resolved with no creature entering because the Ninja left the hand.' };
+  }
+  if (card.castAsMutate) {
+    updateState((draft) => {
+      const spell = draft.stack.pop(); const target = findCard(spell.castAsMutate.targetId, draft);
+      if (!target || target.zone !== 'battlefield' || target.card.owner !== spell.owner || !isCreature(target.card) || isHumanCreature(target.card)) { delete spell.castAsMutate; spell.summoningSick = true; spell.tapped = false; spell.enteredBattlefieldTurn = Number(draft.turnNumber || 1); draft.players[spell.controller].zones.battlefield.push(spell); enqueueBattlefieldEntryEffects(draft, spell, 'stack'); }
+      else {
+        const host = target.card; const existing = host.mutationPile?.length ? host.mutationPile.map((item) => deepClone(item)) : [mutationComponent(host)]; const added = mutationComponent(spell); const components = [...existing, added];
+        const priorMutationCount = Number(host.mutationCount || Math.max(0, existing.length - 1));
+        const runtime = { instanceId: host.instanceId, owner: host.owner, controller: host.controller, tapped: host.tapped, summoningSick: host.summoningSick, attacking: host.attacking, blocking: host.blocking, blockedBy: [...(host.blockedBy || [])], counters: deepClone(host.counters || {}), notes: host.notes || '', attachedTo: host.attachedTo || null, attachments: [...(host.attachments || [])], enteredBattlefieldTurn: host.enteredBattlefieldTurn, commander: components.some((item) => Boolean(item.commander)), damageMarked: Number(host.damageMarked || 0), deathtouchDamaged: Boolean(host.deathtouchDamaged), continuousEffects: deepClone(host.continuousEffects || []) };
+        const topIndex = spell.castAsMutate.position === 'under' ? Number(host.mutationTopIndex || 0) : components.length - 1; const top = components[topIndex] || components[0];
+        for (const key of ['name','manaCost','manaValue','typeLine','power','toughness','loyalty','defense','colors','colorIdentity','image','imageSmall','scryfallId','oracleId','producedMana']) if (top[key] !== undefined) host[key] = deepClone(top[key]);
+        host.keywords = [...new Set(components.flatMap((item) => item.keywords || []))]; host.oracleText = mergedMutationOracle(components); Object.assign(host, runtime); host.token = Boolean(top.token); host.mutationPile = components; host.mutationTopIndex = topIndex; host.mutationCount = priorMutationCount + 1; host.commanderComponentIds = components.filter((item) => item.commander).map((item) => item.instanceId); triggerMutationEffects(draft, host);
+      }
+      draft.priorityPlayerId = draft.activePlayerId; draft.consecutivePasses = 0;
+    }, { log: `${card.name} resolved as a mutating creature spell.` });
+    return { ok: true };
+  }
+  const destination = stackDestination(card);
+  let resolutionMessage = `${card.name} resolved to ${ZONE_LABELS[destination]}.`;
+  updateState((draft) => {
+    const resolved = draft.stack.pop();
+    if (destination === 'battlefield' && isAura(resolved)) {
+      const target = resolved.auraTargetId ? findCard(resolved.auraTargetId, draft) : null;
+      if (!target || target.zone !== 'battlefield' || !auraTargetLegality(resolved, target.card, draft).legal) {
+        delete resolved.auraTargetId;
+        resolved.attachedTo = null;
+        resolved.controller = resolved.owner;
+        draft.players[resolved.owner].zones.graveyard.push(resolved);
+        resolutionMessage = `${resolved.name} did not resolve because its Aura target was no longer legal; it went to its owner's graveyard.`;
+        recordPublicEvent(draft, { type: 'aura_target_illegal', actorId: resolved.controller, subjectPlayerId: resolved.owner, card: resolved, fromZone: 'stack', toZone: 'graveyard', meaningful: true });
+      } else {
+        delete resolved.auraTargetId;
+        resolved.summoningSick = false;
+        resolved.attachedTo = target.card.instanceId;
+        resolved.wasAttached = true;
+        target.card.attachments ||= [];
+        if (!target.card.attachments.includes(resolved.instanceId)) target.card.attachments.push(resolved.instanceId);
+        draft.players[resolved.controller].zones.battlefield.push(resolved);
+        applyAuraControlEffect(draft, resolved);
+        enqueueBattlefieldEntryEffects(draft, resolved, 'stack');
+        revalidateAuraAttachments(draft);
+      }
+    } else if (destination === 'battlefield') {
+      resolved.summoningSick = isCreature(resolved);
+      draft.players[resolved.controller].zones.battlefield.push(resolved);
+      enqueueBattlefieldEntryEffects(draft, resolved, 'stack');
+    } else {
+      draft.players[resolved.owner].zones.graveyard.push(resolved);
+      // A resolving instant/sorcery still needs its instructions carried out.
+      const executableLines = oracleAbilityLines(resolved).filter((line) => !/^(?:when|whenever|at)\b/i.test(line) && !line.includes(':'));
+      for (const line of executableLines) queuePendingEffect(draft, { sourceCard: resolved, controllerId: resolved.controller, kind: 'spell-effect', text: line });
+    }
+    draft.priorityPlayerId = draft.activePlayerId;
+    draft.consecutivePasses = 0;
+    recordPublicEvent(draft, { type: 'resolved', actorId: resolved.controller, subjectPlayerId: resolved.owner, card: resolved, fromZone: 'stack', toZone: destination === 'battlefield' && isAura(resolved) && !resolved.attachedTo ? 'graveyard' : destination, meaningful: true });
+  }, { log: resolutionMessage });
+  return { ok: true, message: resolutionMessage };
+}
+
+function counterStackTop() {
+  const current = window.CommanderForge.getState();
+  const card = current.stack.at(-1);
+  if (!card) return;
+  const toCommand = card.commander && current.settings.confirmCommanderMoves
+    ? confirm(`${card.name} was countered. Press OK for the command zone, or Cancel for the graveyard.`)
+    : false;
+  updateState((draft) => {
+    const countered = draft.stack.pop();
+    if (countered?._specialAbility === 'ninjutsu') {
+      const source = findCard(countered.sourceCardId, draft);
+      if (source?.zone === 'hand') delete source.card.ninjutsuPendingId;
+      draft.priorityPlayerId = draft.activePlayerId; draft.consecutivePasses = 0; return;
+    }
+    const destination = toCommand ? 'command' : 'graveyard';
+    draft.players[countered.owner].zones[destination].push(countered);
+    draft.priorityPlayerId = draft.activePlayerId;
+    draft.consecutivePasses = 0;
+    recordPublicEvent(draft, {
+      type: 'countered',
+      actorId: countered.controller,
+      subjectPlayerId: countered.owner,
+      card: countered,
+      fromZone: 'stack',
+      toZone: destination,
+      meaningful: true,
+    });
+  }, { log: `${card.name} was countered${toCommand ? ' and returned to the command zone' : ''}.` });
+}
+
+function mulligan(playerId) {
+  const current = window.CommanderForge.getState();
+  const playerName = current.players[playerId].name;
+  updateState((draft) => {
+    const player = draft.players[playerId];
+    player.zones.library = shuffle([...player.zones.library, ...player.zones.hand]);
+    player.zones.hand = [];
+    player.mulligans = Number(player.mulligans || 0) + 1;
+    drawCards(draft, playerId, 7);
+    draft.openingHands ||= { active: true, kept: { p1: false, p2: false }, bottomRequired: { p1: 0, p2: 0 } };
+    draft.openingHands.active = true;
+    draft.openingHands.kept[playerId] = false;
+    draft.openingHands.bottomRequired[playerId] = Math.max(0, player.mulligans - 1);
+  }, { log: `${playerName} took mulligan ${Number(current.players[playerId].mulligans || 0) + 1}.` });
+  return Math.max(0, Number(current.players[playerId].mulligans || 0));
+}
+
+function keepOpeningHand(playerId, bottomCardIds = []) {
+  const current = window.CommanderForge.getState();
+  if (!current.openingHands?.active) return { ok: false, message: 'Opening-hand decisions are already complete.' };
+  const required = Number(current.openingHands.bottomRequired?.[playerId] || 0);
+  if (bottomCardIds.length !== required) return { ok: false, message: `Select exactly ${required} card${required === 1 ? '' : 's'} to put on the bottom.` };
+  const unique = [...new Set(bottomCardIds)];
+  if (unique.length !== bottomCardIds.length) return { ok: false, message: 'The same card cannot be selected twice.' };
+  const player = current.players[playerId];
+  if (unique.some((id) => !player.zones.hand.some((card) => card.instanceId === id))) return { ok: false, message: 'A selected card is no longer in that hand.' };
+  updateState((draft) => {
+    const hand = draft.players[playerId].zones.hand;
+    for (const id of unique) {
+      const index = hand.findIndex((card) => card.instanceId === id);
+      const [card] = hand.splice(index, 1);
+      draft.players[playerId].zones.library.push(card);
+    }
+    draft.openingHands.kept[playerId] = true;
+    draft.openingHands.bottomRequired[playerId] = 0;
+    if (Object.values(draft.openingHands.kept).every(Boolean)) draft.openingHands.active = false;
+  }, { log: `${player.name} kept their opening hand${required ? ` and put ${required} card${required === 1 ? '' : 's'} on the bottom` : ''}.` });
+  return { ok: true };
+}
+
+function concede(playerId) {
+  const current = window.CommanderForge.getState();
+  updateState((draft) => {
+    if (!draft.players[playerId]) return;
+    draft.players[playerId].lost = true;
+    const remaining = Object.keys(draft.players).filter((id) => !draft.players[id].lost);
+    draft.winner = remaining.length === 1 ? remaining[0] : null;
+    if (draft.activePlayerId === playerId && remaining.length) { draft.activePlayerId = nextTurnPlayerId(draft, playerId); draft.priorityPlayerId = draft.activePlayerId; }
+  }, { log: `${current.players[playerId]?.name || playerId} conceded.` });
+}
+
+function queueManualEffect(instanceId, text, conditionText = '') {
+  const current = window.CommanderForge.getState();
+  const found = instanceId ? findCard(instanceId, current) : null;
+  if (instanceId && !found) return { ok: false, message: 'Card not found.' };
+  const cleanText = String(text || '').trim();
+  if (!cleanText) return { ok: false, message: 'Describe the manual effect first.' };
+  updateState((draft) => {
+    const located = instanceId ? findCard(instanceId, draft) : null;
+    queuePendingEffect(draft, {
+      sourceCard: located?.card || null,
+      controllerId: located?.card?.controller || draft.activePlayerId,
+      kind: 'manual',
+      text: cleanText,
+      conditionText: String(conditionText || '').trim(),
+    });
+  }, { log: `${found?.card?.name || 'Manual effect'} queued for manual resolution.` });
+  return { ok: true };
+}
+
+function activateBattlefieldAbility(instanceId, abilityIndex = 0, costChoices = {}) {
+  const current = window.CommanderForge.getState();
+  const found = findCard(instanceId, current);
+  if (!found || found.zone !== 'battlefield') return { ok: false, message: 'That ability must come from a permanent on the battlefield.' };
+  const abilities = activatedAbilityLines(found.card);
+  const ability = abilities[Number(abilityIndex)];
+  if (!ability) return { ok: false, message: 'No supported activated ability was found.' };
+
+  const colon = ability.indexOf(':');
+  const costText = colon >= 0 ? ability.slice(0, colon).trim() : '';
+  const metadata = activationMetadata(costText, ability);
+  const playerId = found.card.controller || found.card.owner;
+  if (metadata.requiresTap && found.card.tapped) return { ok: false, message: `${found.card.name} is already tapped.` };
+
+  const cardNamePattern = String(found.card.name || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const sacrificesSelf = metadata.sacrificeSource
+    || new RegExp(`\\bsacrifice\\s+(?:${cardNamePattern}|this (?:creature|artifact|permanent|land|enchantment))\\b`, 'i').test(costText);
+
+  const chosenSacrificeMatch = costText.match(/\bsacrifice\s+(?:a|an|one)\s+(creature|artifact|permanent|land|enchantment)\b/i);
+  const chosenSacrificeType = chosenSacrificeMatch?.[1]?.toLocaleLowerCase() || null;
+  const needsChosenSacrifice = Boolean(chosenSacrificeType && !sacrificesSelf);
+  const needsChosenDiscard = Boolean(metadata.discardCost);
+
+  if (needsChosenSacrifice && !costChoices.sacrificeId) {
+    const candidates = sacrificeCandidates(current, playerId, chosenSacrificeType, null, false);
+    if (!candidates.length) return { ok: false, message: `You do not control a ${chosenSacrificeType} you can sacrifice for this ability.` };
+    ui.abilityCostChoice = {
+      cardId: instanceId,
+      abilityIndex: Number(abilityIndex),
+      kind: 'sacrifice',
+      candidateIds: candidates.map((card) => card.instanceId),
+      title: `Sacrifice a ${chosenSacrificeType}`,
+      detail: `Choose the ${chosenSacrificeType} to sacrifice as a cost for ${found.card.name}.`,
+    };
+    render({ force: true });
+    return { ok: true };
+  }
+
+  if (needsChosenDiscard && !costChoices.discardId) {
+    const candidates = [...(current.players[playerId]?.zones?.hand || [])];
+    if (!candidates.length) return { ok: false, message: 'You have no card in hand to discard for this ability.' };
+    ui.abilityCostChoice = {
+      cardId: instanceId,
+      abilityIndex: Number(abilityIndex),
+      kind: 'discard',
+      candidateIds: candidates.map((card) => card.instanceId),
+      title: 'Discard a card',
+      detail: `Choose the card to discard as a cost for ${found.card.name}.`,
+    };
+    render({ force: true });
+    return { ok: true };
+  }
+
+  if (metadata.lifeCost && current.players[playerId].life <= metadata.lifeCost) return { ok: false, message: `You need more than ${metadata.lifeCost} life to pay this activation cost.` };
+
+  if (needsChosenSacrifice) {
+    const chosen = findCard(costChoices.sacrificeId, current);
+    if (!chosen || chosen.zone !== 'battlefield' || (chosen.card.controller || chosen.playerId) !== playerId || !sacrificeCandidates(current, playerId, chosenSacrificeType).some((card) => card.instanceId === chosen.card.instanceId)) {
+      return { ok: false, message: `That is no longer a legal ${chosenSacrificeType} to sacrifice.` };
+    }
+  }
+  if (needsChosenDiscard) {
+    const chosen = findCard(costChoices.discardId, current);
+    if (!chosen || chosen.zone !== 'hand' || chosen.playerId !== playerId) return { ok: false, message: 'That card is no longer in your hand.' };
+  }
+
+  const excludeManaSources = new Set();
+  if (metadata.requiresTap) excludeManaSources.add(instanceId);
+  if (costChoices.sacrificeId) excludeManaSources.add(costChoices.sacrificeId);
+  const manaPlan = metadata.activationManaCost
+    ? planManaPayment(current.players[playerId], metadata.activationManaCost, 0, { excludeSourceIds: [...excludeManaSources] })
+    : { ok: true, sources: [], finalManaCost: '' };
+  if (!manaPlan.ok) return { ok: false, message: manaPlan.reason || `You cannot pay ${metadata.activationManaCost} for this ability.` };
+
+  updateState((draft) => {
+    const locatedAtStart = findCard(instanceId, draft);
+    if (!locatedAtStart || locatedAtStart.zone !== 'battlefield') return;
+    const sourceSnapshot = deepClone(locatedAtStart.card);
+    if (metadata.activationManaCost) applySpellPayment(draft, playerId, { ...manaPlan, finalManaCost: metadata.activationManaCost, convoke: [], improvise: [], delve: [], sacrifices: [], discards: [], lifePaid: 0 });
+    if (metadata.lifeCost) draft.players[playerId].life -= Number(metadata.lifeCost || 0);
+
+    const sacrificePermanentAsCost = (cardId) => {
+      const live = findCard(cardId, draft);
+      if (!live || live.zone !== 'battlefield') return null;
+      const snapshot = deepClone(live.card);
+      const sacrificed = live.container.splice(live.index, 1)[0];
+      clearCardRelations(draft, sacrificed);
+      sacrificed.controller = sacrificed.owner;
+      sacrificed.tapped = false;
+      sacrificed.attacking = false;
+      sacrificed.blocking = null;
+      sacrificed.blockedBy = [];
+      draft.players[sacrificed.owner].zones.graveyard.push(sacrificed);
+      enqueueBattlefieldLeaveEffects(draft, snapshot, 'graveyard');
+      recordZoneTransition(draft, { card: sacrificed, actorId: playerId, subjectPlayerId: sacrificed.owner, fromZone: 'battlefield', toZone: 'graveyard', castAttempt: false });
+      return sacrificed;
+    };
+
+    if (costChoices.sacrificeId) sacrificePermanentAsCost(costChoices.sacrificeId);
+    if (costChoices.discardId) {
+      const discarded = findCard(costChoices.discardId, draft);
+      if (discarded?.zone === 'hand') {
+        const card = discarded.container.splice(discarded.index, 1)[0];
+        card.controller = card.owner;
+        draft.players[card.owner].zones.graveyard.push(card);
+        recordZoneTransition(draft, { card, actorId: playerId, subjectPlayerId: card.owner, fromZone: 'hand', toZone: 'graveyard', castAttempt: false });
+        emitGameEvent(draft, { type: 'discard', actorId: playerId, card });
+      }
+    }
+
+    const liveSource = findCard(instanceId, draft);
+    if (metadata.requiresTap && liveSource?.zone === 'battlefield' && !sacrificesSelf) liveSource.card.tapped = true;
+    if (sacrificesSelf && liveSource?.zone === 'battlefield') sacrificePermanentAsCost(instanceId);
+
+    queuePendingEffect(draft, {
+      sourceCard: sourceSnapshot,
+      controllerId: playerId,
+      kind: 'activated-ability',
+      text: ability,
+    });
+    emitGameEvent(draft, { type: 'ability-activated', actorId: playerId, card: sourceSnapshot });
+    checkLosses(draft);
+  }, { log: `${found.card.name}: activated ability costs paid and effect queued${sacrificesSelf || costChoices.sacrificeId ? ' (sacrifice paid)' : ''}${costChoices.discardId ? ' (discard paid)' : ''}.` });
+  ui.abilityCostChoice = null;
+  return { ok: true };
+}
+
+
+function setPendingEffectCondition(effectId, status) {
+  const allowed = new Set(['met', 'not-met', 'unconfirmed']);
+  if (!allowed.has(status)) return { ok: false, message: 'Unknown condition status.' };
+  const current = window.CommanderForge.getState();
+  const effect = current.pendingTriggers.find((item) => item.id === effectId);
+  if (!effect) return { ok: false, message: 'Pending effect not found.' };
+
+  updateState((draft) => {
+    const pending = draft.pendingTriggers.find((item) => item.id === effectId);
+    if (!pending) return;
+    if (status === 'not-met') draft.pendingTriggers = draft.pendingTriggers.filter((item) => item.id !== effectId);
+    else pending.conditionStatus = status;
+  }, {
+    log: status === 'not-met'
+      ? `${effect.sourceName}: condition was not met; effect did not trigger.`
+      : `${effect.sourceName}: manual condition confirmed.`,
+  });
+  return { ok: true };
+}
+
+function resolvePendingEffect(effectId, { decline = false } = {}) {
+  const current = window.CommanderForge.getState();
+  const effect = current.pendingTriggers.find((item) => item.id === effectId);
+  if (!effect) return { ok: false, message: 'Pending effect not found.' };
+  if (decline && !effect.optional) return { ok: false, message: 'This effect is not marked optional.' };
+  if (effect.conditionText && effect.conditionStatus !== 'met' && !decline) {
+    return { ok: false, message: 'Confirm that the condition is met, or mark it not met, before resolving this effect.' };
+  }
+  updateState((draft) => {
+    draft.pendingTriggers = draft.pendingTriggers.filter((item) => item.id !== effectId);
+  }, {
+    log: decline ? `${effect.sourceName}: optional effect declined.` : `${effect.sourceName}: manual effect resolved.`,
+  });
+  return { ok: true };
+}
+
+function dismissAllPendingEffects() {
+  const current = window.CommanderForge.getState();
+  const count = Number(current.pendingTriggers?.length || 0);
+  if (!count) return { ok: false, message: 'There are no pending effects to dismiss.' };
+  updateState((draft) => {
+    draft.pendingTriggers = [];
+  }, { log: `Dismissed ${count} stale/manual pending effect${count === 1 ? '' : 's'}.` });
+  ui.libraryEffectPicker = null;
+  ui.smartEffectSelections = Object.create(null);
+  ui.smartEffectPowerOverrides = Object.create(null);
+  return { ok: true, message: `Dismissed ${count} pending effect${count === 1 ? '' : 's'}.` };
+}
+
+function clearCombatMarkers() {
+  const current = window.CommanderForge.getState();
+  const activeMarkers = Object.values(current.players).flatMap((player) => player.zones.battlefield).filter((card) => card.attacking || card.blocking);
+  if (!activeMarkers.length) return { ok: false, message: 'No active combat markers to clear.' };
+  updateState((draft) => {
+    for (const player of Object.values(draft.players)) {
+      for (const card of player.zones.battlefield) {
+        card.attacking = false;
+        card.attackTargetPlayerId = null;
+        card.blocking = null;
+        card.blockedBy = [];
+      }
+    }
+  }, { log: 'Combat was resolved manually; attack and block markers were cleared.' });
+  return { ok: true };
+}
+
+function battlefieldActivatedAbilities(instanceId) {
+  const found = findCard(instanceId, window.CommanderForge.getState());
+  if (!found || found.zone !== 'battlefield') return [];
+  return activatedAbilityLines(found.card);
+}
+
+function updateCardNote(instanceId, notes) {
+  updateState((draft) => { const found = findCard(instanceId, draft); if (found) found.card.notes = notes; }, { snapshot: false });
+}
+
+function flipCard(instanceId) {
+  const current = window.CommanderForge.getState();
+  const currentFound = findCard(instanceId, current);
+  if (!currentFound) return;
+  const transforms = currentFound.card.token && currentFound.card.tokenFaces?.length > 1;
+  updateState((draft) => {
+    const found = findCard(instanceId, draft);
+    if (!found) return;
+    const card = found.card;
+    if (card.token && card.tokenFaces?.length > 1) {
+      const nextIndex = (Number(card.activeTokenFace || 0) + 1) % card.tokenFaces.length;
+      const face = card.tokenFaces[nextIndex];
+      card.activeTokenFace = nextIndex;
+      card.name = face.name || card.name;
+      card.manaCost = face.manaCost || '';
+      card.typeLine = face.typeLine || card.typeLine;
+      card.oracleText = face.oracleText || '';
+      card.power = String(face.power ?? '');
+      card.toughness = String(face.toughness ?? '');
+      card.loyalty = String(face.loyalty ?? '');
+      card.colors = [...(face.colors || [])];
+      card.image = face.image || card.image;
+      card.imageSmall = face.imageSmall || face.image || card.imageSmall;
+      card.faceDown = false;
+    } else card.faceDown = !card.faceDown;
+    revalidateAuraAttachments(draft);
+  }, { log: transforms ? `${currentFound.card.name} transformed.` : 'Card face changed.' });
+}
+
+function resolvePrivateLibraryDecision(playerId, cardIds = [], items = [], options = {}) {
+  const current = window.CommanderForge.getState();
+  const player = current.players[playerId];
+  if (!player) return { ok: false, message: 'Player not found.' };
+  const ids = [...new Set(cardIds || [])];
+  if (!ids.length) return { ok: false, message: 'There are no cards to resolve.' };
+  const actualTopIds = player.zones.library.slice(0, ids.length).map((card) => card.instanceId);
+  if (actualTopIds.length !== ids.length || actualTopIds.some((id) => !ids.includes(id))) {
+    return { ok: false, message: 'The top of the library changed. Open the private library tool again.' };
+  }
+  const plannedIds = items.map((item) => item.cardId);
+  if (plannedIds.length !== ids.length || new Set(plannedIds).size !== ids.length || plannedIds.some((id) => !ids.includes(id))) {
+    return { ok: false, message: 'The private card plan is incomplete.' };
+  }
+  const allowed = new Set(['top', 'bottom', 'hand', 'graveyard', 'exile']);
+  if (items.some((item) => !allowed.has(item.destination))) return { ok: false, message: 'Unknown card destination.' };
+  const drawAfter = Math.max(0, Number(options.drawAfter || 0));
+  const label = String(options.label || 'Scry').trim() || 'Scry';
+  const mode = String(options.mode || 'scry');
+  const publicMoves = [];
+  const resolvedCards = [];
+  updateState((draft) => {
+    const target = draft.players[playerId];
+    const viewed = target.zones.library.splice(0, ids.length);
+    const byId = new Map(viewed.map((card) => [card.instanceId, card]));
+    const groups = { top: [], bottom: [], hand: [], graveyard: [], exile: [] };
+    for (const item of items) {
+      const card = byId.get(item.cardId);
+      groups[item.destination].push(card);
+      if (card) resolvedCards.push({ card: deepClone(card), destination: item.destination });
+    }
+    target.zones.library = [...groups.top.filter(Boolean), ...target.zones.library, ...groups.bottom.filter(Boolean)];
+    target.zones.hand.push(...groups.hand.filter(Boolean));
+    target.zones.graveyard.push(...groups.graveyard.filter(Boolean));
+    target.zones.exile.push(...groups.exile.filter(Boolean));
+    for (const card of groups.graveyard.filter(Boolean)) publicMoves.push({ card, zone: 'graveyard' });
+    for (const card of groups.exile.filter(Boolean)) publicMoves.push({ card, zone: 'exile' });
+    for (const move of publicMoves) {
+      recordPublicEvent(draft, {
+        type: move.zone === 'graveyard' ? 'milled' : 'exiled',
+        actorId: playerId,
+        subjectPlayerId: playerId,
+        card: move.card,
+        fromZone: 'library',
+        toZone: move.zone,
+        meaningful: true,
+      });
+    }
+    recordPublicEvent(draft, {
+      type: mode === 'scry' ? 'scry' : 'private_library_look',
+      actorId: playerId,
+      subjectPlayerId: playerId,
+      count: ids.length,
+      text: `${label} ${ids.length}`,
+      meaningful: true,
+    });
+    if (drawAfter) drawCards(draft, playerId, drawAfter);
+  }, {
+    log: `${draftName(playerId)} ${mode === 'scry' ? `scried ${ids.length}` : `looked at the top ${ids.length} card${ids.length === 1 ? '' : 's'}`}${items.some((item) => item.destination === 'hand') ? ' and put a card into hand' : ''}${drawAfter ? `, then drew ${drawAfter}` : ''}.`,
+  });
+  return { ok: true, resolvedCards };
+}
+
+function revealTop(playerId) {
+  const state = window.CommanderForge.getState();
+  return state.players[playerId].zones.library[0] || null;
+}
+
+
+function revealTopPublicly(playerId) {
+  const current = window.CommanderForge.getState();
+  const card = current.players[playerId]?.zones.library?.[0];
+  if (!card) return { ok: false, message: 'The library is empty.' };
+  updateState((draft) => {
+    const top = draft.players[playerId].zones.library[0];
+    recordPublicEvent(draft, {
+      type: 'revealed',
+      actorId: playerId,
+      subjectPlayerId: playerId,
+      card: top,
+      zone: 'library',
+      position: 'top',
+      meaningful: true,
+    });
+    draft.knowledge.players[playerId].knownLibraryTop = [{ card: { ...top }, turn: draft.turnNumber, reason: 'revealed' }];
+  }, { log: `${draftName(playerId)} publicly revealed ${card.name} from the top of their library.` });
+  return { ok: true, card };
+}
+
+function revealCardPublicly(instanceId) {
+  const current = window.CommanderForge.getState();
+  const found = findCard(instanceId, current);
+  if (!found) return { ok: false, message: 'Card not found.' };
+  updateState((draft) => {
+    const located = findCard(instanceId, draft);
+    recordPublicEvent(draft, {
+      type: located.zone === 'hand' ? 'revealed_in_hand' : 'revealed',
+      actorId: located.card.controller,
+      subjectPlayerId: located.card.owner,
+      card: located.card,
+      zone: located.zone,
+      meaningful: true,
+    });
+  }, { log: `${found.card.name} was publicly revealed from ${found.zone}.` });
+  return { ok: true };
+}
+
+function assignBlocker(blockerId, attackerId) {
+  const current = window.CommanderForge.getState();
+  const blocker = findCard(blockerId, current);
+  const attacker = findCard(attackerId, current);
+  if (!blocker || !attacker || blocker.zone !== 'battlefield' || attacker.zone !== 'battlefield') return { ok: false, message: 'Both cards must be on the battlefield.' };
+  if (!attacker.card.attacking) return { ok: false, message: `${attacker.card.name} is not marked as attacking.` };
+  if (attacker.card.attackTargetPlayerId && attacker.card.attackTargetPlayerId !== (blocker.card.controller || blocker.playerId)) return { ok: false, message: `${blocker.card.name} cannot block a creature attacking another player.` };
+  updateState((draft) => {
+    const draftBlocker = findCard(blockerId, draft).card;
+    const draftAttacker = findCard(attackerId, draft).card;
+    if (draftBlocker.blocking === attackerId) {
+      draftBlocker.blocking = null;
+      draftAttacker.blockedBy = (draftAttacker.blockedBy || []).filter((id) => id !== blockerId);
+      recordPublicEvent(draft, { type: 'block_cancelled', actorId: draftBlocker.controller, subjectPlayerId: draftBlocker.controller, card: draftBlocker, targetCard: draftAttacker });
+    } else {
+      if (draftBlocker.blocking) {
+        const prior = findCard(draftBlocker.blocking, draft);
+        if (prior) prior.card.blockedBy = (prior.card.blockedBy || []).filter((id) => id !== blockerId);
+      }
+      draftBlocker.blocking = attackerId;
+      draftAttacker.blockedBy ||= [];
+      if (!draftAttacker.blockedBy.includes(blockerId)) draftAttacker.blockedBy.push(blockerId);
+      recordPublicEvent(draft, {
+        type: 'block',
+        actorId: draftBlocker.controller,
+        subjectPlayerId: draftBlocker.controller,
+        card: draftBlocker,
+        targetCard: draftAttacker,
+        meaningful: true,
+      });
+    }
+  }, { log: `${blocker.card.name} ${blocker.card.blocking === attackerId ? 'stopped blocking' : `blocks ${attacker.card.name}`}.` });
+  return { ok: true };
+}
+
+function attachCard(instanceId, targetId, { force = false } = {}) {
+  const current = window.CommanderForge.getState();
+  const source = findCard(instanceId, current);
+  const target = findCard(targetId, current);
+  if (!source || !target || source.zone !== 'battlefield' || target.zone !== 'battlefield') return { ok: false, message: 'Both cards must be on the battlefield.' };
+  const legality = attachmentTargetLegality(source.card, target.card, current);
+  if (!legality.legal && !force) return { ok: false, message: legality.reason };
+  updateState((draft) => {
+    const attachmentFound = findCard(instanceId, draft);
+    const targetFound = findCard(targetId, draft);
+    if (!attachmentFound || !targetFound) return;
+    const attachment = attachmentFound.card;
+    const permanent = targetFound.card;
+    if (attachment.attachedTo) {
+      releaseAuraControlEffect(draft, attachment);
+      const prior = findCard(attachment.attachedTo, draft);
+      if (prior) prior.card.attachments = (prior.card.attachments || []).filter((id) => id !== instanceId);
+    }
+    attachment.attachedTo = targetId;
+    attachment.wasAttached = true;
+    permanent.attachments ||= [];
+    if (!permanent.attachments.includes(instanceId)) permanent.attachments.push(instanceId);
+    applyAuraControlEffect(draft, attachment);
+    recordPublicEvent(draft, {
+      type: 'attached',
+      actorId: attachment.controller,
+      subjectPlayerId: permanent.owner,
+      card: attachment,
+      targetCard: permanent,
+      meaningful: true,
+    });
+    revalidateAuraAttachments(draft);
+  }, { log: `${source.card.name} attached to ${target.card.name}.` });
+  return { ok: true };
+}
+
+function checkLosses(draft) {
+  for (const player of Object.values(draft.players)) {
+    const commanderLoss = Math.max(0, ...Object.values(player.commanderDamage || {}).map(Number)) >= 21;
+    player.lost = player.life <= 0 || player.poison >= 10 || commanderLoss;
+  }
+  const remaining = gameTurnOrder(draft).filter((id) => draft.players?.[id] && !draft.players[id].lost);
+  draft.winner = remaining.length === 1 ? remaining[0] : null;
+  if (draft.activePlayerId && draft.players?.[draft.activePlayerId]?.lost && remaining.length) {
+    draft.activePlayerId = nextTurnPlayerId(draft, draft.activePlayerId);
+    draft.priorityPlayerId = draft.activePlayerId;
+  }
+}
+
+
+return { attachmentTargetLegality, castAuraTargeting, testOverrideMove, changeControl, castPublicCardForFree, putPublicCardOntoBattlefield, playPublicLand, moveCard, removeToken, tapForMana, toggleTap, toggleAttack, addCounter, updateManualKeyword, createToken, copyAsToken, adjustPlayer, adjustCommanderDamage, adjustMana, clearMana, draw, mill, shuffleLibrary, nextPhase, setPhase, switchActivePlayer, resolveStackTop, counterStackTop, mulligan, keepOpeningHand, concede, queueManualEffect, activateBattlefieldAbility, setPendingEffectCondition, resolvePendingEffect, smartPendingEffectState, resolveSmartPendingEffect, resolveSmartPendingEffectMulti, resolveSmartPendingEffectNoResult, clearCombatMarkers, battlefieldActivatedAbilities, updateCardNote, flipCard, revealTop, revealTopPublicly, revealCardPublicly, resolvePrivateLibraryDecision, assignBlocker, attachCard, ninjutsuOptions, activateNinjutsu, mutateOptions, mutateStatus, isHumanCreature, castForMutate };
+})();
+
+// ---- main.js ----
+(() => {
+const { COLORS, PHASES, ZONE_LABELS } = __modules["./constants.js"];
+const { fetchCardsByNames, fetchPreconDeck, fetchPreconIndex, fetchPredefinedTokens } = __modules["./api.js"];
+const { buildPlayerDeck, canUndo, createInitialState, createPlayer, drawCards, findCard, getState, importState, pushHistory, resetState, restore, setState, subscribe, undo, updateState } = __modules["./state.js"];
+const { commanderCandidates, landPlayAllowance, maximumHandSize, recognizedEffects, validateDeck } = __modules["./rules.js"];
+const { analyzePositionAsync, defenseAdvice } = __modules["./coach.js"];
+const { applyTacticalAction, resolveMarkedCombat, resolveTacticalStackTop } = __modules["./tactical-engine.js"];
+const { buildStrategyProfile, strategyLabel } = __modules["./strategy-profile.js"];
+const { addCounter, updateManualKeyword, assignBlocker, attachCard, attachmentTargetLegality, castAuraTargeting, testOverrideMove, changeControl, castPublicCardForFree, putPublicCardOntoBattlefield, playPublicLand, activateBattlefieldAbility, battlefieldActivatedAbilities, adjustCommanderDamage, adjustMana, adjustPlayer, clearMana, copyAsToken, counterStackTop, createToken, draw, flipCard, mill, moveCard, removeToken, mulligan, keepOpeningHand, concede, nextPhase, queueManualEffect, resolvePendingEffect, smartPendingEffectState, resolveSmartPendingEffect, resolveSmartPendingEffectMulti, resolveSmartPendingEffectNoResult, resolveStackTop, setPendingEffectCondition, clearCombatMarkers, revealCardPublicly, revealTopPublicly, resolvePrivateLibraryDecision, setPhase, shuffleLibrary, switchActivePlayer, toggleAttack, toggleTap, tapForMana, updateCardNote, ninjutsuOptions, activateNinjutsu, mutateOptions, mutateStatus, isHumanCreature, castForMutate } = __modules["./game.js"];
+const { cardImage, cardSmallImage, debounce, deepClone, downloadJson, escapeHtml, isCreature, isLand, isPermanent, manaProductionChoices, manaSourceLabel, parseDecklist, shuffle, uid } = __modules["./utils.js"];
+const engineBridge = __modules["./engine-bridge.js"];
+
+const app = document.querySelector('#app');
+const toastRoot = document.querySelector('#toast-root');
+
+window.CommanderForge = { getState };
+window.CommanderForgeEngineBridge = engineBridge;
+// Commander Forge Engine 6 runs in a Web Worker and mirrors the live 5.x table
+// during the migration. This keeps the current UI stable while the new rules core
+// is expanded and made authoritative action-by-action.
+if (window.CommanderForgeEngine6) {
+  window.CommanderForgeEngine6.shadowSyncLegacy(getState());
+  subscribe((nextState) => window.CommanderForgeEngine6?.shadowSyncLegacy(nextState));
+}
+
+const ui = {
+  setupOpen: false,
+  settingsOpen: false,
+  tokenOpen: false,
+  tokenPeek: false,
+  tokenDraft: createTokenDraft(),
+  predefinedTokensOpen: false,
+  predefinedTokens: [],
+  predefinedTokensLoading: false,
+  predefinedTokensError: '',
+  predefinedTokenProgress: '',
+  predefinedTokenSearch: '',
+  predefinedTokenFilter: 'all',
+  predefinedTokenPlayerId: 'p1',
+  predefinedTokenQuantity: 1,
+  predefinedTokenTapped: false,
+  predefinedTokenLimit: 80,
+  pointerActionActive: false,
+  deferredRender: false,
+  damageOpen: null,
+  logOpen: false,
+  importOpen: false,
+  inspectorMode: 'card',
+  inspectorOpen: false,
+  drawer: null,
+  drawerSearch: '',
+  libraryReveal: null,
+  publicRevealNotice: null,
+  undoRequest: null,
+  overrideRequest: null,
+  localDialog: null,
+  cardContextMenu: null,
+  cardQuickEditor: null,
+  libraryEffectPicker: null,
+  abilityCostChoice: null,
+  knownRevealSelected: null,
+  scry: null,
+  loading: null,
+  coach: null,
+  coachRunning: false,
+  coachRunId: 0,
+  preconIndex: null,
+  hiddenTokens: { p1: false, p2: false },
+  mulliganBottomSelections: { p1: new Set(), p2: new Set() },
+  inspectorScrollTop: 0,
+  inspectorFocus: null,
+  noteDrafts: Object.create(null),
+  smartEffectSelections: Object.create(null),
+  smartEffectPowerOverrides: Object.create(null),
+  setupScrollTop: 0,
+  setupBodyScrollTop: 0,
+  preconScrollTops: { p1: 0, p2: 0 },
+  attackTargetPicker: null,
+  d20CanvasReady: false,
+  setupRenderPending: false,
+  setupRenderTimer: null,
+  drafts: {
+    p1: createDraft('Player 1'),
+    p2: createDraft('Player 2'),
+  },
+ };
+
+const MULTIPLAYER_APP_VERSION = '6.10.1-mp6';
+const PEERJS_OPTIONS = {
+  host: '0.peerjs.com',
+  port: 443,
+  path: '/',
+  secure: true,
+  debug: 1,
+  config: {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: ['turn:eu-0.turn.peerjs.com:3478', 'turn:us-0.turn.peerjs.com:3478'], username: 'peerjs', credential: 'peerjsp' },
+    ],
+    sdpSemantics: 'unified-plan',
+  },
+};
+
+function safeNetworkCallback(label, callback) {
+  return (...args) => {
+    try {
+      return callback(...args);
+    } catch (error) {
+      const message = `${label}: ${error?.message || error || 'Unknown multiplayer error'}`;
+      console.error('[Commander Forge multiplayer]', message, error);
+      multiplayer.lastError = message;
+      try { render(); } catch (renderError) { console.error('[Commander Forge multiplayer render]', renderError); }
+      toast(message, true);
+      return undefined;
+    }
+  };
+}
+
+const multiplayer = {
+  mode: 'solo',
+  role: null,
+  localPlayerId: null,
+  remotePlayerId: null,
+  roomCode: '',
+  status: 'offline',
+  peer: null,
+  connection: null,
+  connections: Object.create(null),
+  connectionPlayerIds: Object.create(null),
+  playerCount: 4,
+  connectedPlayerIds: ['p1'],
+  remoteDraft: null,
+  remoteDrafts: Object.create(null),
+  readyByPlayer: { p1: false },
+  startAcknowledgedBy: Object.create(null),
+  applyingRemote: false,
+  suppressSync: false,
+  revision: 0,
+  lastNetworkFingerprint: '',
+  lastAuthoritativeNetworkState: null,
+  lastLocalNetworkState: null,
+  pendingStateActions: [],
+  processedStateActionIds: Object.create(null),
+  stateDeltaRetryTimer: null,
+  guestDeltaScheduled: false,
+  syncTimer: null,
+  pendingJoinCode: '',
+  lastError: '',
+  startGameId: '',
+  startStartedAt: '',
+  startAcknowledged: false,
+  startRetryCount: 0,
+  startRetryTimer: null,
+  pendingStartMessage: null,
+  seatAssignmentTimer: null,
+  seatAssignmentAttempts: 0,
+  guestConnectTimer: null,
+  guestConnectAttempts: 0,
+  guestConnecting: false,
+  pendingTurnActionId: null,
+  turnHeartbeatTimer: null,
+  publicReveals: { p1: { hand: {}, library: {} }, p2: { hand: {}, library: {} } },
+  undoRequestId: '',
+  overrideRequestId: '',
+  approvalSession: null,
+};
+
+function isOnlineMultiplayer() { return multiplayer.mode === 'online'; }
+function multiplayerSeatIds() { return Array.from({ length: Math.max(2, Math.min(6, Number(multiplayer.playerCount || 4))) }, (_, index) => `p${index + 1}`); }
+function multiplayerRemotePlayerIds() { return multiplayerSeatIds().filter((id) => id !== multiplayer.localPlayerId); }
+function multiplayerConnectionList() { return Object.values(multiplayer.connections || {}).filter((connection) => connection?.open); }
+function isMultiplayerConnected() {
+  if (!isOnlineMultiplayer()) return false;
+  if (multiplayer.role === 'host') return multiplayerConnectionList().length > 0;
+  return Boolean(multiplayer.connection?.open);
+}
+function allMultiplayerSeatsConnected() {
+  const required = Math.max(1, Number(multiplayer.playerCount || 2) - 1);
+  if (multiplayer.role === 'host') return multiplayerConnectionList().length >= required;
+  return (multiplayer.connectedPlayerIds || []).filter((id) => multiplayerSeatIds().includes(id)).length >= Number(multiplayer.playerCount || 2);
+}
+function multiplayerLocalPlayerId() { return multiplayer.localPlayerId || 'p1'; }
+function multiplayerRemotePlayerId() { return multiplayerRemotePlayerIds()[0] || null; }
+function multiplayerActiveParticipantIds(state = getState()) {
+  const seatIds = multiplayerSeatIds();
+  const connected = new Set(multiplayer.role === 'host'
+    ? ['p1', ...Object.keys(multiplayer.connections || {}).filter((id) => multiplayer.connections[id]?.open)]
+    : (multiplayer.connectedPlayerIds || []));
+  if (multiplayer.localPlayerId) connected.add(multiplayer.localPlayerId);
+  const order = Array.isArray(state?.turnOrder) ? state.turnOrder : Object.keys(state?.players || {});
+  return order.filter((id) => seatIds.includes(id) && connected.has(id) && state?.players?.[id] && !state.players[id].lost);
+}
+function multiplayerPlayerName(playerId, state = getState()) {
+  return state?.players?.[playerId]?.name || multiplayer.remoteDrafts?.[playerId]?.name || `Player ${String(playerId || '').replace(/^p/, '') || '?'}`;
+}
+function multiplayerPlayerConnected(playerId) {
+  if (!isOnlineMultiplayer() || !playerId) return true;
+  if (multiplayer.role === 'host') return playerId === 'p1' || Boolean(multiplayer.connections?.[playerId]?.open);
+  return playerId === multiplayer.localPlayerId || (multiplayer.connectedPlayerIds || []).includes(playerId);
+}
+function multiplayerPeerId(code) { return `commander-forge-${String(code || '').toLowerCase()}`; }
+function normalizeInviteCode(value = '') { return String(value).toUpperCase().replace(/[^A-Z2-9]/g, '').slice(0, 8); }
+function generateInviteCode() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = new Uint8Array(8);
+  globalThis.crypto?.getRandomValues?.(bytes);
+  return Array.from(bytes, (value, index) => alphabet[(value || Math.floor(Math.random() * 256) + index) % alphabet.length]).join('');
+}
+function ensureDraftForPlayer(playerId) {
+  if (!playerId) return null;
+  ui.drafts[playerId] ||= createDraft(`Player ${String(playerId).replace(/^p/, '')}`);
+  ui.hiddenTokens[playerId] = Boolean(ui.hiddenTokens[playerId]);
+  ui.mulliganBottomSelections[playerId] ||= new Set();
+  ui.preconScrollTops[playerId] ||= 0;
+  return ui.drafts[playerId];
+}
+function ensureMultiplayerSeatUi() { multiplayerSeatIds().forEach(ensureDraftForPlayer); }
+function multiplayerStatusLabel() {
+  if (!isOnlineMultiplayer()) return '';
+  const seats = Number(multiplayer.playerCount || 2);
+  const connected = multiplayer.role === 'host' ? 1 + multiplayerConnectionList().length : Math.max(1, (multiplayer.connectedPlayerIds || []).length);
+  if (multiplayer.status === 'connected' || multiplayer.status === 'waiting') {
+    if (multiplayer.role === 'host') return `Host · ${connected}/${seats} players · ${multiplayer.roomCode}`;
+    const pending = Number(multiplayer.pendingStateActions?.length || 0) + (multiplayer.pendingTurnActionId ? 1 : 0);
+    return `${multiplayer.localPlayerId ? `Player ${String(multiplayer.localPlayerId).replace(/^p/, '')}` : 'Joining'} · ${connected}/${seats} · ${multiplayer.roomCode}${pending ? ` · Syncing ${pending}` : ''}`;
+  }
+  if (multiplayer.status === 'connecting') return `Connecting · ${multiplayer.roomCode}`;
+  if (multiplayer.status === 'disconnected') return 'Connection lost';
+  if (multiplayer.status === 'error') return multiplayer.lastError || 'Connection error';
+  return 'Online multiplayer';
+}
+
+function stableCommanderInstanceId(playerId, cardName, index = 0) {
+  const slug = String(cardName || `commander-${index}`).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 44);
+  return `online-${multiplayer.roomCode || 'room'}-${playerId}-${slug}-${index}`;
+}
+
+function publicCommanderCard(card, playerId, index = 0) {
+  if (!card) return null;
+  return {
+    ...deepClone(card),
+    instanceId: stableCommanderInstanceId(playerId, card.name, index),
+    owner: playerId,
+    controller: playerId,
+    commander: true,
+    tapped: false,
+    summoningSick: false,
+    attacking: false,
+    blocking: null,
+    blockedBy: [],
+    counters: {},
+    notes: '',
+    attachedTo: null,
+    attachments: [],
+  };
+}
+
+function serializePublicDraft(playerId) {
+  const draft = ensureDraftForPlayer(playerId);
+  const commanders = (draft.commanders || []).map((name, index) => {
+    const card = draft.byName?.[String(name).toLocaleLowerCase()] || draft.cards?.find((item) => item.name === name);
+    return publicCommanderCard(card, playerId, index);
+  }).filter(Boolean);
+  const deckValid = Boolean(draft.ready && !draft.validation?.errors?.length && commanders.length);
+  return {
+    playerId,
+    name: draft.name?.trim() || `Player ${String(playerId).replace(/^p/, '')}`,
+    ready: deckValid,
+    deckValid,
+    lobbyReady: Boolean(multiplayer.readyByPlayer?.[playerId]),
+    commanders,
+    commanderNames: commanders.map((card) => card.name),
+    colorIdentity: [...new Set(commanders.flatMap((card) => card.colorIdentity || []))],
+    deckTitle: draft.selectedPrecon?.name || draft.name || 'Custom deck',
+    total: Number(draft.validation?.total || draft.entries?.reduce((sum, entry) => sum + Number(entry.count || 0), 0) || 100),
+  };
+}
+
+function sendNetwork(message, targetPlayerId = null) {
+  if (!isOnlineMultiplayer()) return false;
+  const payload = { version: MULTIPLAYER_APP_VERSION, ...message };
+  try {
+    if (multiplayer.role === 'host') {
+      const targets = targetPlayerId
+        ? [multiplayer.connections?.[targetPlayerId]].filter(Boolean)
+        : Object.values(multiplayer.connections || {});
+      let sent = false;
+      for (const connection of targets) {
+        if (!connection?.open) continue;
+        connection.send(payload);
+        sent = true;
+      }
+      return sent;
+    }
+    if (!multiplayer.connection?.open) return false;
+    multiplayer.connection.send(payload);
+    return true;
+  } catch (error) {
+    multiplayer.lastError = error.message || 'Could not send multiplayer data.';
+    return false;
+  }
+}
+
+function multiplayerLobbySnapshot() {
+  const drafts = {};
+  for (const playerId of multiplayerSeatIds()) {
+    if (playerId === 'p1' && multiplayer.role === 'host') drafts[playerId] = serializePublicDraft(playerId);
+    else if (multiplayer.remoteDrafts?.[playerId]) drafts[playerId] = multiplayer.remoteDrafts[playerId];
+  }
+  const connectedPlayerIds = ['p1', ...Object.keys(multiplayer.connections || {}).filter((id) => multiplayer.connections[id]?.open)]
+    .filter((id, index, list) => multiplayerSeatIds().includes(id) && list.indexOf(id) === index);
+  return {
+    playerCount: Number(multiplayer.playerCount || 4),
+    connectedPlayerIds,
+    readyByPlayer: { ...(multiplayer.readyByPlayer || {}) },
+    drafts,
+  };
+}
+
+function broadcastLobbyState() {
+  if (multiplayer.role !== 'host') return;
+  const snapshot = multiplayerLobbySnapshot();
+  multiplayer.connectedPlayerIds = snapshot.connectedPlayerIds;
+  sendNetwork({ type: 'lobby-state', lobby: snapshot });
+  render();
+}
+
+function sendLocalDraft({ preserveReady = false } = {}) {
+  if (!multiplayer.localPlayerId) return;
+  const playerId = multiplayer.localPlayerId;
+  const draft = serializePublicDraft(playerId);
+  if (!preserveReady) multiplayer.readyByPlayer[playerId] = false;
+  draft.lobbyReady = Boolean(multiplayer.readyByPlayer[playerId]);
+  if (multiplayer.role === 'host') {
+    broadcastLobbyState();
+    return;
+  }
+  if (isMultiplayerConnected()) sendNetwork({ type: 'draft', draft });
+}
+
+function applyRemoteDraft(draft) {
+  if (!draft?.playerId) return;
+  const playerId = draft.playerId;
+  multiplayer.remoteDrafts[playerId] = deepClone(draft);
+  if (playerId === multiplayerRemotePlayerId()) multiplayer.remoteDraft = multiplayer.remoteDrafts[playerId];
+  const remote = ensureDraftForPlayer(playerId);
+  if (playerId !== multiplayer.localPlayerId) {
+    remote.name = draft.name || remote.name;
+    remote.commanders = [...(draft.commanderNames || [])];
+    remote.cards = [...(draft.commanders || [])];
+    remote.candidates = [...(draft.commanders || [])];
+    remote.validation = draft.deckValid || draft.ready ? { errors: [], warnings: [], total: draft.total || 100 } : null;
+    remote.ready = Boolean(draft.deckValid || draft.ready);
+  }
+  if (draft.lobbyReady != null) multiplayer.readyByPlayer[playerId] = Boolean(draft.lobbyReady);
+  render();
+}
+
+function hiddenNetworkCard(playerId, zone, index) {
+  return {
+    instanceId: `hidden-${playerId}-${zone}-${index}`,
+    scryfallId: null,
+    name: 'Hidden card',
+    manaCost: '', manaValue: 0,
+    typeLine: 'Hidden Card', oracleText: '', producedMana: [],
+    power: '', toughness: '', keywords: [], manualKeywords: [], colors: [], colorIdentity: [], legalities: {},
+    image: './card-back.svg', imageSmall: './card-back.svg',
+    owner: playerId, controller: playerId, faceDown: true, networkHidden: true,
+    tapped: false, summoningSick: false, attacking: false, token: false, commander: false,
+    counters: {}, notes: '',
+  };
+}
+
+function hiddenNetworkZone(playerId, zone, count) {
+  return Array.from({ length: Math.max(0, Number(count || 0)) }, (_, index) => hiddenNetworkCard(playerId, zone, index));
+}
+
+function emptyPublicRevealState() {
+  return Object.fromEntries(Array.from({ length: 6 }, (_, index) => [`p${index + 1}`, { hand: {}, library: {} }]));
+}
+
+
+function publicRevealImage(card, size = 'small') {
+  if (!card) return './card-back.svg';
+  const direct = size === 'normal'
+    ? (card.image || card.image_uris?.normal || card.card_faces?.[0]?.image_uris?.normal)
+    : (card.imageSmall || card.image_uris?.small || card.card_faces?.[0]?.image_uris?.small || card.image);
+  if (direct) return direct;
+  const id = String(card.scryfallId || '').toLowerCase();
+  if (/^[0-9a-f-]{36}$/.test(id)) return `https://cards.scryfall.io/${size === 'normal' ? 'normal' : 'small'}/front/${id[0]}/${id[1]}/${id}.jpg`;
+  return './card-back.svg';
+}
+
+function revealNetworkSnapshot(card) {
+  return {
+    instanceId: card?.instanceId || null,
+    scryfallId: card?.scryfallId || null,
+    oracleId: card?.oracleId || null,
+    name: card?.name || 'Revealed card',
+    manaCost: card?.manaCost || '',
+    manaValue: Number(card?.manaValue || 0),
+    typeLine: card?.typeLine || '',
+    oracleText: card?.oracleText || '',
+    power: card?.power || '',
+    toughness: card?.toughness || '',
+    keywords: [...(card?.keywords || [])],
+    manualKeywords: [...(card?.manualKeywords || [])],
+    colors: [...(card?.colors || [])],
+    colorIdentity: [...(card?.colorIdentity || [])],
+    commander: Boolean(card?.commander),
+    token: Boolean(card?.token),
+    producedMana: [...(card?.producedMana || [])],
+    image: card?.image || card?.image_uris?.normal || card?.card_faces?.[0]?.image_uris?.normal || null,
+    imageSmall: card?.imageSmall || card?.image_uris?.small || card?.card_faces?.[0]?.image_uris?.small || null,
+    owner: card?.owner || null,
+    controller: card?.controller || null,
+    faceDown: false,
+    networkHidden: false,
+  };
+}
+
+function ensureRevealBucket(playerId) {
+  multiplayer.publicReveals ||= emptyPublicRevealState();
+  multiplayer.publicReveals[playerId] ||= { hand: {}, library: {} };
+  const bucket = multiplayer.publicReveals[playerId];
+  bucket.hand ||= {};
+  bucket.library ||= {};
+  // Migrate a reveal created by an older in-memory session.
+  if (bucket.libraryTop?.card) {
+    const key = bucket.libraryTop.card.instanceId || bucket.libraryTop.id;
+    bucket.library[key] = bucket.libraryTop;
+    delete bucket.libraryTop;
+  }
+  return bucket;
+}
+
+function applyPublicReveal(reveal, { notify = true } = {}) {
+  if (!reveal?.playerId || !reveal?.card?.name) return;
+  const bucket = ensureRevealBucket(reveal.playerId);
+  const key = reveal.card.instanceId || reveal.id;
+  // A known card can move between the library and hand. Keep only one current record.
+  for (const [recordKey, record] of Object.entries(bucket.hand || {})) {
+    if (recordKey === key || record?.id === reveal.id || record?.card?.instanceId === reveal.card.instanceId) delete bucket.hand[recordKey];
+  }
+  for (const [recordKey, record] of Object.entries(bucket.library || {})) {
+    if (recordKey === key || record?.id === reveal.id || record?.card?.instanceId === reveal.card.instanceId) delete bucket.library[recordKey];
+  }
+  if (reveal.zone === 'hand') bucket.hand[key] = deepClone(reveal);
+  if (reveal.zone === 'library') bucket.library[key] = deepClone(reveal);
+  if (notify) {
+    ui.publicRevealNotice = deepClone(reveal);
+    toast(`${getState().players?.[reveal.playerId]?.name || reveal.playerId} revealed ${reveal.card.name}.`);
+  }
+}
+
+function clearPublicReveal(revealId, playerId = null) {
+  multiplayer.publicReveals ||= emptyPublicRevealState();
+  for (const id of playerId ? [playerId] : Object.keys(multiplayer.publicReveals)) {
+    const bucket = ensureRevealBucket(id);
+    for (const collection of [bucket.hand, bucket.library]) {
+      for (const [key, reveal] of Object.entries(collection || {})) {
+        if (key === revealId || reveal?.id === revealId || reveal?.card?.instanceId === revealId) delete collection[key];
+      }
+    }
+  }
+  if (ui.publicRevealNotice && [ui.publicRevealNotice.id, ui.publicRevealNotice.card?.instanceId].includes(revealId)) ui.publicRevealNotice = null;
+  if (ui.knownRevealSelected?.cardId === revealId) ui.knownRevealSelected = null;
+}
+
+function findPublishedReveal(playerId, cardId) {
+  const bucket = ensureRevealBucket(playerId);
+  return [...Object.values(bucket.hand || {}), ...Object.values(bucket.library || {})]
+    .find((reveal) => reveal?.card?.instanceId === cardId || reveal?.id === cardId) || null;
+}
+
+function publishPublicReveal(card, playerId, zone, options = {}) {
+  if (!card || !playerId || !['hand', 'library'].includes(zone)) return;
+  const existing = findPublishedReveal(playerId, card.instanceId);
+  const reveal = {
+    id: existing?.id || uid('network-reveal'),
+    playerId,
+    zone,
+    position: zone === 'library' ? (options.position || existing?.position || 'revealed') : null,
+    turn: getState().turnNumber,
+    card: revealNetworkSnapshot(card),
+  };
+  applyPublicReveal(reveal, { notify: false });
+  if (options.notifyLocal) ui.publicRevealNotice = deepClone(reveal);
+  if (isMultiplayerConnected()) sendNetwork({ type: 'public-reveal', reveal });
+  return reveal;
+}
+
+function localZoneForPublishedCard(playerId, cardId) {
+  const player = getState().players?.[playerId];
+  if (!player || !cardId) return null;
+  if (player.zones.hand.some((card) => card.instanceId === cardId)) return 'hand';
+  if (player.zones.library.some((card) => card.instanceId === cardId)) return 'library';
+  return null;
+}
+
+function reconcileLocalPublicReveals() {
+  if (!isOnlineMultiplayer() || !multiplayer.localPlayerId) return;
+  const playerId = multiplayer.localPlayerId;
+  const bucket = ensureRevealBucket(playerId);
+  const records = [...Object.values(bucket.hand || {}), ...Object.values(bucket.library || {})].filter(Boolean);
+  for (const reveal of records) {
+    const actualZone = localZoneForPublishedCard(playerId, reveal.card?.instanceId);
+    if (!actualZone) {
+      clearPublicReveal(reveal.id, playerId);
+      if (isMultiplayerConnected()) sendNetwork({ type: 'public-reveal-clear', revealId: reveal.id, playerId });
+      continue;
+    }
+    if (actualZone !== reveal.zone) {
+      const actualCard = getState().players[playerId].zones[actualZone].find((card) => card.instanceId === reveal.card.instanceId) || reveal.card;
+      publishPublicReveal(actualCard, playerId, actualZone, { position: actualZone === 'library' ? 'revealed' : null });
+    }
+  }
+}
+
+function clearPublishedLibraryReveals(playerId) {
+  const bucket = ensureRevealBucket(playerId);
+  for (const reveal of Object.values(bucket.library || {})) {
+    clearPublicReveal(reveal.id, playerId);
+    if (isMultiplayerConnected() && playerId === multiplayer.localPlayerId) {
+      sendNetwork({ type: 'public-reveal-clear', revealId: reveal.id, playerId });
+    }
+  }
+}
+
+function knownHandRevealCards(state, playerId) {
+  const count = state.players?.[playerId]?.zones?.hand?.length || 0;
+  const bucket = ensureRevealBucket(playerId);
+  const direct = Object.values(bucket.hand || {}).map((entry) => entry.card).filter(Boolean);
+  const remembered = Object.values(state.knowledge?.players?.[playerId]?.knownHand || {}).map((entry) => entry.card).filter(Boolean);
+  const unique = new Map();
+  for (const card of [...direct, ...remembered]) {
+    const key = card.instanceId || card.oracleId || card.scryfallId || card.name;
+    if (key && !unique.has(key)) unique.set(key, card);
+  }
+  return [...unique.values()].slice(0, count);
+}
+
+function knownLibraryRevealRecords(state, playerId) {
+  const bucket = ensureRevealBucket(playerId);
+  const direct = Object.values(bucket.library || {}).filter((entry) => entry?.card);
+  const rememberedTop = state.knowledge?.players?.[playerId]?.knownLibraryTop?.map((entry) => ({
+    id: `memory-top-${entry.card?.instanceId || entry.card?.name}`,
+    playerId,
+    zone: 'library',
+    position: 'top',
+    card: entry.card,
+  })) || [];
+  const unique = new Map();
+  for (const reveal of [...direct, ...rememberedTop]) {
+    const key = reveal.card?.instanceId || reveal.card?.oracleId || reveal.card?.scryfallId || reveal.card?.name;
+    if (key && !unique.has(key)) unique.set(key, reveal);
+  }
+  return [...unique.values()];
+}
+
+function findKnownRevealCard(playerId, cardId) {
+  const bucket = ensureRevealBucket(playerId);
+  const direct = [...Object.values(bucket.hand || {}), ...Object.values(bucket.library || {})]
+    .find((reveal) => reveal?.card?.instanceId === cardId || reveal?.id === cardId);
+  if (direct?.card) return direct;
+  const memory = getState().knowledge?.players?.[playerId];
+  const hand = Object.values(memory?.knownHand || {}).find((entry) => entry?.card?.instanceId === cardId);
+  if (hand?.card) return { id: `memory-hand-${cardId}`, playerId, zone: 'hand', card: hand.card };
+  const library = [...(memory?.knownLibraryTop || []), ...(memory?.knownLibraryBottom || [])]
+    .find((entry) => entry?.card?.instanceId === cardId);
+  if (library?.card) return { id: `memory-library-${cardId}`, playerId, zone: 'library', card: library.card };
+  return null;
+}
+
+function renderPublicRevealCard(card, label = 'Revealed', playerId = null) {
+  const inspect = playerId && card?.instanceId
+    ? ` data-action="inspect-revealed-card" data-player-id="${escapeHtml(playerId)}" data-known-card-id="${escapeHtml(card.instanceId)}" role="button" tabindex="0"`
+    : '';
+  return `<article class="game-card publicly-revealed-card"${inspect} title="${escapeHtml(card.name)} · ${escapeHtml(label)}"><img src="${escapeHtml(publicRevealImage(card))}" alt="${escapeHtml(card.name)}" draggable="false" onerror="this.src='./card-back.svg'" /><span class="public-reveal-badge">${escapeHtml(label)}</span><div class="card-name-strip">${escapeHtml(card.name)}</div></article>`;
+}
+
+function compactNetworkCard(card) {
+  if (!card) return card;
+  return {
+    instanceId: card.instanceId || null,
+    scryfallId: card.scryfallId || null,
+    oracleId: card.oracleId || null,
+    name: card.name || 'Card',
+    manaCost: card.manaCost || '',
+    manaValue: Number(card.manaValue || 0),
+    typeLine: card.typeLine || '',
+    oracleText: card.oracleText || '',
+    producedMana: [...(card.producedMana || [])],
+    power: card.power || '', toughness: card.toughness || '',
+    keywords: [...(card.keywords || [])],
+    manualKeywords: [...(card.manualKeywords || [])],
+    colors: [...(card.colors || [])],
+    colorIdentity: [...(card.colorIdentity || [])],
+    image: card.image || null,
+    imageSmall: card.imageSmall || null,
+    owner: card.owner || null,
+    controller: card.controller || null,
+    tapped: Boolean(card.tapped),
+    summoningSick: Boolean(card.summoningSick),
+    attacking: Boolean(card.attacking),
+    blocking: card.blocking || null,
+    blockedBy: [...(card.blockedBy || [])],
+    faceDown: Boolean(card.faceDown),
+    token: Boolean(card.token),
+    commander: Boolean(card.commander),
+    counters: { ...(card.counters || {}) },
+    notes: card.notes || '',
+    attachedTo: card.attachedTo || null,
+    attachments: [...(card.attachments || [])],
+    damageMarked: Number(card.damageMarked || 0),
+    deathtouchDamaged: Boolean(card.deathtouchDamaged),
+    continuousEffects: deepClone(card.continuousEffects || []),
+    abilityActivationsThisTurn: { ...(card.abilityActivationsThisTurn || {}) },
+    tokenStyle: card.tokenStyle ? { ...card.tokenStyle } : null,
+    tokenFaces: deepClone(card.tokenFaces || []),
+    activeTokenFace: Number(card.activeTokenFace || 0),
+    backImage: card.backImage || null,
+  };
+}
+
+function stateForNetworkFrom(sourceState) {
+  // Private zones are counts only. Public cards are reduced to the fields the
+  // table and coach actually use, keeping messages below browser channel limits.
+  const outgoing = deepClone(sourceState || getState());
+  outgoing.networkSchema = 3;
+  outgoing.selected = null;
+  outgoing.privateZoneCounts = {};
+  outgoing.settings = undefined;
+  outgoing.log = (outgoing.log || []).slice(0, 120);
+  if (outgoing.knowledge?.events) outgoing.knowledge.events = outgoing.knowledge.events.slice(0, 160);
+  for (const playerId of Object.keys(outgoing.players || {})) {
+    const player = outgoing.players[playerId];
+    if (!player) continue;
+    player.zones ||= {};
+    const zones = player.zones;
+    for (const zone of ['hand', 'library', 'battlefield', 'graveyard', 'exile', 'command']) {
+      if (!Array.isArray(zones[zone])) zones[zone] = [];
+    }
+    outgoing.privateZoneCounts[playerId] = {
+      hand: zones.hand.length,
+      library: zones.library.length,
+    };
+    zones.hand = [];
+    zones.library = [];
+    for (const zone of ['battlefield', 'graveyard', 'exile', 'command']) {
+      zones[zone] = (zones[zone] || []).map(compactNetworkCard);
+    }
+  }
+  outgoing.stack = (outgoing.stack || []).map(compactNetworkCard);
+  return outgoing;
+}
+
+function stateForNetwork() {
+  return stateForNetworkFrom(getState());
+}
+
+function networkValueEqual(a, b) {
+  if (Object.is(a, b)) return true;
+  if (a === undefined || b === undefined) return false;
+  try { return JSON.stringify(a) === JSON.stringify(b); }
+  catch { return false; }
+}
+
+function networkArrayKeyField(before = [], after = []) {
+  const beforeValues = before.filter((value) => value && typeof value === 'object' && !Array.isArray(value));
+  const afterValues = after.filter((value) => value && typeof value === 'object' && !Array.isArray(value));
+  const values = [...beforeValues, ...afterValues];
+  if (!values.length) return null;
+  for (const field of ['instanceId', 'id']) {
+    if (!values.every((value) => value[field] !== undefined && value[field] !== null)) continue;
+    const beforeKeys = beforeValues.map((value) => String(value[field]));
+    const afterKeys = afterValues.map((value) => String(value[field]));
+    if (new Set(beforeKeys).size === beforeKeys.length && new Set(afterKeys).size === afterKeys.length) return field;
+  }
+  return null;
+}
+
+function buildNetworkDelta(before, after, path = [], output = []) {
+  if (networkValueEqual(before, after)) return output;
+
+  if (typeof before === 'number' && typeof after === 'number' && Number.isFinite(before) && Number.isFinite(after)) {
+    const amount = after - before;
+    if (amount) output.push({ op: 'inc', path: [...path], amount });
+    return output;
+  }
+
+  if (Array.isArray(before) && Array.isArray(after)) {
+    const keyField = networkArrayKeyField(before, after);
+    if (!keyField) {
+      output.push({ op: 'set', path: [...path], value: deepClone(after) });
+      return output;
+    }
+
+    const beforeMap = new Map(before.map((value) => [String(value[keyField]), value]));
+    const afterMap = new Map(after.map((value) => [String(value[keyField]), value]));
+
+    for (const [key] of beforeMap) {
+      if (!afterMap.has(key)) output.push({ op: 'array-remove', path: [...path], keyField, key });
+    }
+
+    after.forEach((value, index) => {
+      const key = String(value[keyField]);
+      const previous = beforeMap.get(key);
+      if (!previous) {
+        output.push({ op: 'array-add', path: [...path], keyField, key, index, value: deepClone(value) });
+        return;
+      }
+      const nested = buildNetworkDelta(previous, value, [], []);
+      if (nested.length) output.push({ op: 'array-update', path: [...path], keyField, key, delta: nested });
+    });
+    return output;
+  }
+
+  const beforeObject = before && typeof before === 'object' && !Array.isArray(before);
+  const afterObject = after && typeof after === 'object' && !Array.isArray(after);
+  if (beforeObject && afterObject) {
+    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+    for (const key of keys) {
+      if (!(key in after)) output.push({ op: 'delete', path: [...path, key] });
+      else if (!(key in before)) output.push({ op: 'set', path: [...path, key], value: deepClone(after[key]) });
+      else buildNetworkDelta(before[key], after[key], [...path, key], output);
+    }
+    return output;
+  }
+
+  if (after === undefined) output.push({ op: 'delete', path: [...path] });
+  else output.push({ op: 'set', path: [...path], value: deepClone(after) });
+  return output;
+}
+
+function networkPathParent(root, path, { create = true } = {}) {
+  if (!path.length) return { parent: null, key: null };
+  let cursor = root;
+  for (let index = 0; index < path.length - 1; index += 1) {
+    const key = path[index];
+    if (!cursor || typeof cursor !== 'object') return { parent: null, key: null };
+    if (!(key in cursor) || cursor[key] === null || typeof cursor[key] !== 'object') {
+      if (!create) return { parent: null, key: null };
+      cursor[key] = {};
+    }
+    cursor = cursor[key];
+  }
+  return { parent: cursor, key: path[path.length - 1] };
+}
+
+function networkValueAtPath(root, path = []) {
+  let cursor = root;
+  for (const key of path) {
+    if (cursor === null || cursor === undefined) return undefined;
+    cursor = cursor[key];
+  }
+  return cursor;
+}
+
+function applyNetworkDelta(target, operations = []) {
+  for (const operation of operations || []) {
+    const path = Array.isArray(operation.path) ? operation.path : [];
+    if (operation.op === 'set') {
+      if (!path.length) continue;
+      const { parent, key } = networkPathParent(target, path);
+      if (parent) parent[key] = deepClone(operation.value);
+      continue;
+    }
+    if (operation.op === 'delete') {
+      if (!path.length) continue;
+      const { parent, key } = networkPathParent(target, path, { create: false });
+      if (parent && Object.prototype.hasOwnProperty.call(parent, key)) delete parent[key];
+      continue;
+    }
+    if (operation.op === 'inc') {
+      if (!path.length) continue;
+      const { parent, key } = networkPathParent(target, path);
+      if (parent) parent[key] = Number(parent[key] || 0) + Number(operation.amount || 0);
+      continue;
+    }
+    if (operation.op === 'array-add' || operation.op === 'array-remove' || operation.op === 'array-update') {
+      let array = networkValueAtPath(target, path);
+      if (!Array.isArray(array)) {
+        const { parent, key } = networkPathParent(target, path);
+        if (!parent) continue;
+        parent[key] = [];
+        array = parent[key];
+      }
+      const keyField = operation.keyField || 'instanceId';
+      const index = array.findIndex((value) => String(value?.[keyField]) === String(operation.key));
+      if (operation.op === 'array-remove') {
+        if (index >= 0) array.splice(index, 1);
+        continue;
+      }
+      if (operation.op === 'array-add') {
+        if (index >= 0) array[index] = deepClone(operation.value);
+        else array.splice(Math.max(0, Math.min(array.length, Number(operation.index ?? array.length))), 0, deepClone(operation.value));
+        continue;
+      }
+      if (index >= 0) applyNetworkDelta(array[index], operation.delta || []);
+    }
+  }
+  return target;
+}
+
+const NETWORK_DELTA_BLOCKED_ROOTS = new Set(['settings', 'selected', 'networkSchema', 'version', 'createdAt', 'started', 'onlineGameId']);
+
+function sanitizeGuestNetworkDelta(operations = [], actorId) {
+  return (operations || []).filter((operation) => {
+    const path = Array.isArray(operation.path) ? operation.path : [];
+    if (!path.length) return false;
+    const root = path[0];
+    if (NETWORK_DELTA_BLOCKED_ROOTS.has(root)) return false;
+    if (root === 'privateZoneCounts') return path[1] === actorId;
+    if (root === 'players') {
+      const field = path[2];
+      if (field === 'id' || field === 'name' || field === 'colorIdentity') return false;
+      if (field === 'zones' && (path[3] === 'hand' || path[3] === 'library')) return false;
+    }
+    return true;
+  });
+}
+
+function overlayPendingStateActions(authoritativeState) {
+  const overlaid = deepClone(authoritativeState);
+  for (const action of multiplayer.pendingStateActions || []) applyNetworkDelta(overlaid, action.operations || []);
+  return overlaid;
+}
+
+function mergeNetworkState(incoming) {
+  const next = deepClone(incoming);
+  const current = getState();
+  const localId = multiplayer.localPlayerId;
+  const counts = next.privateZoneCounts || {};
+  next.settings = current.settings;
+  for (const playerId of Object.keys(next.players || {})) {
+    const player = next.players[playerId];
+    if (!player) continue;
+    player.zones ||= {};
+    for (const zone of ['hand', 'library', 'battlefield', 'graveyard', 'exile', 'command']) {
+      if (!Array.isArray(player.zones[zone])) player.zones[zone] = [];
+    }
+    const handCount = Number(counts[playerId]?.hand ?? player.zones.hand.length ?? 0);
+    const libraryCount = Number(counts[playerId]?.library ?? player.zones.library.length ?? 0);
+    if (playerId === localId && current.players?.[playerId]?.zones) {
+      player.zones.hand = Array.isArray(current.players[playerId].zones.hand) ? current.players[playerId].zones.hand : [];
+      player.zones.library = Array.isArray(current.players[playerId].zones.library) ? current.players[playerId].zones.library : [];
+    } else {
+      player.zones.hand = hiddenNetworkZone(playerId, 'hand', handCount);
+      player.zones.library = hiddenNetworkZone(playerId, 'library', libraryCount);
+    }
+  }
+  delete next.privateZoneCounts;
+  next.selected = current.selected;
+  return next;
+}
+
+function networkFingerprint() {
+  const state = getState();
+  if (!isOnlineMultiplayer() || !state.started || !state.onlineGameId) return '';
+  return JSON.stringify(stateForNetwork());
+}
+
+function authoritativeTurnPayload(state = getState()) {
+  return {
+    gameId: state.onlineGameId || '',
+    turnNumber: Number(state.turnNumber || 1),
+    phaseIndex: Number(state.phaseIndex || 0),
+    activePlayerId: state.activePlayerId || null,
+    priorityPlayerId: state.priorityPlayerId || state.activePlayerId || null,
+    turnOrder: [...(state.turnOrder || Object.keys(state.players || {}))],
+    revision: Number(multiplayer.revision || 0),
+  };
+}
+
+function broadcastTurnSync(targetPlayerId = null) {
+  if (!isMultiplayerConnected() || multiplayer.role !== 'host') return false;
+  const state = getState();
+  if (!state.started || !state.onlineGameId) return false;
+  return sendNetwork({ type: 'turn-sync', ...authoritativeTurnPayload(state) }, targetPlayerId);
+}
+
+function applyTurnSync(message) {
+  if (!message?.gameId || message.gameId !== getState().onlineGameId) return;
+  multiplayer.applyingRemote = true;
+  try {
+    updateState((draft) => {
+      draft.turnNumber = Number(message.turnNumber || draft.turnNumber || 1);
+      draft.phaseIndex = Math.max(0, Math.min(PHASES.length - 1, Number(message.phaseIndex || 0)));
+      if (message.activePlayerId && draft.players?.[message.activePlayerId] && !draft.players[message.activePlayerId].lost) {
+        draft.activePlayerId = message.activePlayerId;
+      }
+      if (message.priorityPlayerId && draft.players?.[message.priorityPlayerId]) {
+        draft.priorityPlayerId = message.priorityPlayerId;
+      } else {
+        draft.priorityPlayerId = draft.activePlayerId;
+      }
+      if (Array.isArray(message.turnOrder)) {
+        const valid = message.turnOrder.filter((id) => draft.players?.[id]);
+        for (const id of Object.keys(draft.players || {})) if (!valid.includes(id)) valid.push(id);
+        draft.turnOrder = valid;
+      }
+    }, { snapshot: false, save: true });
+    multiplayer.revision = Math.max(multiplayer.revision, Number(message.revision || 0));
+  } finally {
+    multiplayer.applyingRemote = false;
+  }
+}
+
+function ensureTurnHeartbeat() {
+  if (multiplayer.turnHeartbeatTimer) clearInterval(multiplayer.turnHeartbeatTimer);
+  multiplayer.turnHeartbeatTimer = null;
+  if (!isOnlineMultiplayer() || multiplayer.role !== 'host' || !getState().onlineGameId) return;
+  multiplayer.turnHeartbeatTimer = setInterval(() => {
+    if (!isMultiplayerConnected() || multiplayer.role !== 'host') return;
+    const state = getState();
+    if (!state.onlineGameId) return;
+    if (state.startingRoll?.active || state.openingHands?.active) return;
+    broadcastTurnSync();
+  }, 1200);
+}
+
+function requestAuthoritativeNextPhase() {
+  if (!isOnlineMultiplayer()) return handleResult(nextPhase());
+  const state = getState();
+  const localId = multiplayer.localPlayerId;
+  if (!localId) return toast('Your multiplayer seat is not ready yet.', true);
+
+  const activeConnected = multiplayerPlayerConnected(state.activePlayerId);
+  const hostFallback = multiplayer.role === 'host' && !activeConnected;
+  if (state.activePlayerId !== localId && !hostFallback) {
+    return toast(`Waiting for ${state.players?.[state.activePlayerId]?.name || 'the active player'}.`, true);
+  }
+
+  if (multiplayer.role === 'host') {
+    const result = nextPhase();
+    handleResult(result);
+    if (result?.ok) {
+      broadcastAuthoritativeState();
+      broadcastTurnSync();
+    }
+    return;
+  }
+
+  if (multiplayer.pendingTurnActionId) return;
+  const actionId = uid('turn-action');
+  multiplayer.pendingTurnActionId = actionId;
+  const sent = sendNetwork({
+    type: 'game-action',
+    actionId,
+    kind: 'next-phase',
+    actorId: localId,
+    gameId: state.onlineGameId,
+    observedRevision: multiplayer.revision,
+  });
+  if (!sent) {
+    multiplayer.pendingTurnActionId = null;
+    toast('Could not send the turn action to the host.', true);
+  } else {
+    render({ force: true });
+  }
+}
+
+function broadcastAuthoritativeState(metadata = {}) {
+  if (!isMultiplayerConnected() || multiplayer.role !== 'host') return;
+  multiplayer.revision += 1;
+  const state = stateForNetwork();
+  multiplayer.lastNetworkFingerprint = JSON.stringify(state);
+  multiplayer.lastAuthoritativeNetworkState = deepClone(state);
+  multiplayer.lastLocalNetworkState = deepClone(state);
+  sendNetwork({
+    type: 'state',
+    revision: multiplayer.revision,
+    state,
+    ...(metadata.ackActionId ? { ackActionId: metadata.ackActionId, ackActorId: metadata.ackActorId || null } : {}),
+    ...(metadata.rejectedActionId ? { rejectedActionId: metadata.rejectedActionId, ackActorId: metadata.ackActorId || null, message: metadata.message || '' } : {}),
+  });
+  broadcastTurnSync();
+}
+
+function queueGuestStateDelta() {
+  if (multiplayer.role !== 'guest' || !multiplayer.localPlayerId) return;
+  const state = getState();
+  if (!state.started || !state.onlineGameId || state.startingRoll?.active || state.openingHands?.active) return;
+
+  const currentNetwork = stateForNetwork();
+  const baseline = multiplayer.lastLocalNetworkState || multiplayer.lastAuthoritativeNetworkState || currentNetwork;
+  const operations = sanitizeGuestNetworkDelta(buildNetworkDelta(baseline, currentNetwork), multiplayer.localPlayerId);
+  multiplayer.lastLocalNetworkState = deepClone(currentNetwork);
+  if (!operations.length) return;
+
+  const action = {
+    actionId: uid('state-action'),
+    actorId: multiplayer.localPlayerId,
+    gameId: state.onlineGameId,
+    operations,
+    attempts: 0,
+  };
+  multiplayer.pendingStateActions.push(action);
+  sendGuestStateDelta(action);
+}
+
+function sendGuestStateDelta(action) {
+  if (!action || multiplayer.role !== 'guest') return false;
+  action.attempts = Number(action.attempts || 0) + 1;
+  const sent = sendNetwork({
+    type: 'state-delta',
+    actionId: action.actionId,
+    actorId: action.actorId,
+    gameId: action.gameId,
+    operations: action.operations,
+  });
+  if (sent) return true;
+
+  if (action.attempts < 12) {
+    if (multiplayer.stateDeltaRetryTimer) clearTimeout(multiplayer.stateDeltaRetryTimer);
+    multiplayer.stateDeltaRetryTimer = setTimeout(() => {
+      multiplayer.stateDeltaRetryTimer = null;
+      if ((multiplayer.pendingStateActions || []).some((entry) => entry.actionId === action.actionId)) sendGuestStateDelta(action);
+    }, Math.min(1600, 180 + action.attempts * 120));
+  } else {
+    toast('That action is waiting for the host connection. Forge will resync when the connection recovers.', true);
+  }
+  return false;
+}
+
+function applyAuthoritativeNetworkState(incoming, revision = multiplayer.revision, metadata = {}) {
+  if (!incoming) return;
+  multiplayer.applyingRemote = true;
+  try {
+    if (multiplayer.role === 'guest') {
+      const ackActionId = metadata.ackActionId || null;
+      const rejectedActionId = metadata.rejectedActionId || null;
+      if (ackActionId) {
+        const index = multiplayer.pendingStateActions.findIndex((entry) => entry.actionId === ackActionId);
+        if (index >= 0) multiplayer.pendingStateActions.splice(0, index + 1);
+      }
+      if (rejectedActionId) {
+        multiplayer.pendingStateActions = multiplayer.pendingStateActions.filter((entry) => entry.actionId !== rejectedActionId);
+        toast(metadata.message || 'The host rejected one multiplayer action and restored the authoritative table.', true);
+      }
+      multiplayer.lastAuthoritativeNetworkState = deepClone(incoming);
+      const visibleState = overlayPendingStateActions(incoming);
+      const merged = mergeNetworkState(visibleState);
+      setState(merged, { save: true });
+      multiplayer.lastLocalNetworkState = stateForNetwork();
+    } else {
+      const merged = mergeNetworkState(incoming);
+      setState(merged, { save: true });
+      multiplayer.lastAuthoritativeNetworkState = deepClone(incoming);
+      multiplayer.lastLocalNetworkState = stateForNetwork();
+    }
+    multiplayer.revision = Math.max(multiplayer.revision, Number(revision || 0));
+    multiplayer.lastNetworkFingerprint = JSON.stringify(stateForNetwork());
+  } finally {
+    multiplayer.applyingRemote = false;
+  }
+}
+
+function applyGuestStateDelta(message, senderPlayerId) {
+  if (multiplayer.role !== 'host') return;
+  const state = getState();
+  if (!state.onlineGameId || message.gameId !== state.onlineGameId) return;
+  const actorId = senderPlayerId || message.actorId;
+  if (!actorId || actorId !== message.actorId || !state.players?.[actorId]) return;
+  const actionId = String(message.actionId || '');
+  if (!actionId) return;
+
+  if (multiplayer.processedStateActionIds[actionId]) {
+    sendNetwork({
+      type: 'state',
+      revision: multiplayer.revision,
+      state: stateForNetwork(),
+      ackActionId: actionId,
+      ackActorId: actorId,
+    });
+    return;
+  }
+
+  const operations = sanitizeGuestNetworkDelta(message.operations || [], actorId);
+  if (!operations.length) {
+    sendNetwork({
+      type: 'state',
+      revision: multiplayer.revision,
+      state: stateForNetwork(),
+      rejectedActionId: actionId,
+      ackActorId: actorId,
+      message: 'The requested multiplayer action did not contain an allowed game-state change.',
+    }, actorId);
+    return;
+  }
+
+  const authoritativeNetwork = stateForNetwork();
+  applyNetworkDelta(authoritativeNetwork, operations);
+
+  multiplayer.applyingRemote = true;
+  multiplayer.suppressSync = true;
+  try {
+    // Remote actions belong in the host's authoritative undo history too.
+    pushHistory();
+    const merged = mergeNetworkState(authoritativeNetwork);
+    setState(merged, { save: true });
+  } finally {
+    multiplayer.suppressSync = false;
+    multiplayer.applyingRemote = false;
+  }
+
+  multiplayer.processedStateActionIds[actionId] = Date.now();
+  const processedIds = Object.keys(multiplayer.processedStateActionIds);
+  if (processedIds.length > 300) {
+    processedIds.sort((a, b) => Number(multiplayer.processedStateActionIds[a] || 0) - Number(multiplayer.processedStateActionIds[b] || 0));
+    processedIds.slice(0, processedIds.length - 240).forEach((id) => delete multiplayer.processedStateActionIds[id]);
+  }
+
+  multiplayer.revision += 1;
+  const outgoing = stateForNetwork();
+  multiplayer.lastAuthoritativeNetworkState = deepClone(outgoing);
+  multiplayer.lastLocalNetworkState = deepClone(outgoing);
+  multiplayer.lastNetworkFingerprint = JSON.stringify(outgoing);
+  sendNetwork({
+    type: 'state',
+    revision: multiplayer.revision,
+    state: outgoing,
+    ackActionId: actionId,
+    ackActorId: actorId,
+  });
+  broadcastTurnSync();
+}
+
+function multiplayerStateChanged() {
+  reconcileLocalPublicReveals();
+  const currentState = getState();
+  if (!isMultiplayerConnected() || !currentState.started || !currentState.onlineGameId || multiplayer.applyingRemote || multiplayer.suppressSync) return;
+  // Pregame already has dedicated D20/mulligan messages. Do not create a
+  // second competing state channel for those private decisions.
+  if (currentState.startingRoll?.active || currentState.openingHands?.active) return;
+
+  if (multiplayer.role === 'guest') {
+    // Capture within the same browser task, before any network message can be
+    // delivered, while coalescing multiple synchronous state writes from one
+    // UI action into one authoritative mutation delta.
+    if (!multiplayer.guestDeltaScheduled) {
+      multiplayer.guestDeltaScheduled = true;
+      queueMicrotask(() => {
+        multiplayer.guestDeltaScheduled = false;
+        if (!multiplayer.applyingRemote && !multiplayer.suppressSync) queueGuestStateDelta();
+      });
+    }
+    return;
+  }
+
+  clearTimeout(multiplayer.syncTimer);
+  multiplayer.syncTimer = setTimeout(() => {
+    const state = stateForNetwork();
+    const fingerprint = JSON.stringify(state);
+    if (fingerprint === multiplayer.lastNetworkFingerprint) return;
+    multiplayer.lastNetworkFingerprint = fingerprint;
+    multiplayer.lastAuthoritativeNetworkState = deepClone(state);
+    multiplayer.lastLocalNetworkState = deepClone(state);
+    multiplayer.revision += 1;
+    sendNetwork({ type: 'state', revision: multiplayer.revision, state });
+    broadcastTurnSync();
+  }, 45);
+}
+
+function applyNetworkState(incoming, revision = multiplayer.revision, metadata = {}) {
+  applyAuthoritativeNetworkState(incoming, revision, metadata);
+}
+
+function clearOnlineStartRetry() {
+  if (multiplayer.startRetryTimer) clearTimeout(multiplayer.startRetryTimer);
+  multiplayer.startRetryTimer = null;
+}
+
+function closePeerObjects() {
+  clearOnlineStartRetry();
+  if (multiplayer.seatAssignmentTimer) clearTimeout(multiplayer.seatAssignmentTimer);
+  multiplayer.seatAssignmentTimer = null;
+  multiplayer.seatAssignmentAttempts = 0;
+  if (multiplayer.guestConnectTimer) clearTimeout(multiplayer.guestConnectTimer);
+  multiplayer.guestConnectTimer = null;
+  multiplayer.guestConnectAttempts = 0;
+  multiplayer.guestConnecting = false;
+  multiplayer.pendingTurnActionId = null;
+  multiplayer.pendingStateActions = [];
+  multiplayer.lastAuthoritativeNetworkState = null;
+  multiplayer.lastLocalNetworkState = null;
+  multiplayer.processedStateActionIds = Object.create(null);
+  if (multiplayer.stateDeltaRetryTimer) clearTimeout(multiplayer.stateDeltaRetryTimer);
+  multiplayer.stateDeltaRetryTimer = null;
+  multiplayer.guestDeltaScheduled = false;
+  if (multiplayer.turnHeartbeatTimer) clearInterval(multiplayer.turnHeartbeatTimer);
+  multiplayer.turnHeartbeatTimer = null;
+  try { multiplayer.connection?.close(); } catch {}
+  for (const connection of Object.values(multiplayer.connections || {})) {
+    try { connection?.close(); } catch {}
+  }
+  try { multiplayer.peer?.destroy(); } catch {}
+  multiplayer.connection = null;
+  multiplayer.connections = Object.create(null);
+  multiplayer.connectionPlayerIds = Object.create(null);
+  multiplayer.peer = null;
+}
+
+function resetMultiplayerLobbyState() {
+  multiplayer.remoteDraft = null;
+  multiplayer.remoteDrafts = Object.create(null);
+  multiplayer.readyByPlayer = { p1: false };
+  multiplayer.connectedPlayerIds = ['p1'];
+  multiplayer.startAcknowledgedBy = Object.create(null);
+  multiplayer.revision = 0;
+  multiplayer.lastNetworkFingerprint = '';
+  multiplayer.lastAuthoritativeNetworkState = null;
+  multiplayer.lastLocalNetworkState = null;
+  multiplayer.pendingStateActions = [];
+  multiplayer.processedStateActionIds = Object.create(null);
+  if (multiplayer.stateDeltaRetryTimer) clearTimeout(multiplayer.stateDeltaRetryTimer);
+  multiplayer.stateDeltaRetryTimer = null;
+  multiplayer.guestDeltaScheduled = false;
+  multiplayer.startGameId = '';
+  multiplayer.startStartedAt = '';
+  multiplayer.startAcknowledged = false;
+  multiplayer.startRetryCount = 0;
+  multiplayer.pendingStartMessage = null;
+  if (multiplayer.seatAssignmentTimer) clearTimeout(multiplayer.seatAssignmentTimer);
+  multiplayer.seatAssignmentTimer = null;
+  multiplayer.seatAssignmentAttempts = 0;
+  if (multiplayer.guestConnectTimer) clearTimeout(multiplayer.guestConnectTimer);
+  multiplayer.guestConnectTimer = null;
+  multiplayer.guestConnectAttempts = 0;
+  multiplayer.guestConnecting = false;
+  multiplayer.publicReveals = emptyPublicRevealState();
+  multiplayer.undoRequestId = '';
+  multiplayer.overrideRequestId = '';
+}
+
+function disconnectMultiplayer({ keepMode = false } = {}) {
+  closePeerObjects();
+  multiplayer.status = 'offline';
+  multiplayer.role = null;
+  multiplayer.localPlayerId = null;
+  multiplayer.remotePlayerId = null;
+  multiplayer.roomCode = '';
+  resetMultiplayerLobbyState();
+  ui.undoRequest = null;
+  ui.overrideRequest = null;
+  multiplayer.approvalSession = null;
+  ui.publicRevealNotice = null;
+  ui.attackTargetPicker = null;
+  if (!keepMode) multiplayer.mode = 'solo';
+  render();
+}
+
+function nextAvailableGuestSeat() {
+  return multiplayerSeatIds().slice(1).find((id) => !multiplayer.connections?.[id]) || null;
+}
+
+function sendSeatAssignment(playerId) {
+  if (multiplayer.role !== 'host' || !playerId) return false;
+  const connection = multiplayer.connections?.[playerId];
+  if (!connection?.open) return false;
+  try {
+    connection.send({
+      version: MULTIPLAYER_APP_VERSION,
+      type: 'seat-assigned',
+      playerId,
+      playerCount: multiplayer.playerCount,
+      roomCode: multiplayer.roomCode,
+      lobby: multiplayerLobbySnapshot(),
+    });
+    return true;
+  } catch (error) {
+    multiplayer.lastError = error?.message || `Could not assign Player ${String(playerId).replace(/^p/, '')}.`;
+    return false;
+  }
+}
+
+function requestGuestSeatAssignment({ immediate = false } = {}) {
+  if (multiplayer.role !== 'guest' || multiplayer.localPlayerId) return;
+  if (!multiplayer.connection?.open) return;
+
+  if (multiplayer.seatAssignmentTimer) clearTimeout(multiplayer.seatAssignmentTimer);
+  multiplayer.seatAssignmentAttempts = Math.max(0, Number(multiplayer.seatAssignmentAttempts || 0));
+
+  const request = () => {
+    if (multiplayer.role !== 'guest' || multiplayer.localPlayerId || !multiplayer.connection?.open) {
+      multiplayer.seatAssignmentTimer = null;
+      return;
+    }
+
+    multiplayer.seatAssignmentAttempts += 1;
+    try {
+      multiplayer.connection.send({
+        version: MULTIPLAYER_APP_VERSION,
+        type: 'seat-request',
+        attempt: multiplayer.seatAssignmentAttempts,
+      });
+    } catch {}
+
+    // Keep retrying because PeerJS can deliver the connection before the host's
+    // `open` callback listener is attached. A lost first assignment should not
+    // leave the guest stuck forever.
+    const delay = multiplayer.seatAssignmentAttempts < 5 ? 450 : 900;
+    multiplayer.seatAssignmentTimer = setTimeout(request, delay);
+  };
+
+  if (immediate) request();
+  else multiplayer.seatAssignmentTimer = setTimeout(request, 120);
+}
+
+function attachHostGuestConnection(connection) {
+  if (multiplayer.role !== 'host') {
+    try { connection.close(); } catch {}
+    return;
+  }
+
+  const playerId = nextAvailableGuestSeat();
+  if (!playerId) {
+    const rejectRoomFull = () => {
+      try { connection.send({ version: MULTIPLAYER_APP_VERSION, type: 'room-full' }); } catch {}
+      setTimeout(() => { try { connection.close(); } catch {} }, 100);
+    };
+    connection.on('open', rejectRoomFull);
+    // Incoming PeerJS DataConnections can already be open by the time the
+    // host receives the `connection` event.
+    if (connection.open) queueMicrotask(rejectRoomFull);
+    return;
+  }
+
+  multiplayer.connections[playerId] = connection;
+  multiplayer.connectionPlayerIds[connection.peer || playerId] = playerId;
+  ensureDraftForPlayer(playerId);
+  multiplayer.readyByPlayer[playerId] = false;
+
+  let hostOpened = false;
+  const onHostConnectionOpen = () => {
+    if (hostOpened || !connection.open) return;
+    hostOpened = true;
+    multiplayer.status = 'connected';
+    multiplayer.lastError = '';
+    multiplayer.connectedPlayerIds = [
+      'p1',
+      ...Object.keys(multiplayer.connections).filter((id) => multiplayer.connections[id]?.open),
+    ];
+
+    sendSeatAssignment(playerId);
+    broadcastLobbyState();
+    render();
+    toast(`Player ${String(playerId).replace(/^p/, '')} connected.`);
+  };
+
+  connection.on('open', safeNetworkCallback('Host accepted guest', onHostConnectionOpen));
+  // Critical hotfix: if PeerJS emitted open before we installed the callback,
+  // assign the seat immediately instead of waiting forever.
+  if (connection.open) queueMicrotask(onHostConnectionOpen);
+
+  connection.on('data', safeNetworkCallback('Host received multiplayer data', (message) => handleNetworkMessage(message, playerId)));
+
+  connection.on('close', () => {
+    delete multiplayer.connections[playerId];
+    delete multiplayer.remoteDrafts[playerId];
+    delete multiplayer.readyByPlayer[playerId];
+    for (const [peerId, assignedId] of Object.entries(multiplayer.connectionPlayerIds || {})) {
+      if (assignedId === playerId) delete multiplayer.connectionPlayerIds[peerId];
+    }
+    multiplayer.connectedPlayerIds = [
+      'p1',
+      ...Object.keys(multiplayer.connections).filter((id) => multiplayer.connections[id]?.open),
+    ];
+    multiplayer.status = multiplayerConnectionList().length ? 'connected' : 'waiting';
+    reconcileApprovalAfterDisconnect(playerId);
+    broadcastLobbyState();
+    render();
+    toast(`Player ${String(playerId).replace(/^p/, '')} disconnected.`, true);
+  });
+
+  connection.on('error', (error) => {
+    multiplayer.lastError = error?.message || `Player ${String(playerId).replace(/^p/, '')} connection error.`;
+    render();
+  });
+}
+
+function guestHostPeerUnavailable(error) {
+  const type = String(error?.type || '').toLocaleLowerCase();
+  const message = String(error?.message || error || '').toLocaleLowerCase();
+  return type === 'peer-unavailable'
+    || message.includes('could not connect to peer')
+    || message.includes('peer unavailable')
+    || message.includes('peer-unavailable');
+}
+
+function scheduleGuestHostReconnect(reason = '') {
+  if (multiplayer.role !== 'guest' || multiplayer.localPlayerId) return;
+  if (!multiplayer.peer?.open) return;
+
+  if (multiplayer.guestConnectTimer) clearTimeout(multiplayer.guestConnectTimer);
+  multiplayer.guestConnecting = false;
+  multiplayer.guestConnectAttempts = Math.max(0, Number(multiplayer.guestConnectAttempts || 0)) + 1;
+
+  const attempt = multiplayer.guestConnectAttempts;
+  const delay = Math.min(1800, attempt <= 2 ? 350 : 650 + attempt * 90);
+  multiplayer.status = 'connecting';
+  multiplayer.lastError = attempt <= 2
+    ? 'Host room is not reachable yet. Retrying automatically…'
+    : `Still trying to reach the host… retry ${attempt}.`;
+  render();
+
+  multiplayer.guestConnectTimer = setTimeout(() => {
+    multiplayer.guestConnectTimer = null;
+    if (multiplayer.guestConnectAttempts > 0 && multiplayer.guestConnectAttempts % 4 === 0) {
+      try { multiplayer.connection?.close(); } catch {}
+      try { multiplayer.peer?.destroy(); } catch {}
+      multiplayer.connection = null;
+      multiplayer.peer = null;
+      multiplayer.guestConnecting = false;
+      createGuestPeerAndConnect();
+      return;
+    }
+    connectGuestToHost();
+  }, delay);
+}
+
+function connectGuestToHost({ immediate = false } = {}) {
+  if (multiplayer.role !== 'guest' || multiplayer.localPlayerId) return;
+  if (!multiplayer.peer?.open) return;
+  if (multiplayer.connection?.open || multiplayer.guestConnecting) return;
+
+  if (multiplayer.guestConnectTimer) clearTimeout(multiplayer.guestConnectTimer);
+  multiplayer.guestConnectTimer = null;
+  multiplayer.guestConnecting = true;
+  multiplayer.status = 'connecting';
+
+  try { multiplayer.connection?.close(); } catch {}
+  multiplayer.connection = null;
+
+  let connection = null;
+  try {
+    connection = multiplayer.peer.connect(multiplayerPeerId(multiplayer.roomCode), {
+      reliable: true,
+      serialization: 'json',
+      metadata: {
+        app: 'commander-forge',
+        version: MULTIPLAYER_APP_VERSION,
+        role: 'guest',
+        attempt: Number(multiplayer.guestConnectAttempts || 0) + 1,
+      },
+    });
+  } catch (error) {
+    multiplayer.guestConnecting = false;
+    multiplayer.lastError = `Could not start the host connection: ${error?.message || error}`;
+    scheduleGuestHostReconnect(multiplayer.lastError);
+    return;
+  }
+
+  if (!connection) {
+    multiplayer.guestConnecting = false;
+    multiplayer.lastError = 'PeerJS did not create a host connection. Retrying…';
+    scheduleGuestHostReconnect(multiplayer.lastError);
+    return;
+  }
+
+  attachGuestConnection(connection);
+  render();
+}
+
+function attachGuestConnection(connection) {
+  multiplayer.connection = connection;
+
+  let opened = false;
+  let retryScheduled = false;
+
+  const retryInitialConnection = (reason = '') => {
+    if (retryScheduled) return;
+    retryScheduled = true;
+    multiplayer.guestConnecting = false;
+
+    if (multiplayer.role === 'guest' && !multiplayer.localPlayerId) {
+      scheduleGuestHostReconnect(reason);
+      return;
+    }
+
+    multiplayer.status = 'disconnected';
+    multiplayer.lastError = reason || 'Multiplayer connection closed.';
+    render();
+  };
+
+  const onGuestConnectionOpen = () => {
+    if (opened || !connection.open) return;
+    opened = true;
+    multiplayer.guestConnecting = false;
+    multiplayer.guestConnectAttempts = 0;
+    if (multiplayer.guestConnectTimer) clearTimeout(multiplayer.guestConnectTimer);
+    multiplayer.guestConnectTimer = null;
+    multiplayer.status = 'connected';
+    multiplayer.lastError = '';
+    multiplayer.seatAssignmentAttempts = 0;
+
+    try {
+      connection.send({
+        version: MULTIPLAYER_APP_VERSION,
+        type: 'hello',
+        role: 'guest',
+      });
+    } catch {}
+
+    requestGuestSeatAssignment({ immediate: true });
+    render();
+  };
+
+  connection.on('open', safeNetworkCallback('Guest connection opened', onGuestConnectionOpen));
+  if (connection.open) queueMicrotask(onGuestConnectionOpen);
+
+  connection.on('data', safeNetworkCallback('Guest received multiplayer data', (message) => handleNetworkMessage(message, 'p1')));
+
+  connection.on('close', () => {
+    if (multiplayer.seatAssignmentTimer) clearTimeout(multiplayer.seatAssignmentTimer);
+    multiplayer.seatAssignmentTimer = null;
+
+    if (!opened && multiplayer.role === 'guest' && !multiplayer.localPlayerId) {
+      retryInitialConnection('The host connection closed before it opened.');
+      return;
+    }
+
+    multiplayer.guestConnecting = false;
+    multiplayer.status = 'disconnected';
+    render();
+    toast('Multiplayer connection closed.', true);
+  });
+
+  connection.on('error', (error) => {
+    multiplayer.guestConnecting = false;
+    if (!multiplayer.localPlayerId && guestHostPeerUnavailable(error)) {
+      retryInitialConnection(error?.message || 'Host peer is not reachable yet.');
+      return;
+    }
+    multiplayer.status = 'error';
+    multiplayer.lastError = error?.message || 'Connection error';
+    render();
+  });
+}
+
+function createOnlineHost(playerCountValue = null) {
+  if (!globalThis.Peer) return toast('The multiplayer connection library did not load. Refresh and try again.', true);
+  const requested = Number(playerCountValue || document.querySelector('#online-player-count')?.value || multiplayer.playerCount || 4);
+  const playerCount = Math.max(2, Math.min(6, Math.floor(requested)));
+  disconnectMultiplayer({ keepMode: true });
+  multiplayer.mode = 'online';
+  multiplayer.role = 'host';
+  multiplayer.playerCount = playerCount;
+  multiplayer.localPlayerId = 'p1';
+  multiplayer.remotePlayerId = 'p2';
+  multiplayer.roomCode = generateInviteCode();
+  multiplayer.status = 'connecting';
+  resetMultiplayerLobbyState();
+  multiplayer.readyByPlayer.p1 = false;
+  ensureMultiplayerSeatUi();
+  const createPeer = () => {
+    multiplayer.peer = new Peer(multiplayerPeerId(multiplayer.roomCode), PEERJS_OPTIONS);
+    multiplayer.peer.on('open', safeNetworkCallback('Host room opened', () => { multiplayer.status = 'waiting'; multiplayer.lastError = ''; broadcastLobbyState(); render(); }));
+    multiplayer.peer.on('connection', safeNetworkCallback('Guest connection', attachHostGuestConnection));
+    multiplayer.peer.on('disconnected', safeNetworkCallback('Host signaling disconnected', () => {
+      multiplayer.status = 'error';
+      multiplayer.lastError = 'Host lost the PeerJS signaling connection. Recreate the room.';
+      render();
+    }));
+    multiplayer.peer.on('error', safeNetworkCallback('Host PeerJS error', (error) => {
+      if (error?.type === 'unavailable-id') {
+        try { multiplayer.peer.destroy(); } catch {}
+        multiplayer.roomCode = generateInviteCode();
+        createPeer();
+        return;
+      }
+      multiplayer.status = 'error';
+      multiplayer.lastError = `${error?.type || 'peer-error'}: ${error?.message || 'Could not create the room.'}`;
+      render();
+    }));
+  };
+  createPeer();
+  render();
+}
+
+function createGuestPeerAndConnect() {
+  if (multiplayer.role !== 'guest' || multiplayer.localPlayerId) return;
+  try {
+    multiplayer.peer = new Peer(PEERJS_OPTIONS);
+  } catch (error) {
+    multiplayer.status = 'error';
+    multiplayer.lastError = `Could not initialize multiplayer: ${error?.message || error}`;
+    render();
+    return;
+  }
+
+  multiplayer.peer.on('open', safeNetworkCallback('Guest signaling connected', () => {
+    multiplayer.lastError = 'Looking for the host room…';
+    connectGuestToHost({ immediate: true });
+  }));
+
+  multiplayer.peer.on('disconnected', safeNetworkCallback('Guest signaling disconnected', () => {
+    if (multiplayer.role !== 'guest' || multiplayer.localPlayerId) return;
+    multiplayer.guestConnecting = false;
+    scheduleGuestHostReconnect('Signaling disconnected. Reconnecting…');
+  }));
+
+  multiplayer.peer.on('error', safeNetworkCallback('Guest PeerJS error', (error) => {
+    if (multiplayer.role === 'guest' && !multiplayer.localPlayerId && guestHostPeerUnavailable(error)) {
+      multiplayer.guestConnecting = false;
+      scheduleGuestHostReconnect(error?.message || 'Host room is not reachable yet.');
+      return;
+    }
+    multiplayer.status = 'error';
+    multiplayer.lastError = `${error?.type || 'peer-error'}: ${error?.message || 'Could not join that room.'}`;
+    render();
+  }));
+}
+
+function joinOnlineHost(codeValue) {
+  const code = normalizeInviteCode(codeValue);
+  if (code.length < 6) return toast('Enter the host invite code.', true);
+  if (!globalThis.Peer) return toast('The multiplayer connection library did not load. Refresh and try again.', true);
+
+  disconnectMultiplayer({ keepMode: true });
+  multiplayer.mode = 'online';
+  multiplayer.role = 'guest';
+  multiplayer.localPlayerId = null;
+  multiplayer.remotePlayerId = 'p1';
+  multiplayer.roomCode = code;
+  multiplayer.status = 'connecting';
+  multiplayer.connectedPlayerIds = [];
+  multiplayer.guestConnectAttempts = 0;
+  multiplayer.guestConnecting = false;
+
+  createGuestPeerAndConnect();
+
+  render();
+}
+
+function commanderCardsFromPublicDraft(publicDraft, playerId) {
+  return (publicDraft?.commanders || []).map((card, index) => publicCommanderCard(card, playerId, index)).filter(Boolean);
+}
+
+function normalizeLocalCommanderIds(player, playerId) {
+  const oldCounts = player.commanderCastCount || {};
+  const nextCounts = {};
+  player.zones.command.forEach((card, index) => {
+    const oldId = card.instanceId;
+    card.instanceId = stableCommanderInstanceId(playerId, card.name, index);
+    nextCounts[card.instanceId] = Number(oldCounts[oldId] || 0);
+  });
+  player.commanderCastCount = nextCounts;
+}
+
+function buildRemotePlayerShell(player, publicDraft, playerId) {
+  player.name = publicDraft?.name || `Player ${String(playerId).replace(/^p/, '')}`;
+  player.colorIdentity = [...(publicDraft?.colorIdentity || [])];
+  player.zones.command = commanderCardsFromPublicDraft(publicDraft, playerId);
+  player.commanderCastCount = Object.fromEntries(player.zones.command.map((card) => [card.instanceId, 0]));
+  const total = Math.max(100, Number(publicDraft?.total || 100));
+  const handCount = 7;
+  player.zones.hand = hiddenNetworkZone(playerId, 'hand', handCount);
+  player.zones.library = hiddenNetworkZone(playerId, 'library', Math.max(0, total - player.zones.command.length - handCount));
+  player.zones.battlefield = [];
+  player.zones.graveyard = [];
+  player.zones.exile = [];
+}
+
+function buildLocalOnlinePlayer(player, draft, playerId) {
+  player.name = draft.name.trim() || player.name;
+  buildPlayerDeck(player, draft, draft.commanders);
+  normalizeLocalCommanderIds(player, playerId);
+}
+
+function createOnlineInitialState(localPlayerId, localDraft, publicDrafts = {}, startMeta = {}) {
+  const next = createInitialState();
+  next.settings.autoDraw = true;
+  next.settings.hideOpponentHand = true;
+  const seatIds = (Array.isArray(startMeta.playerOrder) && startMeta.playerOrder.length ? startMeta.playerOrder : (Object.keys(publicDrafts).length ? Object.keys(publicDrafts) : multiplayerSeatIds())).filter(Boolean);
+  next.players = Object.fromEntries(seatIds.map((id) => [id, createPlayer(id, publicDrafts[id]?.name || `Player ${String(id).replace(/^p/, '')}`)]));
+  for (const playerId of seatIds) {
+    if (playerId === localPlayerId) {
+      const draft = localDraft || ensureDraftForPlayer(playerId);
+      buildLocalOnlinePlayer(next.players[playerId], draft, playerId);
+      drawCards(next, playerId, 7);
+    } else {
+      buildRemotePlayerShell(next.players[playerId], publicDrafts[playerId], playerId);
+    }
+  }
+  next.turnOrder = [...seatIds];
+  next.activePlayerId = seatIds[0] || 'p1';
+  next.priorityPlayerId = next.activePlayerId;
+  next.started = true;
+  next.openingHands = {
+    active: false,
+    kept: Object.fromEntries(seatIds.map((id) => [id, false])),
+    bottomRequired: Object.fromEntries(seatIds.map((id) => [id, 0])),
+  };
+  next.startingRoll = {
+    active: true,
+    round: 1,
+    requiredPlayerIds: [...seatIds],
+    results: {},
+    winnerId: null,
+    message: 'Throw the D20. Highest roll goes first automatically.',
+  };
+  next.createdAt = startMeta.startedAt || next.createdAt;
+  next.onlineGameId = startMeta.gameId || '';
+  next.log.unshift({ id: startMeta.gameId ? `online-start-${startMeta.gameId}` : uid('log'), time: startMeta.startedAt || new Date().toISOString(), text: `${seatIds.length}-player online Commander game created. Roll the D20 to determine the first player.` });
+  return next;
+}
+
+function onlinePublicDrafts() {
+  const drafts = {};
+  for (const playerId of multiplayerSeatIds()) {
+    if (playerId === 'p1') drafts[playerId] = serializePublicDraft('p1');
+    else if (multiplayer.remoteDrafts[playerId]) drafts[playerId] = deepClone(multiplayer.remoteDrafts[playerId]);
+  }
+  return drafts;
+}
+
+function onlineStartMessage() {
+  return {
+    type: 'start-game',
+    gameId: multiplayer.startGameId,
+    startedAt: multiplayer.startStartedAt,
+    revision: multiplayer.revision,
+    playerCount: multiplayer.playerCount,
+    playerOrder: multiplayerSeatIds(),
+    publicDrafts: onlinePublicDrafts(),
+  };
+}
+
+function allOnlinePlayersReady() {
+  if (multiplayer.role !== 'host') return false;
+  if (!allMultiplayerSeatsConnected()) return false;
+  const drafts = onlinePublicDrafts();
+  return multiplayerSeatIds().every((id) => Boolean(drafts[id]?.deckValid ?? drafts[id]?.ready) && Boolean(multiplayer.readyByPlayer?.[id]));
+}
+
+function transmitOnlineStart() {
+  clearOnlineStartRetry();
+  if (multiplayer.role !== 'host' || !multiplayer.startGameId || !isMultiplayerConnected()) return;
+  const pending = multiplayerSeatIds().slice(1).filter((id) => multiplayer.connections[id]?.open && !multiplayer.startAcknowledgedBy[id]);
+  if (!pending.length) {
+    multiplayer.startAcknowledged = true;
+    return;
+  }
+  const message = onlineStartMessage();
+  pending.forEach((id) => sendNetwork(message, id));
+  multiplayer.startRetryCount += 1;
+  if (multiplayer.startRetryCount >= 20) {
+    multiplayer.lastError = `Waiting for ${pending.map((id) => `Player ${String(id).replace(/^p/, '')}`).join(', ')} to open the game table.`;
+    render();
+    return;
+  }
+  multiplayer.startRetryTimer = setTimeout(transmitOnlineStart, 650);
+}
+
+function startOnlineGame() {
+  multiplayer.publicReveals = emptyPublicRevealState();
+  ui.publicRevealNotice = null;
+  if (multiplayer.role !== 'host') return toast('Only the host can start the online game.', true);
+  if (!allMultiplayerSeatsConnected()) return toast(`Waiting for all ${multiplayer.playerCount} players to connect.`, true);
+  if (!allOnlinePlayersReady()) return toast('Every connected player must load a valid deck and press Ready before the host can start.', true);
+  clearOnlineStartRetry();
+  multiplayer.startGameId = uid('online-game');
+  multiplayer.startStartedAt = new Date().toISOString();
+  multiplayer.startAcknowledged = false;
+  multiplayer.startAcknowledgedBy = Object.create(null);
+  multiplayer.startRetryCount = 0;
+  multiplayer.lastError = '';
+  multiplayer.suppressSync = true;
+  const publicDrafts = onlinePublicDrafts();
+  try {
+    const next = createOnlineInitialState('p1', ui.drafts.p1, publicDrafts, {
+      gameId: multiplayer.startGameId,
+      startedAt: multiplayer.startStartedAt,
+      playerOrder: multiplayerSeatIds(),
+    });
+    setState(next);
+    ensureTurnHeartbeat();
+    ui.setupOpen = false;
+    ui.inspectorOpen = false;
+    ui.drawer = null;
+    ui.mulliganBottomSelections = Object.fromEntries(multiplayerSeatIds().map((id) => [id, new Set()]));
+  } finally { multiplayer.suppressSync = false; }
+  multiplayer.revision = 1;
+  multiplayer.pendingStateActions = [];
+  multiplayer.processedStateActionIds = Object.create(null);
+  multiplayer.lastAuthoritativeNetworkState = stateForNetwork();
+  multiplayer.lastLocalNetworkState = deepClone(multiplayer.lastAuthoritativeNetworkState);
+  multiplayer.lastNetworkFingerprint = JSON.stringify(multiplayer.lastAuthoritativeNetworkState);
+  transmitOnlineStart();
+  render();
+  toast('Game started. Everyone rolls the D20 for first player.');
+}
+
+function receiveOnlineStart(message) {
+  if (multiplayer.role !== 'guest' || !multiplayer.localPlayerId) return;
+  if (message.gameId && getState().started && getState().onlineGameId === message.gameId) {
+    sendNetwork({ type: 'start-ack', gameId: message.gameId, playerId: multiplayer.localPlayerId });
+    return;
+  }
+  const localId = multiplayer.localPlayerId;
+  const localDraft = ensureDraftForPlayer(localId);
+  if (!localDraft.ready || !multiplayer.readyByPlayer[localId]) {
+    multiplayer.pendingStartMessage = deepClone(message);
+    sendNetwork({ type: 'start-pending', gameId: message.gameId || '', playerId: localId });
+    render();
+    toast('The host started. Finish validating your deck and press Ready.', true);
+    return;
+  }
+  multiplayer.publicReveals = emptyPublicRevealState();
+  ui.publicRevealNotice = null;
+  multiplayer.playerCount = Math.max(2, Math.min(6, Number(message.playerCount || multiplayer.playerCount || 4)));
+  for (const [id, draft] of Object.entries(message.publicDrafts || {})) if (id !== localId) applyRemoteDraft(draft);
+  multiplayer.suppressSync = true;
+  multiplayer.applyingRemote = true;
+  try {
+    const next = createOnlineInitialState(localId, localDraft, message.publicDrafts || {}, {
+      gameId: message.gameId || '',
+      startedAt: message.startedAt || new Date().toISOString(),
+      playerOrder: message.playerOrder || multiplayerSeatIds(),
+    });
+    setState(next);
+    multiplayer.pendingTurnActionId = null;
+    multiplayer.startGameId = message.gameId || '';
+    multiplayer.startStartedAt = message.startedAt || '';
+    multiplayer.pendingStartMessage = null;
+    multiplayer.revision = Number(message.revision || 1);
+    multiplayer.pendingStateActions = [];
+    multiplayer.processedStateActionIds = Object.create(null);
+    multiplayer.lastAuthoritativeNetworkState = stateForNetwork();
+    multiplayer.lastLocalNetworkState = deepClone(multiplayer.lastAuthoritativeNetworkState);
+    multiplayer.lastNetworkFingerprint = JSON.stringify(multiplayer.lastAuthoritativeNetworkState);
+    ui.setupOpen = false;
+    ui.inspectorOpen = false;
+    ui.drawer = null;
+    ui.mulliganBottomSelections = Object.fromEntries(multiplayerSeatIds().map((id) => [id, new Set()]));
+  } catch (error) {
+    multiplayer.lastError = error?.message || `${localDraft.name || localId} could not open the game table.`;
+    sendNetwork({ type: 'start-error', gameId: message.gameId || '', playerId: localId, message: multiplayer.lastError });
+    render();
+    return;
+  } finally {
+    multiplayer.applyingRemote = false;
+    multiplayer.suppressSync = false;
+  }
+  sendNetwork({ type: 'start-ack', gameId: message.gameId || '', playerId: localId });
+  render();
+  toast(`Online game started. You are Player ${String(localId).replace(/^p/, '')}. Roll the D20.`);
+}
+
+function maybeProcessPendingOnlineStart() {
+  if (multiplayer.role !== 'guest' || !multiplayer.localPlayerId || !multiplayer.pendingStartMessage) return;
+  const localId = multiplayer.localPlayerId;
+  if (!ui.drafts[localId]?.ready || !multiplayer.readyByPlayer[localId]) return;
+  const message = multiplayer.pendingStartMessage;
+  multiplayer.pendingStartMessage = null;
+  receiveOnlineStart(message);
+}
+
+function updateRemoteHiddenCounts(playerId, handCount, libraryCount) {
+  updateState((draft) => {
+    if (playerId === multiplayer.localPlayerId || !draft.players?.[playerId]?.zones) return;
+    draft.players[playerId].zones.hand = hiddenNetworkZone(playerId, 'hand', handCount);
+    draft.players[playerId].zones.library = hiddenNetworkZone(playerId, 'library', libraryCount);
+  }, { snapshot: false });
+}
+
+function approvalUiSlot(kind) {
+  return kind === 'undo' ? 'undoRequest' : 'overrideRequest';
+}
+
+function currentLocalApprovalRequest() {
+  return ui.undoRequest || ui.overrideRequest || null;
+}
+
+function clearLocalApprovalRequest(requestId = null) {
+  for (const slot of ['undoRequest', 'overrideRequest']) {
+    if (!ui[slot]) continue;
+    if (!requestId || ui[slot].id === requestId) ui[slot] = null;
+  }
+  if (!requestId || multiplayer.undoRequestId === requestId) multiplayer.undoRequestId = '';
+  if (!requestId || multiplayer.overrideRequestId === requestId) multiplayer.overrideRequestId = '';
+}
+
+function approvalPublicStatus(session) {
+  return {
+    type: 'approval-status',
+    requestId: session.id,
+    kind: session.kind,
+    requesterId: session.requesterId,
+    requesterName: session.requesterName,
+    description: session.description || '',
+    requiredApproverIds: [...(session.requiredApproverIds || [])],
+    votes: { ...(session.votes || {}) },
+  };
+}
+
+function approvalUiRecord(session, direction, existing = null) {
+  const record = existing || {};
+  return {
+    ...record,
+    id: session.id || session.requestId,
+    kind: session.kind,
+    direction,
+    requesterId: session.requesterId,
+    requesterName: session.requesterName,
+    description: session.description || record.description || '',
+    requiredApproverIds: [...(session.requiredApproverIds || [])],
+    votes: { ...(session.votes || {}) },
+    payload: record.payload || (session.requesterId === multiplayer.localPlayerId ? deepClone(session.payload || {}) : undefined),
+    status: direction === 'incoming' ? 'needs-vote' : direction === 'voted' ? 'voted' : 'waiting',
+  };
+}
+
+function applyApprovalStatusLocally(message = {}) {
+  const slot = approvalUiSlot(message.kind);
+  const existing = ui[slot];
+  const localId = multiplayer.localPlayerId;
+  if (!localId) return;
+  let direction = existing?.direction || (message.requesterId === localId ? 'outgoing' : 'incoming');
+  if (message.requesterId !== localId && message.votes?.[localId] !== undefined && message.votes?.[localId] !== null) direction = 'voted';
+  ui[slot] = approvalUiRecord(message, direction, existing);
+  render();
+}
+
+function hostBroadcastApprovalStatus() {
+  const session = multiplayer.approvalSession;
+  if (!session || multiplayer.role !== 'host') return;
+  const status = approvalPublicStatus(session);
+  sendNetwork(status);
+  applyApprovalStatusLocally(status);
+}
+
+function executeApprovedTableAction(kind, payload = {}) {
+  if (kind === 'undo') {
+    const ok = undo();
+    if (!ok) return toast('The table approved the undo, but there is no local snapshot left to restore.', true);
+    toast('Everyone approved the undo. The prior game state was restored.');
+    return;
+  }
+  if (kind === 'override') {
+    handleResult(applyApprovedOverride(payload));
+  }
+}
+
+function handleApprovalResult(message = {}) {
+  const localId = multiplayer.localPlayerId;
+  const request = currentLocalApprovalRequest();
+  const wasRequester = message.requesterId === localId;
+  const kindLabel = message.kind === 'undo' ? 'undo' : 'Test Override';
+  if (message.result === 'approved' && wasRequester) {
+    const payload = request?.payload || message.payload || {};
+    clearLocalApprovalRequest(message.requestId);
+    executeApprovedTableAction(message.kind, payload);
+  } else {
+    clearLocalApprovalRequest(message.requestId);
+    if (message.result === 'denied') toast(`${kindLabel} request was denied${message.reason ? `: ${message.reason}` : '.'}`, true);
+    else if (message.result === 'cancelled' && !wasRequester) toast(`${multiplayerPlayerName(message.requesterId)} cancelled their ${kindLabel} request.`);
+  }
+  render();
+}
+
+function hostFinalizeApproval(result, reason = '') {
+  if (multiplayer.role !== 'host' || !multiplayer.approvalSession) return;
+  const session = multiplayer.approvalSession;
+  const message = {
+    type: 'approval-result',
+    requestId: session.id,
+    kind: session.kind,
+    requesterId: session.requesterId,
+    result,
+    reason,
+    payload: result === 'approved' ? deepClone(session.payload || {}) : undefined,
+  };
+  sendNetwork(message);
+  handleApprovalResult(message);
+  multiplayer.approvalSession = null;
+}
+
+function hostEvaluateApproval() {
+  const session = multiplayer.approvalSession;
+  if (!session || multiplayer.role !== 'host') return;
+  for (const playerId of session.requiredApproverIds || []) {
+    if (session.votes?.[playerId] === false) {
+      hostFinalizeApproval('denied', `${multiplayerPlayerName(playerId)} denied it.`);
+      return;
+    }
+  }
+  if ((session.requiredApproverIds || []).every((id) => session.votes?.[id] === true)) {
+    hostFinalizeApproval('approved');
+  }
+}
+
+function hostOpenApprovalSession(request = {}) {
+  if (multiplayer.role !== 'host') return;
+  if (multiplayer.approvalSession) {
+    if (request.requesterId && request.requesterId !== 'p1') {
+      sendNetwork({ type: 'approval-result', requestId: request.requestId, kind: request.kind, requesterId: request.requesterId, result: 'denied', reason: 'Another table approval is already pending.' }, request.requesterId);
+    } else {
+      toast('Another table approval is already pending.', true);
+    }
+    return;
+  }
+  const state = getState();
+  const requesterId = request.requesterId || multiplayer.localPlayerId || 'p1';
+  const participants = multiplayerActiveParticipantIds(state);
+  if (!participants.includes(requesterId)) participants.push(requesterId);
+  const requiredApproverIds = participants.filter((id) => id !== requesterId);
+  const votes = Object.fromEntries(requiredApproverIds.map((id) => [id, null]));
+  multiplayer.approvalSession = {
+    id: request.requestId,
+    kind: request.kind,
+    requesterId,
+    requesterName: request.requesterName || multiplayerPlayerName(requesterId, state),
+    description: request.description || '',
+    payload: deepClone(request.payload || {}),
+    requiredApproverIds,
+    votes,
+  };
+
+  const openMessage = {
+    type: 'approval-open',
+    requestId: request.requestId,
+    kind: request.kind,
+    requesterId,
+    requesterName: multiplayer.approvalSession.requesterName,
+    description: multiplayer.approvalSession.description,
+    requiredApproverIds,
+    votes: { ...votes },
+  };
+  sendNetwork(openMessage);
+  applyApprovalStatusLocally(openMessage);
+  hostBroadcastApprovalStatus();
+  if (!requiredApproverIds.length) hostFinalizeApproval('approved');
+}
+
+function startTableApproval(kind, payload = {}) {
+  if (!isOnlineMultiplayer()) {
+    if (kind === 'undo') {
+      if (!undo()) toast('Nothing to undo.');
+      return;
+    }
+    return handleResult(applyApprovedOverride(payload));
+  }
+  if (!isMultiplayerConnected()) return toast('The multiplayer table must be connected before requesting approval.', true);
+  if (currentLocalApprovalRequest() || multiplayer.approvalSession) return toast('Another multiplayer approval request is already pending.', true);
+
+  const requestId = uid(`${kind}-request`);
+  const requesterId = multiplayer.localPlayerId;
+  const requesterName = multiplayerPlayerName(requesterId);
+  const description = kind === 'override' ? safeOverrideDescription(payload) : `${requesterName} wants to rewind the most recent game action.`;
+  const slot = approvalUiSlot(kind);
+  ui[slot] = {
+    id: requestId,
+    kind,
+    direction: 'outgoing',
+    requesterId,
+    requesterName,
+    description,
+    payload: deepClone(payload),
+    requiredApproverIds: [],
+    votes: {},
+    status: 'requesting',
+  };
+  if (kind === 'undo') multiplayer.undoRequestId = requestId;
+  else multiplayer.overrideRequestId = requestId;
+
+  const message = { type: 'approval-request', requestId, kind, requesterId, requesterName, description, payload: deepClone(payload) };
+  if (multiplayer.role === 'host') hostOpenApprovalSession(message);
+  else if (!sendNetwork(message)) {
+    clearLocalApprovalRequest(requestId);
+    return toast('Could not send the approval request to the host.', true);
+  }
+  render();
+}
+
+function submitTableApprovalVote(approved) {
+  const request = currentLocalApprovalRequest();
+  if (!request || !['incoming', 'voted'].includes(request.direction)) return;
+  const localId = multiplayer.localPlayerId;
+  if (!localId || request.requesterId === localId) return;
+  if (multiplayer.role === 'host') {
+    const session = multiplayer.approvalSession;
+    if (!session || session.id !== request.id || !session.requiredApproverIds.includes(localId)) return;
+    session.votes[localId] = Boolean(approved);
+    ui[approvalUiSlot(request.kind)] = approvalUiRecord(session, 'voted', request);
+    hostBroadcastApprovalStatus();
+    hostEvaluateApproval();
+  } else {
+    sendNetwork({ type: 'approval-vote', requestId: request.id, kind: request.kind, voterId: localId, approved: Boolean(approved) });
+    request.votes ||= {};
+    request.votes[localId] = Boolean(approved);
+    request.direction = 'voted';
+    request.status = 'voted';
+    render();
+  }
+}
+
+function cancelTableApproval(kind) {
+  const slot = approvalUiSlot(kind);
+  const request = ui[slot];
+  if (!request || request.direction !== 'outgoing') return;
+  if (multiplayer.role === 'host') {
+    if (multiplayer.approvalSession?.id === request.id) hostFinalizeApproval('cancelled', 'Requester cancelled.');
+  } else {
+    sendNetwork({ type: 'approval-cancel', requestId: request.id, kind, requesterId: multiplayer.localPlayerId });
+    clearLocalApprovalRequest(request.id);
+    render();
+  }
+}
+
+function handleApprovalOpen(message = {}) {
+  const slot = approvalUiSlot(message.kind);
+  const localId = multiplayer.localPlayerId;
+  const existing = ui[slot];
+  const direction = message.requesterId === localId ? 'outgoing' : 'incoming';
+  ui[slot] = approvalUiRecord(message, direction, existing);
+  render();
+}
+
+function handleApprovalVote(message = {}, senderPlayerId = null) {
+  if (multiplayer.role !== 'host' || !multiplayer.approvalSession) return;
+  const session = multiplayer.approvalSession;
+  if (session.id !== message.requestId) return;
+  const voterId = senderPlayerId || message.voterId;
+  if (!session.requiredApproverIds.includes(voterId)) return;
+  session.votes[voterId] = Boolean(message.approved);
+  hostBroadcastApprovalStatus();
+  hostEvaluateApproval();
+}
+
+function handleApprovalCancel(message = {}, senderPlayerId = null) {
+  if (multiplayer.role !== 'host' || !multiplayer.approvalSession) return;
+  const session = multiplayer.approvalSession;
+  const requesterId = senderPlayerId || message.requesterId;
+  if (session.id !== message.requestId || session.requesterId !== requesterId) return;
+  hostFinalizeApproval('cancelled', 'Requester cancelled.');
+}
+
+function reconcileApprovalAfterDisconnect(playerId) {
+  if (multiplayer.role !== 'host' || !multiplayer.approvalSession) return;
+  const session = multiplayer.approvalSession;
+  if (session.requesterId === playerId) {
+    hostFinalizeApproval('cancelled', 'Requester disconnected.');
+    return;
+  }
+  if (session.requiredApproverIds.includes(playerId)) {
+    session.requiredApproverIds = session.requiredApproverIds.filter((id) => id !== playerId);
+    delete session.votes[playerId];
+    hostBroadcastApprovalStatus();
+    hostEvaluateApproval();
+  }
+}
+
+function requestUndoApproval() {
+  if (!canUndo()) return toast('Nothing to undo.');
+  startTableApproval('undo');
+}
+
+function approveUndoRequest() { submitTableApprovalVote(true); }
+function denyUndoRequest() { submitTableApprovalVote(false); }
+function cancelUndoRequest() { cancelTableApproval('undo'); }
+
+function safeOverrideDescription(payload = {}) {
+  const state = getState();
+  const found = payload.cardId ? findCard(payload.cardId, state) : null;
+  const playerName = state.players[multiplayer.localPlayerId]?.name || 'The other player';
+  const hidden = found && ['hand', 'library'].includes(found.zone);
+  const cardLabel = found ? (hidden ? `a card from their ${ZONE_LABELS[found.zone].toLowerCase()}` : found.card.name) : 'a card';
+  if (payload.action === 'test-force-move') {
+    const destinationName = state.players[payload.targetPlayerId]?.name || 'a player';
+    const zoneName = ZONE_LABELS[payload.zone] || payload.zone || 'another zone';
+    return `${playerName} wants to use Test Override to force ${cardLabel} to ${destinationName}'s ${zoneName}.`;
+  }
+  if (payload.action === 'cast-mutate-test') {
+    const target = payload.targetId ? findCard(payload.targetId, state) : null;
+    return `${playerName} wants to test Mutate without paying mana${target ? `, using ${hidden ? 'a hidden card' : found?.card?.name || 'a card'} on ${target.card.name}` : ''}.`;
+  }
+  if (payload.action === 'cast-aura-test') {
+    const target = payload.targetId ? findCard(payload.targetId, state) : null;
+    return `${playerName} wants to test-cast an Aura without paying mana${target ? ` onto ${target.card.name}` : ''}.`;
+  }
+  return `${playerName} wants to use a Commander Forge Test Override.`;
+}
+
+function applyApprovedOverride(payload = {}) {
+  if (payload.action === 'test-force-move') {
+    return testOverrideMove(payload.cardId, payload.targetPlayerId, payload.zone, { libraryPosition: payload.position || 'top' });
+  }
+  if (payload.action === 'cast-mutate-test') {
+    return castForMutate(payload.cardId, payload.targetId, payload.position || 'top', { force: true });
+  }
+  if (payload.action === 'cast-aura-test') {
+    return castAuraTargeting(payload.cardId, payload.targetId, { force: true });
+  }
+  return { ok: false, message: 'That Test Override request is no longer supported.' };
+}
+
+function requestOverrideApproval(payload = {}) { startTableApproval('override', payload); }
+function approveOverrideRequest() { submitTableApprovalVote(true); }
+function denyOverrideRequest() { submitTableApprovalVote(false); }
+function cancelOverrideRequest() { cancelTableApproval('override'); }
+
+function applyLobbySnapshot(lobby = {}) {
+  multiplayer.playerCount = Math.max(2, Math.min(6, Number(lobby.playerCount || multiplayer.playerCount || 4)));
+  ensureMultiplayerSeatUi();
+  multiplayer.connectedPlayerIds = [...(lobby.connectedPlayerIds || [])];
+  multiplayer.readyByPlayer = { ...(lobby.readyByPlayer || {}) };
+  for (const [playerId, draft] of Object.entries(lobby.drafts || {})) {
+    if (playerId === multiplayer.localPlayerId) continue;
+    applyRemoteDraft(draft);
+  }
+}
+
+function finishStartingRollIfReady() {
+  const online = isOnlineMultiplayer();
+  if (online && multiplayer.role !== 'host') return;
+  const state = getState();
+  const roll = state.startingRoll;
+  if (!roll?.active) return;
+  const required = (roll.requiredPlayerIds || []).filter((id) => state.players[id] && !state.players[id].lost);
+  if (!required.length || required.some((id) => !Number(roll.results?.[id]))) return;
+  const highest = Math.max(...required.map((id) => Number(roll.results[id] || 0)));
+  const tied = required.filter((id) => Number(roll.results[id] || 0) === highest);
+
+  if (tied.length > 1) {
+    updateState((draft) => {
+      draft.startingRoll.round = Number(draft.startingRoll.round || 1) + 1;
+      draft.startingRoll.requiredPlayerIds = [...tied];
+      draft.startingRoll.message = `${tied.map((id) => draft.players[id]?.name || id).join(' and ')} tied at ${highest}. Tied players roll again.`;
+      for (const id of tied) delete draft.startingRoll.results[id];
+    }, { log: `Starting-player roll tied at ${highest}; tied players roll again.` });
+
+    if (online) broadcastAuthoritativeState();
+    else scheduleSoloBotD20Roll();
+    return;
+  }
+
+  const winnerId = tied[0];
+  updateState((draft) => {
+    const original = [...(draft.turnOrder || Object.keys(draft.players))];
+    const index = Math.max(0, original.indexOf(winnerId));
+    draft.turnOrder = [...original.slice(index), ...original.slice(0, index)];
+    draft.activePlayerId = winnerId;
+    draft.priorityPlayerId = winnerId;
+    draft.turnNumber = 1;
+    draft.phaseIndex = 0;
+    draft.startingRoll.winnerId = winnerId;
+    draft.startingRoll.active = false;
+    draft.startingRoll.message = `${draft.players[winnerId]?.name || winnerId} rolled highest and goes first.`;
+    draft.openingHands.active = true;
+  }, { log: `${state.players[winnerId]?.name || winnerId} won the D20 roll and will take the first turn.` });
+
+  if (online) {
+    broadcastAuthoritativeState();
+  } else {
+    clearTimeout(d20Runtime.botRollTimer);
+    d20Runtime.botRollTimer = null;
+    toast(`${state.players[winnerId]?.name || winnerId} won the D20 roll and goes first.`);
+    if (bot.enabled) botSchedule(180);
+  }
+}
+
+function recordStartingRoll(playerId, result) {
+  const value = Math.max(1, Math.min(20, Math.floor(Number(result || 0))));
+  const state = getState();
+  const roll = state.startingRoll;
+  if (!roll?.active || !roll.requiredPlayerIds?.includes(playerId) || Number(roll.results?.[playerId])) return false;
+  updateState((draft) => {
+    draft.startingRoll.results ||= {};
+    draft.startingRoll.results[playerId] = value;
+  }, { log: `${state.players[playerId]?.name || playerId} rolled ${value} on the D20.` });
+  return true;
+}
+
+function soloStartingRollPlayerId(state = getState()) {
+  const roll = state.startingRoll;
+  if (!roll?.active) return null;
+  const required = (roll.requiredPlayerIds || Object.keys(state.players || {}))
+    .filter((id) => state.players?.[id] && !state.players[id].lost);
+  const unresolved = required.filter((id) => !Number(roll.results?.[id]));
+  if (!unresolved.length) return null;
+
+  // In bot games the human always rolls before the bot in each roll round.
+  if (bot.enabled && unresolved.includes(bot.playerId)) {
+    const human = unresolved.find((id) => id !== bot.playerId);
+    return human || bot.playerId;
+  }
+  return unresolved[0];
+}
+
+function scheduleSoloBotD20Roll(delay = 700) {
+  if (isOnlineMultiplayer() || !bot.enabled) return;
+  const state = getState();
+  const roll = state.startingRoll;
+  if (!roll?.active) return;
+  if (!roll.requiredPlayerIds?.includes(bot.playerId)) return;
+  if (Number(roll.results?.[bot.playerId])) return;
+
+  const unresolvedHuman = (roll.requiredPlayerIds || [])
+    .some((id) => id !== bot.playerId && !Number(roll.results?.[id]));
+  if (unresolvedHuman) return;
+
+  clearTimeout(d20Runtime.botRollTimer);
+  d20Runtime.botRollTimer = setTimeout(() => {
+    d20Runtime.botRollTimer = null;
+    const latest = getState();
+    if (!latest.startingRoll?.active || Number(latest.startingRoll.results?.[bot.playerId])) return;
+
+    // Give the visible die a believable automated shove/spin.
+    d20Runtime.velocity = capD20Velocity(
+      420 + Math.random() * 260,
+      -260 + Math.random() * 520,
+      950
+    );
+    d20Runtime.angular = {
+      x: 2.8 + Math.random() * 3.2,
+      y: 3.2 + Math.random() * 3.8,
+      z: -2.4 + Math.random() * 4.8,
+    };
+
+    setTimeout(() => {
+      const current = getState();
+      if (!current.startingRoll?.active || Number(current.startingRoll.results?.[bot.playerId])) return;
+      if (recordStartingRoll(bot.playerId, secureD20Roll())) finishStartingRollIfReady();
+    }, 650);
+  }, Math.max(250, Number(delay || 700)));
+}
+
+function submitStartingRoll(result) {
+  if (!getState().startingRoll?.active) return;
+
+  if (!isOnlineMultiplayer()) {
+    const playerId = soloStartingRollPlayerId();
+    if (!playerId || (bot.enabled && playerId === bot.playerId)) return;
+    if (recordStartingRoll(playerId, result)) {
+      finishStartingRollIfReady();
+      scheduleSoloBotD20Roll();
+    }
+    return;
+  }
+
+  const playerId = multiplayer.localPlayerId;
+  if (!playerId) return;
+
+  if (multiplayer.role === 'host') {
+    if (recordStartingRoll(playerId, result)) {
+      broadcastAuthoritativeState();
+      finishStartingRollIfReady();
+    }
+  } else {
+    sendNetwork({ type: 'starting-roll', playerId, result: Number(result) });
+  }
+}
+
+function handleNetworkMessage(message, senderPlayerId = null) {
+  if (!message || message.version !== MULTIPLAYER_APP_VERSION) {
+    multiplayer.status = 'error';
+    multiplayer.lastError = 'Another player is using a different Commander Forge multiplayer version.';
+    render();
+    return;
+  }
+  if (message.type === 'room-full') {
+    multiplayer.status = 'error';
+    multiplayer.lastError = 'That Commander Forge room is already full.';
+    render();
+    return;
+  }
+  if (message.type === 'seat-assigned' && multiplayer.role === 'guest') {
+    if (multiplayer.seatAssignmentTimer) clearTimeout(multiplayer.seatAssignmentTimer);
+    multiplayer.seatAssignmentTimer = null;
+    multiplayer.seatAssignmentAttempts = 0;
+    if (multiplayer.guestConnectTimer) clearTimeout(multiplayer.guestConnectTimer);
+    multiplayer.guestConnectTimer = null;
+    multiplayer.guestConnectAttempts = 0;
+    multiplayer.guestConnecting = false;
+    multiplayer.localPlayerId = message.playerId;
+    multiplayer.remotePlayerId = 'p1';
+    multiplayer.playerCount = Math.max(2, Math.min(6, Number(message.playerCount || 4)));
+    multiplayer.status = 'connected';
+    ensureMultiplayerSeatUi();
+    applyLobbySnapshot(message.lobby || {});
+    multiplayer.readyByPlayer[multiplayer.localPlayerId] = false;
+    sendLocalDraft({ preserveReady: true });
+    render();
+    toast(`Joined as Player ${String(multiplayer.localPlayerId).replace(/^p/, '')}.`);
+    return;
+  }
+  if ((message.type === 'hello' || message.type === 'seat-request') && multiplayer.role === 'host') {
+    const playerId = senderPlayerId;
+    if (playerId && multiplayer.connections?.[playerId]?.open) {
+      sendSeatAssignment(playerId);
+    }
+    broadcastLobbyState();
+    return;
+  }
+  if (message.type === 'lobby-state' && multiplayer.role === 'guest') {
+    applyLobbySnapshot(message.lobby || {});
+    render();
+    return;
+  }
+  if (message.type === 'draft' && multiplayer.role === 'host') {
+    const playerId = senderPlayerId || message.draft?.playerId;
+    if (!playerId || !multiplayerSeatIds().includes(playerId)) return;
+    const draft = { ...(message.draft || {}), playerId };
+    multiplayer.remoteDrafts[playerId] = deepClone(draft);
+    multiplayer.readyByPlayer[playerId] = false;
+    applyRemoteDraft(draft);
+    broadcastLobbyState();
+    return;
+  }
+  if (message.type === 'ready-state' && multiplayer.role === 'host') {
+    const playerId = senderPlayerId || message.playerId;
+    if (!playerId || !multiplayerSeatIds().includes(playerId)) return;
+    const remoteDraft = playerId === 'p1' ? serializePublicDraft('p1') : multiplayer.remoteDrafts[playerId];
+    multiplayer.readyByPlayer[playerId] = Boolean(message.ready && (remoteDraft?.deckValid ?? remoteDraft?.ready));
+    broadcastLobbyState();
+    return;
+  }
+  if (message.type === 'start-game') { receiveOnlineStart(message); return; }
+  if (message.type === 'start-ack' && multiplayer.role === 'host' && message.gameId === multiplayer.startGameId) {
+    const playerId = senderPlayerId || message.playerId;
+    if (playerId) multiplayer.startAcknowledgedBy[playerId] = true;
+    const pending = multiplayerSeatIds().slice(1).filter((id) => multiplayer.connections[id]?.open && !multiplayer.startAcknowledgedBy[id]);
+    if (!pending.length) { multiplayer.startAcknowledged = true; clearOnlineStartRetry(); multiplayer.lastError = ''; }
+    return;
+  }
+  if (message.type === 'start-error' && multiplayer.role === 'host' && message.gameId === multiplayer.startGameId) {
+    multiplayer.lastError = message.message || `${senderPlayerId || 'A player'} could not open the game table.`;
+    toast(multiplayer.lastError, true);
+    render();
+    return;
+  }
+  if (message.type === 'starting-roll' && multiplayer.role === 'host') {
+    const playerId = senderPlayerId || message.playerId;
+    if (recordStartingRoll(playerId, message.result)) {
+      broadcastAuthoritativeState();
+      finishStartingRollIfReady();
+    }
+    return;
+  }
+  if (message.type === 'turn-sync' && multiplayer.role === 'guest') {
+    const before = getState();
+    if (before.startingRoll?.active || before.openingHands?.active) return;
+    applyTurnSync(message);
+    if (multiplayer.pendingTurnActionId) multiplayer.pendingTurnActionId = null;
+    const currentNetwork = stateForNetwork();
+    const authoritativeTurnState = deepClone(multiplayer.lastAuthoritativeNetworkState || currentNetwork);
+    authoritativeTurnState.turnNumber = Number(message.turnNumber || authoritativeTurnState.turnNumber || 1);
+    authoritativeTurnState.phaseIndex = Math.max(0, Math.min(PHASES.length - 1, Number(message.phaseIndex || 0)));
+    authoritativeTurnState.activePlayerId = message.activePlayerId || authoritativeTurnState.activePlayerId;
+    authoritativeTurnState.priorityPlayerId = message.priorityPlayerId || authoritativeTurnState.activePlayerId;
+    if (Array.isArray(message.turnOrder)) authoritativeTurnState.turnOrder = [...message.turnOrder];
+    multiplayer.lastAuthoritativeNetworkState = authoritativeTurnState;
+    multiplayer.lastLocalNetworkState = overlayPendingStateActions(authoritativeTurnState);
+    render();
+    return;
+  }
+  if (message.type === 'game-action' && multiplayer.role === 'host') {
+    if (!getState().onlineGameId || message.gameId !== getState().onlineGameId) return;
+    const senderId = senderPlayerId || message.actorId;
+    if (!senderId || senderId !== message.actorId) return;
+    if (message.kind === 'next-phase') {
+      const state = getState();
+      if (state.activePlayerId !== senderId) {
+        sendNetwork({ type: 'game-action-result', actionId: message.actionId, ok: false, message: 'You are not the active player.', revision: multiplayer.revision }, senderId);
+        broadcastTurnSync(senderId);
+        return;
+      }
+      const result = nextPhase();
+      if (result?.ok) {
+        broadcastAuthoritativeState();
+        sendNetwork({ type: 'game-action-result', actionId: message.actionId, ok: true, revision: multiplayer.revision }, senderId);
+      } else {
+        sendNetwork({ type: 'game-action-result', actionId: message.actionId, ok: false, message: result?.message || 'Could not advance the phase.', revision: multiplayer.revision }, senderId);
+        broadcastTurnSync(senderId);
+      }
+      return;
+    }
+  }
+  if (message.type === 'game-action-result' && multiplayer.role === 'guest') {
+    if (message.actionId && message.actionId === multiplayer.pendingTurnActionId) {
+      multiplayer.pendingTurnActionId = null;
+      if (!message.ok) toast(message.message || 'The host rejected that turn action.', true);
+      render({ force: true });
+    }
+    return;
+  }
+
+  if (message.type === 'state' && multiplayer.role === 'guest') {
+    if (!getState().onlineGameId) return;
+    const ackForThisGuest = !message.ackActorId || message.ackActorId === multiplayer.localPlayerId;
+    applyNetworkState(message.state, message.revision, {
+      ackActionId: ackForThisGuest ? message.ackActionId : null,
+      rejectedActionId: ackForThisGuest ? message.rejectedActionId : null,
+      message: message.message || '',
+    });
+    return;
+  }
+  if (message.type === 'state-delta' && multiplayer.role === 'host') {
+    applyGuestStateDelta(message, senderPlayerId);
+    return;
+  }
+  if (message.type === 'mulligan-status') {
+    const playerId = message.playerId || senderPlayerId;
+    updateState((draft) => {
+      if (!draft.players[playerId]) return;
+      draft.openingHands.kept[playerId] = Boolean(message.kept);
+      draft.players[playerId].mulligans = Number(message.mulligans || 0);
+      if (playerId !== multiplayer.localPlayerId) {
+        draft.players[playerId].zones.hand = hiddenNetworkZone(playerId, 'hand', Number(message.handCount || 7));
+        draft.players[playerId].zones.library = hiddenNetworkZone(playerId, 'library', Number(message.libraryCount || 92));
+      }
+      if (multiplayer.role === 'host') {
+        const ids = Object.keys(draft.players || {});
+        if (ids.length && ids.every((id) => draft.openingHands.kept[id])) draft.openingHands.active = false;
+      }
+    }, { snapshot: false });
+    if (multiplayer.role === 'host') broadcastAuthoritativeState();
+    return;
+  }
+  if (message.type === 'public-reveal') {
+    applyPublicReveal(message.reveal, { notify: true });
+    if (multiplayer.role === 'host') sendNetwork(message);
+    render();
+    return;
+  }
+  if (message.type === 'public-reveal-clear') {
+    clearPublicReveal(message.revealId, message.playerId);
+    if (multiplayer.role === 'host') sendNetwork(message);
+    render();
+    return;
+  }
+  if (message.type === 'request-state') {
+    if (multiplayer.role === 'host') sendNetwork({ type: 'state', revision: multiplayer.revision, state: stateForNetwork() }, senderPlayerId);
+    return;
+  }
+  if (message.type === 'approval-request' && multiplayer.role === 'host') {
+    hostOpenApprovalSession({ ...message, requesterId: senderPlayerId || message.requesterId });
+    return;
+  }
+  if (message.type === 'approval-open' && multiplayer.role === 'guest') {
+    handleApprovalOpen(message);
+    return;
+  }
+  if (message.type === 'approval-status') {
+    applyApprovalStatusLocally(message);
+    return;
+  }
+  if (message.type === 'approval-vote' && multiplayer.role === 'host') {
+    handleApprovalVote(message, senderPlayerId);
+    return;
+  }
+  if (message.type === 'approval-result') {
+    handleApprovalResult(message);
+    return;
+  }
+  if (message.type === 'approval-cancel' && multiplayer.role === 'host') {
+    handleApprovalCancel(message, senderPlayerId);
+    return;
+  }
+}
+
+function sendMulliganStatus(playerId) {
+  if (!isMultiplayerConnected() || playerId !== multiplayer.localPlayerId) return;
+  const player = getState().players[playerId];
+  sendNetwork({
+    type: 'mulligan-status',
+    playerId,
+    kept: Boolean(getState().openingHands.kept[playerId]),
+    mulligans: player.mulligans,
+    handCount: player.zones.hand.length,
+    libraryCount: player.zones.library.length,
+  });
+}
+
+function multiplayerCanControlCard(cardId) {
+  if (!isOnlineMultiplayer() || !multiplayer.localPlayerId) return true;
+  const found = findCard(cardId, getState());
+  if (!found) return true;
+  if (found.zone === 'battlefield' || found.zone === 'stack') return (found.card.controller || found.playerId) === multiplayer.localPlayerId;
+  return found.card.owner === multiplayer.localPlayerId || found.playerId === multiplayer.localPlayerId;
+}
+
+function multiplayerActionAllowed(button, action) {
+  if (!isOnlineMultiplayer() || !getState().started) return true;
+  const localId = multiplayer.localPlayerId;
+  const safeActions = new Set(['coach', 'run-coach', 'cancel-coach', 'close-inspector', 'open-log', 'close-log', 'open-settings', 'close-settings', 'open-setup', 'close-setup', 'open-zone', 'close-drawer', 'open-damage', 'close-damage', 'export-save', 'close-public-reveal', 'close-scry', 'scry-reveal-next', 'inspect-revealed-card', 'open-predefined-tokens', 'refresh-predefined-tokens', 'close-predefined-tokens', 'create-predefined-token', 'more-predefined-tokens', 'undo', 'approve-undo', 'deny-undo', 'cancel-undo', 'approve-override', 'deny-override', 'cancel-override', 'cast-aura', 'change-control', 'cast-public-free', 'put-public-battlefield', 'play-public-land']);
+  if (safeActions.has(action)) return true;
+  const hostOnly = new Set(['switch-player', 'reset-game', 'import-save', 'demo-game']);
+  if (hostOnly.has(action)) return multiplayer.role === 'host';
+  if (action === 'next-phase') {
+    const activeId = getState().activePlayerId;
+    return activeId === localId || (multiplayer.role === 'host' && !multiplayerPlayerConnected(activeId));
+  }
+  if (['resolve-stack', 'counter-stack', 'clear-combat'].includes(action)) return getState().activePlayerId === localId;
+  if (['resolve-effect', 'decline-effect', 'effect-condition', 'smart-effect-card', 'smart-effect-no-result', 'toggle-smart-effect-multi', 'resolve-smart-effect-multi', 'open-library-effect-picker', 'choose-effect-opponent'].includes(action)) {
+    const effect = getState().pendingTriggers?.find((item) => item.id === button.dataset.effectId);
+    if (!effect) return false;
+    const smart = smartPendingEffectState(effect, getState());
+    if (['choose-opponent-sacrifice', 'choose-opponent-discard'].includes(smart.kind)) return effect.controllerId === localId;
+    return pendingEffectDecisionPlayerId(effect, smart, getState()) === localId;
+  }
+  const playerId = button.dataset.playerId;
+  if (playerId && playerId !== localId) return false;
+  const cardId = button.dataset.cardId;
+  if (cardId && !multiplayerCanControlCard(cardId)) return false;
+  return true;
+}
+
+function renderOnlineRemoteDeckStatus(playerId) {
+  const seatNumber = String(playerId).replace(/^p/, '');
+  const connected = (multiplayer.connectedPlayerIds || []).includes(playerId) || playerId === multiplayer.localPlayerId || (multiplayer.role === 'host' && playerId === 'p1');
+  const draft = playerId === multiplayer.localPlayerId ? serializePublicDraft(playerId) : multiplayer.remoteDrafts?.[playerId];
+  const ready = Boolean(multiplayer.readyByPlayer?.[playerId]);
+  const deckValid = Boolean(draft?.deckValid ?? draft?.ready);
+  const stateClass = ready ? 'ready' : deckValid ? 'deck-ready' : connected ? 'connected' : 'empty';
+  return `<section class="multiplayer-seat-card ${stateClass}">
+    <div class="multiplayer-seat-head"><span class="seat-number">P${seatNumber}</span><div><strong>${escapeHtml(draft?.name || `Player ${seatNumber}`)}</strong><span>${connected ? 'Connected' : 'Waiting for player…'}</span></div><span class="seat-ready-pill ${ready ? 'ready' : ''}">${ready ? '✓ READY' : deckValid ? 'Deck loaded' : connected ? 'Setting up' : 'Empty seat'}</span></div>
+    ${draft ? `<div class="multiplayer-seat-deck"><span>${escapeHtml(draft.deckTitle || 'Commander deck')}</span>${draft.commanderNames?.length ? `<strong>${draft.commanderNames.map(escapeHtml).join(' + ')}</strong>` : '<span class="muted">Choose a commander</span>'}</div>` : '<div class="multiplayer-seat-empty">Share the same invite code to fill this seat.</div>'}
+  </section>`;
+}
+
+function renderMultiplayerConnectionPanel() {
+  if (!multiplayer.role) {
+    const countOptions = [2, 3, 4, 5, 6].map((count) => `<option value="${count}" ${Number(multiplayer.playerCount || 4) === count ? 'selected' : ''}>${count} players</option>`).join('');
+    return `<section class="multiplayer-connect-panel mp6-connect"><div class="multiplayer-choice"><h3>Host a Commander table</h3><p class="small muted">Create one room code and invite everyone. Commander Forge supports 2–6 seats.</p><div class="field"><label>Table size</label><select id="online-player-count">${countOptions}</select></div><button class="btn primary wide" data-action="host-online">Create room</button></div><div class="multiplayer-choice"><h3>Join a table</h3><p class="small muted">Everyone joining uses the same invite code. The host assigns the next open seat automatically.</p><div class="join-code-row"><input id="join-code" maxlength="8" value="${escapeHtml(multiplayer.pendingJoinCode || '')}" placeholder="8-character code" /><button class="btn primary" data-action="join-online">Join</button></div></div></section>`;
+  }
+  const link = `${location.origin}${location.pathname}?join=${encodeURIComponent(multiplayer.roomCode)}`;
+  const connected = multiplayer.role === 'host' ? 1 + multiplayerConnectionList().length : Math.max(1, (multiplayer.connectedPlayerIds || []).length);
+  return `<section class="multiplayer-room-card mp6-room"><div><span class="network-status-dot ${multiplayer.status}"></span><strong>${escapeHtml(multiplayerStatusLabel())}</strong><p class="small muted">${multiplayer.playerCount}-player browser room · host relays game state to the other seats.</p></div>${multiplayer.role === 'host' ? `<div class="invite-code-box"><span>Invite everyone with this code</span><strong>${escapeHtml(multiplayer.roomCode)}</strong><small>${connected}/${multiplayer.playerCount} seats connected</small><div><button class="btn small-btn" data-action="copy-invite-code">Copy code</button><button class="btn small-btn" data-action="copy-invite-link" data-link="${escapeHtml(link)}">Copy link</button></div></div>` : ''}<button class="btn danger small-btn" data-action="disconnect-online">Disconnect</button></section>`;
+}
+
+function localLobbyReadyControl() {
+  const localId = multiplayer.localPlayerId;
+  if (!localId) return '';
+  const draft = ensureDraftForPlayer(localId);
+  const valid = Boolean(draft.ready && !draft.validation?.errors?.length && draft.commanders?.length);
+  const ready = Boolean(multiplayer.readyByPlayer?.[localId]);
+  return `<div class="lobby-ready-control ${ready ? 'ready' : ''}"><div><strong>${ready ? '✓ You are ready' : valid ? 'Deck validated' : 'Finish your deck first'}</strong><span>${ready ? 'The host can start after every seat is ready.' : valid ? 'Press Ready when you are done making changes.' : 'Load/validate a 100-card Commander deck and choose your commander.'}</span></div><button class="btn ${ready ? 'ghost' : 'primary'}" data-action="toggle-lobby-ready" ${valid ? '' : 'disabled'}>${ready ? 'Unready' : 'Ready up'}</button></div>`;
+}
+
+function renderOnlineSetup(state) {
+  const localId = multiplayer.localPlayerId;
+  const connectionPanel = renderMultiplayerConnectionPanel();
+  if (!localId) {
+    const connectionReady = Boolean(multiplayer.connection?.open);
+    const heading = connectionReady ? 'Connected — waiting for the host to assign your seat…' : 'Connecting to the host room…';
+    const detail = connectionReady
+      ? 'Seat assignment retries automatically.'
+      : 'If the host was still opening the room, Forge will keep retrying automatically.';
+    return `${connectionPanel}<div class="validation multiplayer-note"><strong>${heading}</strong><span>${detail}</span><button class="btn small-btn" data-action="request-seat-assignment">${connectionReady ? 'Request seat again' : 'Retry host connection now'}</button></div>`;
+  }
+  ensureMultiplayerSeatUi();
+  const localPanel = `<section class="multiplayer-local-deck"><div class="online-local-label"><span>YOUR SEAT · PLAYER ${String(localId).replace(/^p/, '')}</span></div>${renderDeckPanel(localId)}${localLobbyReadyControl()}</section>`;
+  const seatGrid = multiplayerSeatIds().map((id) => renderOnlineRemoteDeckStatus(id)).join('');
+  const connected = multiplayer.role === 'host' ? 1 + multiplayerConnectionList().length : (multiplayer.connectedPlayerIds || []).length;
+  const readyCount = multiplayerSeatIds().filter((id) => multiplayer.readyByPlayer?.[id]).length;
+  const hostStart = multiplayer.role === 'host'
+    ? `<div class="host-start-panel"><div><strong>${readyCount}/${multiplayer.playerCount} ready</strong><span>${connected < multiplayer.playerCount ? `Waiting for ${multiplayer.playerCount - connected} player${multiplayer.playerCount - connected === 1 ? '' : 's'} to join.` : readyCount < multiplayer.playerCount ? 'Everyone must press Ready.' : 'All players are ready.'}</span></div><button class="btn primary" data-action="start-game" ${allOnlinePlayersReady() ? '' : 'disabled'}>Start game & roll D20</button></div>`
+    : `<div class="validation ${multiplayer.readyByPlayer?.[localId] ? 'ok' : ''}">${multiplayer.readyByPlayer?.[localId] ? 'You are ready. Waiting for the host to start.' : 'Load your deck, then press Ready.'}</div>`;
+  const startError = multiplayer.lastError ? `<div class="validation error multiplayer-start-error">${escapeHtml(multiplayer.lastError)}</div>` : '';
+  return `${connectionPanel}${startError}<div class="multiplayer-lobby-shell"><div class="multiplayer-seat-grid">${seatGrid}</div>${localPanel}</div><div class="setup-footer mp6-footer"><span class="small muted">Hands and libraries remain private to their owners. Public zones are synchronized to everyone.</span>${hostStart}</div>`;
+}
+
+function createDraft(name) {
+  return {
+    name,
+    source: 'custom',
+    text: '',
+    entries: [],
+    byName: {},
+    cards: [],
+    commanders: [],
+    candidates: [],
+    validation: null,
+    preconQuery: '',
+    preconResults: [],
+    selectedPrecon: null,
+    ready: false,
+  };
+}
+
+function createTokenDraft() {
+  return {
+    playerId: 'p1',
+    name: 'Zombie',
+    power: 2,
+    toughness: 2,
+    typeLine: 'Token Creature — Zombie',
+    keywords: '',
+    frameColor: '#1f3329',
+    accentColor: '#d4a654',
+    textColor: '#f4f1e8',
+  };
+}
+
+const ORACLE_NUMBER_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+
+function oracleNumber(value) {
+  const token = String(value || '').trim().toLowerCase();
+  if (/^\d+$/.test(token)) return Number(token);
+  if (token === 'card') return 1;
+  return ORACLE_NUMBER_WORDS[token] || null;
+}
+
+function sentenceAround(text, index) {
+  const start = Math.max(text.lastIndexOf('.', index), text.lastIndexOf('\n', index)) + 1;
+  const period = text.indexOf('.', index);
+  const newline = text.indexOf('\n', index);
+  const ends = [period, newline].filter((value) => value >= 0);
+  const end = ends.length ? Math.min(...ends) + 1 : text.length;
+  return text.slice(start, end).trim();
+}
+
+function privateLibraryActions(card) {
+  const text = String(card?.oracleText || '');
+  const actions = [];
+  const seen = new Set();
+  const numberPattern = '(?:\\d+|one|two|three|four|five|six|seven|eight|nine|ten|x)';
+  const scryRegex = new RegExp(`\\bscry\\s+(${numberPattern})\\b`, 'gi');
+  for (const match of text.matchAll(scryRegex)) {
+    const token = String(match[1] || '').toLowerCase();
+    const amount = token === 'x' ? null : oracleNumber(token);
+    const sentence = sentenceAround(text, match.index || 0);
+    const drawMatch = sentence.match(/then draw (a|one|two|three|four|five|\d+) cards?/i);
+    const drawAfter = drawMatch ? (oracleNumber(drawMatch[1]) || 1) : 0;
+    const key = `scry-${amount ?? 'x'}-${drawAfter}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    actions.push({
+      mode: 'scry',
+      amount,
+      label: `Scry ${amount ?? 'X'}`,
+      allowedDestinations: ['top', 'bottom'],
+      defaultDestination: 'top',
+      handLimit: 0,
+      handRequired: 0,
+      drawAfter,
+    });
+  }
+
+  const lookRegex = new RegExp(`\\blook at the top (card|${numberPattern}) cards? of your library\\b`, 'i');
+  const lookMatch = text.match(lookRegex);
+  if (lookMatch) {
+    const amount = oracleNumber(lookMatch[1]);
+    const start = lookMatch.index || 0;
+    const segment = text.slice(start, Math.min(text.length, start + 420));
+    const allowHand = /put (?:one|a|an) (?:of them|card|[^.]{0,100}card from among them)[^.]{0,100} into your hand/i.test(segment)
+      || /put [^.]{0,120} from among them into your hand/i.test(segment);
+    const mayHand = /you may [^.]{0,160}put [^.]{0,120}into your hand/i.test(segment);
+    const restBottom = /(?:put|then put)?\s*(?:the )?rest [^.]{0,100}(?:on|at) the bottom of your library/i.test(segment);
+    const allowGraveyard = /put (?:the )?(?:rest|any number|that card|them)[^.]{0,100}into your graveyard/i.test(segment);
+    const allowExile = /put (?:the )?(?:rest|any number|that card|them)[^.]{0,100}into exile/i.test(segment);
+    const allowedDestinations = ['top', 'bottom'];
+    if (allowHand) allowedDestinations.push('hand');
+    if (allowGraveyard) allowedDestinations.push('graveyard');
+    if (allowExile) allowedDestinations.push('exile');
+    actions.push({
+      mode: 'look',
+      amount,
+      label: `Look at top ${amount}${allowHand ? ' · choose a card' : ''}`,
+      allowedDestinations,
+      defaultDestination: restBottom ? 'bottom' : 'top',
+      handLimit: allowHand ? 1 : 0,
+      handRequired: allowHand && !mayHand ? 1 : 0,
+      drawAfter: 0,
+    });
+  }
+  const revealTopRegex = new RegExp(`\\breveal (?:the )?top (card|${numberPattern}) cards? of your library\\b`, 'gi');
+  for (const match of text.matchAll(revealTopRegex)) {
+    const token = String(match[1] || '').toLowerCase();
+    const amount = token === 'x' ? null : oracleNumber(token);
+    const segment = text.slice(match.index || 0, Math.min(text.length, (match.index || 0) + 520));
+    const allowedDestinations = ['top', 'bottom'];
+    const handText = /put (?:that card|it|one of them|a card from among them|any number of (?:those|the) cards|all [^.]{0,80}cards revealed this way)[^.]{0,120}into your hand/i.test(segment);
+    const graveyardText = /put (?:that card|it|them|those cards|the rest|all [^.]{0,80}cards revealed this way)[^.]{0,100}into (?:your )?graveyard/i.test(segment);
+    const exileText = /put (?:that card|it|them|those cards|the rest)[^.]{0,100}into exile/i.test(segment);
+    if (handText) allowedDestinations.push('hand');
+    if (graveyardText) allowedDestinations.push('graveyard');
+    if (exileText) allowedDestinations.push('exile');
+    const singularToHand = amount === 1 && /put (?:that card|it) into your hand/i.test(segment);
+    const singularToGraveyard = amount === 1 && /put (?:that card|it) into (?:your )?graveyard/i.test(segment);
+    const singularToExile = amount === 1 && /put (?:that card|it) into exile/i.test(segment);
+    const defaultDestination = singularToHand ? 'hand' : singularToGraveyard ? 'graveyard' : singularToExile ? 'exile' : (/put (?:the )?rest [^.]{0,90}(?:on|at) the bottom/i.test(segment) ? 'bottom' : 'top');
+    const key = `reveal-${amount ?? 'x'}-${allowedDestinations.join('-')}-${defaultDestination}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    actions.push({
+      mode: 'reveal',
+      amount,
+      label: `Reveal top ${amount ?? 'X'}`,
+      allowedDestinations,
+      defaultDestination,
+      handLimit: handText ? (/(?:one|a) (?:of them|card from among them)/i.test(segment) ? 1 : 0) : 0,
+      handRequired: singularToHand && !/\bmay\b/i.test(segment) ? 1 : 0,
+      drawAfter: 0,
+      allowReveal: true,
+      autoRevealAll: true,
+    });
+  }
+
+  const untilRegex = /\breveal cards? from the top of your library until you reveal (?:a|an) ([^.]+?) card\b/i;
+  const untilMatch = text.match(untilRegex);
+  if (untilMatch) {
+    const segment = text.slice(untilMatch.index || 0, Math.min(text.length, (untilMatch.index || 0) + 650));
+    const allowedDestinations = ['top', 'bottom'];
+    if (/put (?:that card|it) into your hand/i.test(segment)) allowedDestinations.push('hand');
+    if (/put (?:the rest|all other cards|those cards|them)[^.]{0,100}into (?:your )?graveyard/i.test(segment)) allowedDestinations.push('graveyard');
+    if (/put (?:the rest|all other cards|those cards|them)[^.]{0,100}into exile/i.test(segment)) allowedDestinations.push('exile');
+    actions.push({
+      mode: 'reveal-until',
+      amount: 1,
+      label: `Reveal until ${String(untilMatch[1]).trim()}`,
+      allowedDestinations,
+      defaultDestination: /put (?:the rest|all other cards)[^.]{0,100}(?:on|at) the bottom/i.test(segment) ? 'bottom' : 'top',
+      handLimit: allowedDestinations.includes('hand') ? 1 : 0,
+      handRequired: /put (?:that card|it) into your hand/i.test(segment) && !/\bmay\b/i.test(segment) ? 1 : 0,
+      drawAfter: 0,
+      allowReveal: true,
+      autoRevealAll: true,
+      dynamicReveal: true,
+      conditionText: String(untilMatch[1]).trim(),
+    });
+  }
+
+  return actions;
+}
+
+function openPrivateLibraryTool(playerId, config = {}) {
+  if (!playerId || !getState().players[playerId]) return toast('Player not found.', true);
+  if (isOnlineMultiplayer() && playerId !== multiplayer.localPlayerId) return toast('Only the library owner can privately view those cards.', true);
+  const requested = Math.max(1, Math.floor(Number(config.amount || 1)));
+  const library = getState().players[playerId].zones.library;
+  const amount = Math.min(requested, library.length);
+  if (!amount) return toast('The library is empty.', true);
+  const allowedDestinations = [...new Set(config.allowedDestinations || ['top', 'bottom'])];
+  const defaultDestination = allowedDestinations.includes(config.defaultDestination) ? config.defaultDestination : 'top';
+  const mode = config.mode || 'scry';
+  ui.scry = {
+    playerId,
+    sourceCardId: config.sourceCardId || null,
+    mode,
+    label: config.label || `Scry ${amount}`,
+    amount,
+    cardIds: library.slice(0, amount).map((card) => card.instanceId),
+    items: library.slice(0, amount).map((card) => ({ cardId: card.instanceId, destination: defaultDestination, reveal: Boolean(config.autoRevealAll) })),
+    allowedDestinations,
+    allowReveal: config.allowReveal === true || (config.allowReveal !== false && ['look', 'reveal', 'reveal-until'].includes(mode)),
+    dynamicReveal: Boolean(config.dynamicReveal),
+    conditionText: String(config.conditionText || ''),
+    handLimit: Math.max(0, Number(config.handLimit || 0)),
+    handRequired: Math.max(0, Number(config.handRequired || 0)),
+    drawAfter: Math.max(0, Number(config.drawAfter || 0)),
+  };
+  ui.libraryReveal = null;
+  render();
+}
+
+function setPrivateLibraryDestination(cardId, destination) {
+  const tool = ui.scry;
+  if (!tool || !tool.allowedDestinations.includes(destination)) return;
+  const item = tool.items.find((entry) => entry.cardId === cardId);
+  if (!item) return;
+  if (destination === 'hand' && item.destination !== 'hand') {
+    const selectedForHand = tool.items.filter((entry) => entry.destination === 'hand').length;
+    if (tool.handLimit && selectedForHand >= tool.handLimit) return toast(`This effect allows only ${tool.handLimit} card${tool.handLimit === 1 ? '' : 's'} into your hand.`, true);
+  }
+  item.destination = destination;
+  render();
+}
+
+function togglePrivateLibraryReveal(cardId) {
+  const tool = ui.scry;
+  if (!tool?.allowReveal) return;
+  const item = tool.items.find((entry) => entry.cardId === cardId);
+  if (!item) return;
+  item.reveal = !item.reveal;
+  render();
+}
+
+function revealNextPrivateLibraryCard() {
+  const tool = ui.scry;
+  if (!tool?.dynamicReveal) return;
+  const library = getState().players[tool.playerId]?.zones.library || [];
+  const next = library[tool.cardIds.length];
+  if (!next) return toast('There are no more cards in the library.', true);
+  tool.cardIds.push(next.instanceId);
+  tool.items.push({ cardId: next.instanceId, destination: tool.allowedDestinations.includes('top') ? 'top' : tool.allowedDestinations[0], reveal: true });
+  tool.amount = tool.cardIds.length;
+  render();
+}
+
+function movePrivateLibraryItem(cardId, direction) {
+  const tool = ui.scry;
+  if (!tool) return;
+  const index = tool.items.findIndex((entry) => entry.cardId === cardId);
+  if (index < 0) return;
+  const destination = tool.items[index].destination;
+  const same = tool.items.map((entry, itemIndex) => ({ entry, itemIndex })).filter((item) => item.entry.destination === destination);
+  const within = same.findIndex((item) => item.itemIndex === index);
+  const target = same[within + (direction === 'up' ? -1 : 1)];
+  if (!target) return;
+  [tool.items[index], tool.items[target.itemIndex]] = [tool.items[target.itemIndex], tool.items[index]];
+  render();
+}
+
+function confirmPrivateLibraryTool() {
+  const tool = ui.scry;
+  if (!tool) return;
+  const handCount = tool.items.filter((entry) => entry.destination === 'hand').length;
+  if (handCount < tool.handRequired) return toast(`Choose ${tool.handRequired} card${tool.handRequired === 1 ? '' : 's'} for your hand.`, true);
+  if (tool.handLimit && handCount > tool.handLimit) return toast(`Choose no more than ${tool.handLimit} card${tool.handLimit === 1 ? '' : 's'} for your hand.`, true);
+  const result = resolvePrivateLibraryDecision(tool.playerId, tool.cardIds, tool.items, {
+    label: tool.label,
+    mode: tool.mode,
+    drawAfter: tool.drawAfter,
+  });
+  handleResult(result);
+  if (result?.ok) {
+    const resolved = new Map((result.resolvedCards || []).map((entry) => [entry.card.instanceId, entry]));
+    for (const item of tool.items.filter((entry) => entry.reveal)) {
+      const entry = resolved.get(item.cardId);
+      if (!entry?.card) continue;
+      if (entry.destination === 'hand' || entry.destination === 'top' || entry.destination === 'bottom') {
+        revealCardPublicly(entry.card.instanceId);
+        publishPublicReveal(entry.card, tool.playerId, entry.destination === 'hand' ? 'hand' : 'library', { position: entry.destination === 'hand' ? null : 'revealed', notifyLocal: true });
+      }
+    }
+    ui.scry = null;
+  }
+  render();
+}
+
+const MANUAL_KEYWORD_OPTIONS = [
+  'Flying', 'Reach', 'Deathtouch', 'Defender', 'Double strike', 'First strike',
+  'Flash', 'Haste', 'Hexproof', 'Indestructible', 'Lifelink', 'Menace',
+  'Shroud', 'Trample', 'Vigilance', 'Fear', 'Intimidate', 'Shadow',
+  'Horsemanship', 'Skulk', 'Infect', 'Wither', 'Prowess', 'Unblockable',
+  'Ward {1}', 'Ward {2}', 'Protection from white', 'Protection from blue',
+  'Protection from black', 'Protection from red', 'Protection from green',
+];
+
+
+const BOT_PREFS_KEY = 'commander-forge-autoplay-bot-v1';
+const BOT_DIFFICULTIES = {
+  casual: { label: 'Casual', rollouts: 40, maxDurationMs: 3000, randomTop: 4, secondChance: 0.55, responseThreshold: 3.5 },
+  average: { label: 'Average', rollouts: 55, maxDurationMs: 3600, randomTop: 2, secondChance: 0.20, responseThreshold: 2.2 },
+  strong: { label: 'Strong', rollouts: 80, maxDurationMs: 4700, randomTop: 2, secondChance: 0.07, responseThreshold: 1.25 },
+  best: { label: 'Best available', rollouts: 140, maxDurationMs: 7500, randomTop: 1, secondChance: 0, responseThreshold: 0.5 },
+};
+const BOT_SPEEDS = { watch: 1150, fast: 380, instant: 40 };
+
+function loadBotPrefs() {
+  try {
+    return { enabled: false, difficulty: 'strong', speed: 'fast', ...JSON.parse(localStorage.getItem(BOT_PREFS_KEY) || '{}') };
+  } catch {
+    return { enabled: false, difficulty: 'strong', speed: 'fast' };
+  }
+}
+
+const botPrefs = loadBotPrefs();
+const bot = {
+  playerId: 'p2',
+  enabled: Boolean(botPrefs.enabled),
+  difficulty: BOT_DIFFICULTIES[botPrefs.difficulty] ? botPrefs.difficulty : 'strong',
+  speed: BOT_SPEEDS[botPrefs.speed] != null ? botPrefs.speed : 'fast',
+  paused: false,
+  thinking: false,
+  timer: null,
+  runToken: 0,
+  actionsThisTurn: 0,
+  lastTurnNumber: 0,
+  lastAction: '',
+  lastReason: '',
+  lastResponseFingerprint: '',
+  pendingSpell: null,
+  pendingCombat: null,
+  defenseFingerprint: '',
+};
+
+function saveBotPrefs() {
+  try { localStorage.setItem(BOT_PREFS_KEY, JSON.stringify({ enabled: bot.enabled, difficulty: bot.difficulty, speed: bot.speed })); } catch {}
+}
+
+function botDifficultyConfig() { return BOT_DIFFICULTIES[bot.difficulty] || BOT_DIFFICULTIES.strong; }
+function botDelay() { return Number(BOT_SPEEDS[bot.speed] ?? BOT_SPEEDS.fast); }
+function botPlayerName(state = getState()) { return state.players?.[bot.playerId]?.name || 'Autoplay Bot'; }
+function botIsActiveSolo() { return bot.enabled && !isOnlineMultiplayer(); }
+function botModalBlocked() { return Boolean(ui.setupOpen || ui.settingsOpen || ui.scry || ui.localDialog || ui.undoRequest || ui.overrideRequest || ui.loading || ui.libraryEffectPicker || ui.abilityCostChoice || ui.cardQuickEditor); }
+
+function botCardInState(state, cardId) {
+  if (!cardId) return null;
+  const found = findCard(cardId, state);
+  return found?.card || state.stack?.find((card) => card.instanceId === cardId) || null;
+}
+
+function botCardRoleScore(card) {
+  const text = `${card?.typeLine || ''}\n${card?.oracleText || ''}`.toLocaleLowerCase();
+  const mv = Number(card?.manaValue || 0);
+  let score = 0;
+  if (isLand(card)) score += 1.4;
+  if (/add \{[wubrgc]/i.test(card?.oracleText || '') && mv <= 3) score += 2.4;
+  if (/draw (?:a|one|two|three|\d+)/i.test(card?.oracleText || '')) score += 1.5;
+  if (/destroy target|exile target|counter target spell/i.test(card?.oracleText || '')) score += 1.4;
+  if (/search your library/i.test(card?.oracleText || '')) score += 1.2;
+  if (mv <= 3 && !isLand(card)) score += 1.2;
+  if (mv >= 7) score -= 1.4;
+  if (card?.commander) score += 2;
+  if (/board wipe|destroy all creatures|exile all creatures/i.test(text)) score += 0.6;
+  return score;
+}
+
+function botOpeningHandDecision(state) {
+  const player = state.players[bot.playerId];
+  const hand = player?.zones?.hand || [];
+  const lands = hand.filter(isLand).length;
+  const cheapMana = hand.filter((card) => !isLand(card) && Number(card.manaValue || 0) <= 2 && /add \{|treasure/i.test(card.oracleText || '')).length;
+  const earlyPlays = hand.filter((card) => !isLand(card) && Number(card.manaValue || 0) <= 3).length;
+  const averageMv = hand.filter((card) => !isLand(card)).reduce((sum, card) => sum + Number(card.manaValue || 0), 0) / Math.max(1, hand.filter((card) => !isLand(card)).length);
+  const mulligans = Number(player?.mulligans || 0);
+  const functional = (lands >= 2 && lands <= 4 && earlyPlays >= 1) || (lands === 1 && cheapMana >= 1 && earlyPlays >= 2) || (lands === 5 && earlyPlays >= 1);
+  const tooSlow = averageMv > 5.3 && lands < 4;
+  const keep = functional && !tooSlow || mulligans >= 3;
+  return { keep, lands, cheapMana, earlyPlays, averageMv };
+}
+
+function botBottomCards(state, count) {
+  const hand = [...(state.players[bot.playerId]?.zones?.hand || [])];
+  const landCount = hand.filter(isLand).length;
+  return hand
+    .map((card) => {
+      let keepScore = botCardRoleScore(card);
+      if (isLand(card) && landCount > 4) keepScore -= 2.2;
+      if (!isLand(card) && Number(card.manaValue || 0) >= 6) keepScore -= 1.1;
+      return { card, keepScore };
+    })
+    .sort((a, b) => a.keepScore - b.keepScore)
+    .slice(0, Math.max(0, count))
+    .map((item) => item.card.instanceId);
+}
+
+function botCommitState(result, label) {
+  if (!result?.ok || !result.state) return false;
+  const next = deepClone(result.state);
+  delete next._coach;
+  updateState((draft) => {
+    for (const key of Object.keys(draft)) delete draft[key];
+    Object.assign(draft, next);
+  }, { log: `🤖 ${botPlayerName(next)}: ${label}.` });
+  return true;
+}
+
+function botChooseResult(results = []) {
+  if (!results.length) return null;
+  const config = botDifficultyConfig();
+  const candidates = results.slice(0, Math.max(1, config.randomTop));
+  if (candidates.length === 1) return candidates[0];
+  if (Math.random() < config.secondChance) return candidates[Math.floor(Math.random() * candidates.length)];
+  return candidates[0];
+}
+
+function executableStep(result) {
+  if (!result) return null;
+  if (result.type === 'sequence') return result.steps?.[0] ? { ...result.steps[0], plannedLine: result.label } : null;
+  return result;
+}
+
+function botActionReason(result) {
+  return result?.explanationDetails?.headline || result?.explanation || result?.plannedLine || 'Best visible line from the current board.';
+}
+
+function botSchedule(delay = botDelay()) {
+  clearTimeout(bot.timer);
+  const token = ++bot.runToken;
+  bot.timer = setTimeout(() => {
+    if (token !== bot.runToken) return;
+    runBotLoop().catch((error) => {
+      console.error('Autoplay bot failed', error);
+      bot.thinking = false;
+      bot.paused = true;
+      bot.lastReason = error?.message || 'The bot hit an unsupported position.';
+      render({ force: true });
+      toast(`Autoplay paused: ${bot.lastReason}`, true);
+    });
+  }, Math.max(0, Number(delay || 0)));
+}
+
+function botCancelSchedule() { clearTimeout(bot.timer); bot.timer = null; bot.runToken += 1; }
+
+async function botHandleOpeningHand(state) {
+  if (!state.openingHands?.active || state.openingHands.kept?.[bot.playerId]) return false;
+  const decision = botOpeningHandDecision(state);
+  if (!decision.keep) {
+    mulligan(bot.playerId);
+    bot.lastAction = 'Mulligan';
+    bot.lastReason = `Opening hand had ${decision.lands} land${decision.lands === 1 ? '' : 's'} and did not meet the deck's early-game keep profile.`;
+    botSchedule(botDelay());
+    return true;
+  }
+  const required = Number(state.openingHands.bottomRequired?.[bot.playerId] || 0);
+  const bottoms = botBottomCards(state, required);
+  const result = keepOpeningHand(bot.playerId, bottoms);
+  if (result?.ok) {
+    bot.lastAction = 'Kept opening hand';
+    bot.lastReason = `Kept a functional ${decision.lands}-land hand with ${decision.earlyPlays} early play${decision.earlyPlays === 1 ? '' : 's'}.`;
+  }
+  return true;
+}
+
+function botHumanSpellFingerprint(state) {
+  const top = state.stack?.at(-1);
+  if (!top || top.controller === bot.playerId) return '';
+  return `${state.turnNumber}:${state.phaseIndex}:${top.instanceId}:${state.stack.length}`;
+}
+
+async function botMaybeRespondToHumanSpell(state) {
+  const fingerprint = botHumanSpellFingerprint(state);
+  if (!fingerprint || fingerprint === bot.lastResponseFingerprint || bot.pendingSpell) return false;
+  bot.lastResponseFingerprint = fingerprint;
+  const config = botDifficultyConfig();
+  bot.thinking = true;
+  render({ force: true });
+  const analysis = await analyzePositionAsync(deepClone(state), bot.playerId, Math.max(40, Math.min(config.rollouts, 70)), {
+    maxDurationMs: Math.min(config.maxDurationMs, 4200),
+    shouldCancel: () => !botIsActiveSolo() || bot.paused,
+  });
+  bot.thinking = false;
+  if (!analysis?.results?.length || !botIsActiveSolo() || bot.paused) return false;
+  const hold = analysis.results.find((item) => executableStep(item)?.type === 'hold');
+  const responses = analysis.results.filter((item) => {
+    const step = executableStep(item);
+    if (!step || step.type !== 'cast-spell') return false;
+    const card = botCardInState(state, step.cardId);
+    return card && /\bInstant\b/i.test(String(card.typeLine || ''));
+  });
+  const best = responses[0];
+  if (!best) return false;
+  if (hold && Number(best.score || 0) < Number(hold.score || 0) + config.responseThreshold) return false;
+  const step = executableStep(best);
+  return botCastWithPriority(step, best);
+}
+
+function botCastWithPriority(step, scoredResult = step) {
+  const state = getState();
+  const found = findCard(step.cardId, state);
+  if (!found) return false;
+  // Kicker, Auras, and X spells still need richer choice plumbing. They use the
+  // deterministic tactical executor for now rather than making a fake priority window.
+  const complicated = Boolean(step.kicked) || /\bAura\b/i.test(String(found.card.typeLine || '')) || /\{X\}/i.test(String(found.card.manaCost || ''));
+  if (complicated) return botExecuteTacticalStep(step, scoredResult);
+  const result = moveCard(step.cardId, bot.playerId, 'stack');
+  if (!result?.ok) return false;
+  bot.pendingSpell = { cardId: step.cardId, action: deepClone(step), label: step.label || `Cast ${found.card.name}` };
+  bot.lastAction = step.label || `Cast ${found.card.name}`;
+  bot.lastReason = botActionReason(scoredResult);
+  bot.thinking = false;
+  render({ force: true });
+  return true;
+}
+
+function botExecuteTacticalStep(step, scoredResult = step) {
+  if (!step) return false;
+  if (step.type === 'hold' || step.type === 'advance-phase' || step.type === 'advance-land') {
+    const result = nextPhase();
+    if (result?.ok) {
+      bot.lastAction = 'Passed / advanced phase';
+      bot.lastReason = botActionReason(scoredResult);
+      return true;
+    }
+    return false;
+  }
+  if (step.type === 'attack') {
+    let declared = 0;
+    for (const cardId of step.cardIds || []) {
+      const result = toggleAttack(cardId);
+      if (result?.ok) declared += 1;
+    }
+    if (declared) {
+      bot.pendingCombat = { attackerId: bot.playerId, label: step.label || 'Attack' };
+      bot.lastAction = step.label || 'Declared attackers';
+      bot.lastReason = `${botActionReason(scoredResult)} Choose your blocks, then resolve combat.`;
+      render({ force: true });
+      return true;
+    }
+    return false;
+  }
+  if (['cast-permanent', 'cast-spell', 'cast-commander'].includes(step.type)) return botCastWithPriority(step, scoredResult);
+  const current = getState();
+  const result = applyTacticalAction(current, bot.playerId, step, { autoResolve: true });
+  if (!result?.ok) return false;
+  const committed = botCommitState(result, step.label || step.type);
+  if (committed) {
+    bot.lastAction = step.label || step.type;
+    bot.lastReason = botActionReason(scoredResult);
+  }
+  return committed;
+}
+
+async function runBotTurnDecision(state) {
+  const config = botDifficultyConfig();
+  if (bot.lastTurnNumber !== Number(state.turnNumber || 0)) {
+    bot.lastTurnNumber = Number(state.turnNumber || 0);
+    bot.actionsThisTurn = 0;
+  }
+  if (bot.actionsThisTurn >= 18) {
+    bot.lastAction = 'Safety pass';
+    bot.lastReason = 'Turn action safety limit reached; advanced the phase to prevent an autoplay loop.';
+    nextPhase();
+    return true;
+  }
+  bot.thinking = true;
+  render({ force: true });
+  const snapshot = deepClone(state);
+  const result = await analyzePositionAsync(snapshot, bot.playerId, config.rollouts, {
+    maxDurationMs: config.maxDurationMs,
+    shouldCancel: () => !botIsActiveSolo() || bot.paused || bot.pendingSpell || bot.pendingCombat,
+  });
+  bot.thinking = false;
+  if (!result?.results?.length || !botIsActiveSolo() || bot.paused) return false;
+  const chosen = botChooseResult(result.results);
+  const step = executableStep(chosen);
+  if (!step) return false;
+  const acted = botExecuteTacticalStep(step, chosen);
+  if (acted) bot.actionsThisTurn += 1;
+  return acted;
+}
+
+function botAssignDefense(state) {
+  const attackers = state.players.p1?.zones?.battlefield?.filter((card) => card.attacking) || [];
+  if (!attackers.length) return false;
+  const fingerprint = `${state.turnNumber}:${attackers.map((card) => card.instanceId).sort().join(',')}`;
+  if (fingerprint === bot.defenseFingerprint) return false;
+  bot.defenseFingerprint = fingerprint;
+  const advice = defenseAdvice(state);
+  let blocks = 0;
+  for (const assignment of advice?.assignments || []) {
+    for (const blockerId of assignment.blockerIds || []) {
+      const result = assignBlocker(blockerId, assignment.attackerId);
+      if (result?.ok) blocks += 1;
+    }
+  }
+  bot.pendingCombat = { attackerId: 'p1', label: blocks ? `Bot assigned ${blocks} blocker${blocks === 1 ? '' : 's'}` : 'Bot chose not to block' };
+  bot.lastAction = bot.pendingCombat.label;
+  bot.lastReason = blocks ? 'Blocks were chosen from visible combat trades and threat value.' : 'Taking the damage scored better than making a poor trade.';
+  render({ force: true });
+  return true;
+}
+
+function botResolveCombatAndContinue() {
+  const pending = bot.pendingCombat;
+  if (!pending) return;
+  const result = resolveMarkedCombat(getState(), pending.attackerId);
+  if (!result?.ok) {
+    bot.pendingCombat = null;
+    toast(result?.reason || 'Combat could not be resolved automatically.', true);
+    return;
+  }
+  botCommitState(result, 'resolved combat damage');
+  bot.pendingCombat = null;
+  bot.defenseFingerprint = '';
+  const state = getState();
+  if (PHASES[state.phaseIndex]?.id === 'combat') nextPhase();
+  botSchedule(botDelay());
+}
+
+function botPendingEffectCardScore(card, smart, state) {
+  if (!card) return -999;
+  let score = botCardRoleScore(card);
+  const type = String(card.typeLine || '').toLocaleLowerCase();
+  const oracle = String(card.oracleText || '').toLocaleLowerCase();
+
+  if (smart?.kind === 'search-library' && smart.destination === 'battlefield' && type.includes('land')) {
+    score += 5;
+    if (type.includes('basic')) score += 2.2;
+    if (/enters (?:the battlefield )?tapped/.test(oracle) && !/unless|if you control|you may pay/.test(oracle)) score -= 3.5;
+    score += Math.min(2.5, new Set(card.colorIdentity || card.colors || []).size * 0.7);
+  }
+
+  if (smart?.destination === 'hand') {
+    score += Math.max(0, 3.5 - Number(card.manaValue || 0) * 0.18);
+    if (/destroy target|exile target|counter target spell/i.test(card.oracleText || '')) score += 2;
+  }
+
+  return score;
+}
+
+function botResolveOwnSupportedPendingEffects(maxSteps = 10) {
+  if (!botIsActiveSolo()) return 0;
+  let resolved = 0;
+
+  for (let step = 0; step < Math.max(1, Number(maxSteps || 10)); step += 1) {
+    const state = getState();
+    const effect = (state.pendingTriggers || []).find((item) =>
+      item.controllerId === bot.playerId
+      && (!item.conditionText || item.conditionStatus === 'met' || item.conditionStatus === 'not-required')
+    );
+    if (!effect) break;
+
+    const smart = smartPendingEffectState(effect, state);
+    if (!smart?.kind) break;
+
+    let result = null;
+
+    if (smart.kind === 'search-library') {
+      const ordered = [...(smart.cards || [])]
+        .sort((a, b) => botPendingEffectCardScore(b, smart, state) - botPendingEffectCardScore(a, smart, state));
+      const chooseCount = Math.min(Number(smart.maxCount || 1), ordered.length);
+
+      if (!chooseCount) {
+        updateState((draft) => {
+          if (smart.shuffle) draft.players[smart.playerId].zones.library = shuffle(draft.players[smart.playerId].zones.library);
+          draft.pendingTriggers = draft.pendingTriggers.filter((item) => item.id !== effect.id);
+        }, { log: `🤖 ${effect.sourceName}: searched the library and found no card${smart.shuffle ? ', then shuffled' : ''}.` });
+        result = { ok: true };
+      } else {
+        result = resolveSmartLibraryEffect(effect.id, ordered.slice(0, chooseCount).map((card) => card.instanceId));
+      }
+    } else if (smart.kind === 'graveyard-move' || smart.kind === 'return-own-graveyard-creature') {
+      const ordered = [...(smart.cards || [])]
+        .sort((a, b) => botPendingEffectCardScore(b, smart, state) - botPendingEffectCardScore(a, smart, state));
+      result = ordered.length
+        ? resolveSmartPendingEffect(effect.id, ordered[0].instanceId)
+        : resolveSmartPendingEffectNoResult(effect.id);
+    } else if (['draw-cards', 'gain-life', 'lose-life', 'opponents-lose-life', 'mill-cards', 'create-token'].includes(smart.kind)) {
+      result = resolveSmartPendingEffect(effect.id, '');
+    } else if (['sacrifice-permanent', 'discard-card', 'hand-to-graveyard'].includes(smart.kind)) {
+      const candidates = [...(smart.cards || [])]
+        .sort((a, b) => botPendingEffectCardScore(a, smart, state) - botPendingEffectCardScore(b, smart, state));
+      const amount = Math.min(Math.max(0, Number(smart.amount || 1)), candidates.length);
+      result = amount
+        ? resolveSmartPendingEffectMulti(effect.id, candidates.slice(0, amount).map((card) => card.instanceId))
+        : resolveSmartPendingEffectNoResult(effect.id);
+    } else {
+      break;
+    }
+
+    if (!result?.ok) break;
+    resolved += 1;
+  }
+
+  return resolved;
+}
+
+function botSpellUsesDeterministicForgeResolution(card) {
+  const text = String(card?.oracleText || '');
+  return /search your library/i.test(text)
+    || /\bdraw (?:a|one|two|three|four|five|six|\d+) cards?\b/i.test(text)
+    || /\byou (?:gain|lose) (?:a|one|two|three|four|five|six|\d+) life\b/i.test(text)
+    || /\byou mill (?:a|one|two|three|four|five|six|\d+) cards?\b/i.test(text)
+    || /\bcreate (?:a|an|one|two|three|four|five|six|\d+) .+ tokens?\b/i.test(text)
+    || /\b(?:return|put).+\bcard.+from .+graveyard\b/i.test(text);
+}
+
+function botAdvanceStackPriority() {
+  const state = getState();
+  const top = state.stack?.at(-1);
+  if (!top) {
+    bot.pendingSpell = null;
+    botSchedule(botDelay());
+    render({ force: true });
+    return;
+  }
+  if (bot.pendingSpell && top.instanceId === bot.pendingSpell.cardId) {
+    const liveCard = top;
+
+    if (botSpellUsesDeterministicForgeResolution(liveCard)) {
+      const result = resolveStackTop();
+      if (!result?.ok) return toast(result?.message || 'Bot spell could not resolve.', true);
+      const label = `${liveCard.name || 'Bot spell'} resolved`;
+      bot.pendingSpell = null;
+      bot.lastAction = label;
+      botResolveOwnSupportedPendingEffects();
+      botSchedule(botDelay());
+      render({ force: true });
+      return;
+    }
+
+    const result = resolveTacticalStackTop(state, bot.playerId, bot.pendingSpell.cardId, { kicked: Boolean(bot.pendingSpell.action?.kicked) });
+    if (!result?.ok) return toast(result?.reason || 'Bot spell could not resolve.', true);
+    const label = `${result.card?.name || 'Bot spell'} resolved`;
+    botCommitState(result, label);
+    bot.pendingSpell = null;
+    bot.lastAction = label;
+    botSchedule(botDelay());
+    return;
+  }
+  // A human response is above the bot spell. Resolve only that top object; the
+  // bot spell remains waiting underneath and the human gets another priority window.
+  handleResult(resolveStackTop());
+  render({ force: true });
+}
+
+function botStateChanged(state) {
+  if (!botIsActiveSolo()) return;
+  if (bot.pendingSpell && !state.stack?.some((card) => card.instanceId === bot.pendingSpell.cardId)) {
+    bot.pendingSpell = null;
+    botSchedule(botDelay());
+  }
+  if (bot.paused || botModalBlocked() || state.winner) return;
+  if (state.openingHands?.active && !state.openingHands.kept?.[bot.playerId]) return botSchedule(120);
+  if (state.openingHands?.active) return;
+  if (bot.pendingSpell || bot.pendingCombat || bot.thinking) return;
+  if (state.activePlayerId === 'p1' && PHASES[state.phaseIndex]?.id === 'combat' && state.players.p1?.zones?.battlefield?.some((card) => card.attacking)) {
+    clearTimeout(bot.timer);
+    bot.timer = setTimeout(() => botAssignDefense(getState()), 120);
+    return;
+  }
+  if (state.stack?.length && state.stack.at(-1)?.controller !== bot.playerId) return botSchedule(150);
+  if (state.activePlayerId === bot.playerId) botSchedule(botDelay());
+}
+
+async function runBotLoop() {
+  if (!botIsActiveSolo() || bot.paused || botModalBlocked()) return;
+  const state = getState();
+  if (state.winner) return;
+  if (state.openingHands?.active && !state.openingHands.kept?.[bot.playerId]) {
+    await botHandleOpeningHand(state);
+    return;
+  }
+  if (state.openingHands?.active || bot.pendingSpell || bot.pendingCombat) return;
+  if (state.stack?.length && state.stack.at(-1)?.controller !== bot.playerId) {
+    const responded = await botMaybeRespondToHumanSpell(state);
+    if (!responded) render({ force: true });
+    return;
+  }
+  if (state.activePlayerId !== bot.playerId) return;
+  const acted = await runBotTurnDecision(state);
+  if (acted && !bot.pendingSpell && !bot.pendingCombat) botSchedule(botDelay());
+  else render({ force: true });
+}
+
+function setBotPreference(field, value) {
+  if (field === 'enabled') bot.enabled = value === 'bot';
+  if (field === 'difficulty' && BOT_DIFFICULTIES[value]) bot.difficulty = value;
+  if (field === 'speed' && BOT_SPEEDS[value] != null) bot.speed = value;
+  bot.paused = false;
+  if (!bot.enabled) {
+    bot.pendingSpell = null;
+    bot.pendingCombat = null;
+    botCancelSchedule();
+  }
+  saveBotPrefs();
+  render({ force: true });
+  if (bot.enabled) botSchedule(120);
+}
+
+function renderBotSetupControls() {
+  return `<section class="bot-setup-card"><div><strong>Opponent control</strong><div class="small muted">Give Player 2 any precon or custom Commander deck. The bot analyzes that deck and pilots it without seeing your hidden hand or library.</div></div><div class="bot-setup-grid"><label>Control<select data-bot-setting="enabled"><option value="manual" ${bot.enabled ? '' : 'selected'}>Manual / second local player</option><option value="bot" ${bot.enabled ? 'selected' : ''}>Autoplay Bot</option></select></label><label>Strength<select data-bot-setting="difficulty" ${bot.enabled ? '' : 'disabled'}><option value="casual" ${bot.difficulty === 'casual' ? 'selected' : ''}>Casual</option><option value="average" ${bot.difficulty === 'average' ? 'selected' : ''}>Average</option><option value="strong" ${bot.difficulty === 'strong' ? 'selected' : ''}>Strong (recommended)</option><option value="best" ${bot.difficulty === 'best' ? 'selected' : ''}>Best available</option></select></label><label>Turn speed<select data-bot-setting="speed" ${bot.enabled ? '' : 'disabled'}><option value="watch" ${bot.speed === 'watch' ? 'selected' : ''}>Watch each action</option><option value="fast" ${bot.speed === 'fast' ? 'selected' : ''}>Fast</option><option value="instant" ${bot.speed === 'instant' ? 'selected' : ''}>Instant</option></select></label></div></section>`;
+}
+
+function renderBotStatus(state) {
+  if (!botIsActiveSolo() || !state.started) return '';
+  const profile = buildStrategyProfile(state.players[bot.playerId]);
+  const plan = strategyLabel(profile);
+  let status = bot.paused ? 'Paused' : bot.thinking ? 'Thinking…' : state.activePlayerId === bot.playerId ? 'Autoplaying turn' : 'Waiting';
+  let priority = '';
+  if (bot.pendingSpell) {
+    const top = state.stack?.at(-1);
+    status = 'Waiting for your priority';
+    priority = `<div class="bot-priority"><strong>${escapeHtml(botPlayerName(state))} cast ${escapeHtml(botCardInState(state, bot.pendingSpell.cardId)?.name || bot.pendingSpell.label || 'a spell')}.</strong><span>You have priority. Add a response to the stack, counter it, or pass.</span><button class="btn primary small-btn" data-action="bot-stack-continue">${top?.instanceId === bot.pendingSpell.cardId ? 'Pass · let bot spell resolve' : 'Resolve top response'}</button></div>`;
+  }
+  if (bot.pendingCombat) {
+    status = 'Combat waiting';
+    priority = `<div class="bot-priority"><strong>${escapeHtml(bot.pendingCombat.label || 'Combat')}</strong><span>${bot.pendingCombat.attackerId === bot.playerId ? 'Choose your blockers and combat responses.' : 'The bot has chosen its blocks.'}</span><button class="btn primary small-btn" data-action="bot-resolve-combat">Resolve combat & continue</button></div>`;
+  }
+  return `<section class="bot-status-bar"><div class="bot-status-main"><span class="bot-dot ${bot.paused ? 'paused' : bot.thinking ? 'thinking' : ''}"></span><div><strong>Autoplay Bot · ${escapeHtml(BOT_DIFFICULTIES[bot.difficulty]?.label || 'Strong')}</strong><span>${escapeHtml(status)} · Deck plan: ${escapeHtml(plan)}</span>${bot.lastAction ? `<span class="bot-last">Last: ${escapeHtml(bot.lastAction)}${bot.lastReason ? ` — ${escapeHtml(bot.lastReason)}` : ''}</span>` : ''}</div></div><div class="bot-status-actions"><button class="btn small-btn" data-action="bot-toggle-pause">${bot.paused ? '▶ Resume bot' : 'Ⅱ Pause bot'}</button><button class="btn ghost small-btn" data-action="bot-takeover">Take over opponent</button></div>${priority}</section>`;
+}
+
+window.CommanderForgeMode = {
+  select(mode) {
+    if (mode === 'solo') {
+      disconnectMultiplayer();
+    } else if (mode === 'online') {
+      multiplayer.mode = 'online';
+      ui.drawer = null;
+      ui.inspectorOpen = false;
+      ui.attackTargetPicker = null;
+      ui.libraryEffectPicker = null;
+      ui.abilityCostChoice = null;
+      ui.cardContextMenu = null;
+      ui.cardQuickEditor = null;
+    }
+    ui.setupOpen = true;
+    render();
+  },
+};
+
+const d20Runtime = {
+  raf: 0,
+  canvas: null,
+  dragging: false,
+  pos: { x: 0, y: 0 },
+  velocity: { x: 0, y: 0 },
+  rotation: { x: 0.35, y: 0.55, z: 0.15 },
+  angular: { x: 0, y: 0, z: 0 },
+  lastPointer: null,
+  lastTime: 0,
+  releasedAt: 0,
+  submitted: false,
+  faceCache: null,
+  botRollTimer: null,
+  sessionKey: '',
+};
+
+restore();
+const joinFromUrl = normalizeInviteCode(new URLSearchParams(location.search).get('join') || '');
+if (joinFromUrl) {
+  multiplayer.mode = 'online';
+  multiplayer.pendingJoinCode = joinFromUrl;
+}
+if (!getState().started) ui.setupOpen = true;
+subscribe(render);
+subscribe(multiplayerStateChanged);
+subscribe(botStateChanged);
+render();
+window.__forgeStarted = true;
+if (botIsActiveSolo()) botSchedule(180);
+if (joinFromUrl) setTimeout(() => joinOnlineHost(joinFromUrl), 250);
+
+function captureInspectorView() {
+  const inspector = app.querySelector?.('.inspector');
+  if (inspector) ui.inspectorScrollTop = inspector.scrollTop;
+  const active = document.activeElement;
+  if (active?.matches?.('.card-note')) {
+    ui.inspectorFocus = {
+      cardId: active.dataset.cardId,
+      start: active.selectionStart ?? active.value.length,
+      end: active.selectionEnd ?? active.value.length,
+    };
+  } else ui.inspectorFocus = null;
+}
+
+function restoreInspectorView() {
+  const inspector = app.querySelector?.('.inspector');
+  if (inspector) inspector.scrollTop = ui.inspectorScrollTop || 0;
+  if (ui.inspectorFocus) {
+    const note = app.querySelector?.(`.card-note[data-card-id="${ui.inspectorFocus.cardId}"]`);
+    if (note) {
+      note.focus({ preventScroll: true });
+      note.setSelectionRange(ui.inspectorFocus.start, ui.inspectorFocus.end);
+    }
+  }
+}
+
+function activeSetupEditor() {
+  if (!ui.setupOpen) return null;
+  const active = document.activeElement;
+  if (!active || !app.contains(active)) return null;
+  return active.matches?.('[data-draft-field], [data-commander-select], #join-code') ? active : null;
+}
+
+function scheduleSetupRenderFlush() {
+  if (!ui.setupRenderPending) return;
+  clearTimeout(ui.setupRenderTimer);
+  ui.setupRenderTimer = setTimeout(() => {
+    if (activeSetupEditor()) return;
+    ui.setupRenderPending = false;
+    render({ force: true });
+  }, 180);
+}
+
+
+function openLocalDialog(config = {}) {
+  return new Promise((resolve) => {
+    ui.localDialog = {
+      title: config.title || 'Commander Forge',
+      kicker: config.kicker || '',
+      icon: config.icon || '⚠',
+      message: config.message || '',
+      confirmLabel: config.confirmLabel || 'OK',
+      cancelLabel: config.cancelLabel || 'Cancel',
+      variant: config.variant || '',
+      resolve,
+    };
+    render();
+  });
+}
+
+async function confirmWithForgeUI(message, config = {}) {
+  return openLocalDialog({ ...config, message });
+}
+
+function resolveLocalDialog(approved) {
+  const resolver = ui.localDialog?.resolve;
+  ui.localDialog = null;
+  render();
+  if (resolver) resolver(Boolean(approved));
+}
+
+function renderLocalDialog() {
+  const dialog = ui.localDialog;
+  if (!dialog) return '';
+  const lines = String(dialog.message || '').split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  const detail = lines.length
+    ? `<div class="forge-approval-message">${lines.map((line) => `<p>${escapeHtml(line)}</p>`).join('')}</div>`
+    : '';
+  return `<div class="forge-approval-backdrop"><section class="forge-approval-card ${escapeHtml(dialog.variant || '')}" role="dialog" aria-modal="true" aria-labelledby="forge-local-dialog-title"><div class="forge-approval-kicker">${escapeHtml(dialog.kicker || 'RULES CHECK')}</div><div class="forge-approval-icon">${escapeHtml(dialog.icon || '⚠')}</div><h2 id="forge-local-dialog-title">${escapeHtml(dialog.title || 'Commander Forge')}</h2>${detail}<div class="forge-approval-actions"><button class="btn primary" data-action="local-dialog-confirm">${escapeHtml(dialog.confirmLabel || 'OK')}</button><button class="btn ghost" data-action="local-dialog-cancel">${escapeHtml(dialog.cancelLabel || 'Cancel')}</button></div></section></div>`;
+}
+
+function getMoveOverridePrompt(instanceId, targetPlayerId, targetZone, options = {}) {
+  if (options.force) return null;
+  const currentState = window.CommanderForge.getState();
+  const source = findCard(instanceId, currentState);
+  if (!source) return null;
+  const castAttempt = ['hand', 'command'].includes(source.zone)
+    && (targetZone === 'stack' || (targetZone === 'battlefield' && !isLand(source.card)));
+  let xValue = Number.isFinite(options.xValue) ? options.xValue : 0;
+  const reasons = [];
+  if (castAttempt && !options.skipPayment && /\{X\}/i.test(source.card.manaCost || '') && !Number.isFinite(options.xValue)) {
+    return null;
+  }
+  const legality = moveLegality(currentState, source.card, source, targetPlayerId, targetZone, { xValue });
+  if (!legality.legal) reasons.push(...(legality.reasons || []));
+  if (!reasons.length) return null;
+  if (currentState.settings.rulesMode === 'strict' && !currentState.settings.testOverrides) return null;
+  return {
+    message: reasons.join('\n\n'),
+    title: 'Override required',
+    kicker: currentState.settings.testOverrides ? 'TEST OVERRIDE' : 'MANUAL OVERRIDE',
+    icon: currentState.settings.testOverrides ? '🧪' : '⚠',
+    confirmLabel: currentState.settings.testOverrides ? 'Use Test Override' : 'Override anyway',
+    cancelLabel: 'Cancel',
+  };
+}
+
+async function moveSelectedToWithUi(cardId, zone, position = 'top', options = {}) {
+  const found = findCard(cardId, getState());
+  if (!found) return;
+  const targetPlayerId = zone === 'hand' || zone === 'library' || zone === 'graveyard' || zone === 'exile' || zone === 'command' ? found.card.owner : found.card.controller;
+  const promptConfig = getMoveOverridePrompt(cardId, targetPlayerId, zone, options);
+  const nextOptions = { libraryPosition: position, ...options };
+  if (promptConfig) {
+    const approved = await confirmWithForgeUI(promptConfig.message, promptConfig);
+    if (!approved) {
+      handleResult({ ok: false, message: 'Move cancelled.' });
+      return;
+    }
+    nextOptions.force = true;
+  }
+  handleResult(moveCard(cardId, targetPlayerId, zone, nextOptions));
+}
+
+async function moveSelectedToBattlefieldTappedWithUi(cardId) {
+  const found = findCard(cardId, getState());
+  if (!found || !isPermanent(found.card)) return;
+  const manualEffectSource = ['library', 'graveyard', 'exile'].includes(found.zone);
+  const options = {
+    enterTapped: true,
+    force: manualEffectSource,
+  };
+  if (!manualEffectSource) {
+    const promptConfig = getMoveOverridePrompt(cardId, found.card.controller, 'battlefield', options);
+    if (promptConfig) {
+      const approved = await confirmWithForgeUI(promptConfig.message, promptConfig);
+      if (!approved) {
+        handleResult({ ok: false, message: 'Move cancelled.' });
+        return;
+      }
+      options.force = true;
+    }
+  }
+  handleResult(moveCard(cardId, found.card.controller, 'battlefield', options));
+}
+
+function approvalProgressMarkup(request) {
+  const required = request.requiredApproverIds || [];
+  if (!required.length) return '<span>Waiting for the host to identify the active players…</span>';
+  const approved = required.filter((id) => request.votes?.[id] === true);
+  const denied = required.filter((id) => request.votes?.[id] === false);
+  const waiting = required.filter((id) => request.votes?.[id] === null || request.votes?.[id] === undefined);
+  const names = (ids) => ids.map((id) => multiplayerPlayerName(id)).join(', ');
+  return `<span>${approved.length}/${required.length} approvals${waiting.length ? ` · waiting for ${escapeHtml(names(waiting))}` : ''}${denied.length ? ` · denied by ${escapeHtml(names(denied))}` : ''}</span>`;
+}
+
+function renderUndoApproval() {
+  const request = ui.undoRequest;
+  if (!request) return '';
+  const lastAction = getState().log?.[0]?.text || 'the most recent game action';
+  if (request.direction === 'incoming') {
+    return `<div class="forge-approval-backdrop"><section class="forge-approval-card" role="dialog" aria-modal="true" aria-labelledby="forge-undo-request-title"><div class="forge-approval-kicker">TABLE APPROVAL</div><div class="forge-approval-icon">↶</div><h2 id="forge-undo-request-title">${escapeHtml(request.requesterName || 'Another player')} wants to undo</h2><div class="forge-approval-detail"><span>Action to rewind</span><strong>${escapeHtml(lastAction)}</strong></div><p>Every other connected active player must approve. One denial stops the request.</p><div class="forge-approval-progress">${approvalProgressMarkup(request)}</div><div class="forge-approval-actions"><button class="btn primary" data-action="approve-undo">✓ Approve</button><button class="btn danger" data-action="deny-undo">✕ Deny</button></div></section></div>`;
+  }
+  const voted = request.direction === 'voted';
+  return `<div class="forge-approval-waiting"><div><strong>↶ ${voted ? 'Undo vote sent' : 'Undo requested'}</strong>${approvalProgressMarkup(request)}</div>${request.direction === 'outgoing' ? '<button class="btn small-btn ghost" data-action="cancel-undo">Cancel request</button>' : ''}</div>`;
+}
+
+function renderOverrideApproval() {
+  const request = ui.overrideRequest;
+  if (!request) return '';
+  if (request.direction === 'incoming') {
+    return `<div class="forge-approval-backdrop"><section class="forge-approval-card override" role="dialog" aria-modal="true" aria-labelledby="forge-override-request-title"><div class="forge-approval-kicker">TABLE TEST OVERRIDE</div><div class="forge-approval-icon">🧪</div><h2 id="forge-override-request-title">${escapeHtml(request.requesterName || 'Another player')} wants to override the rules</h2><div class="forge-approval-detail"><span>Requested test action</span><strong>${escapeHtml(request.description || 'Use a Commander Forge Test Override.')}</strong></div><p>Every other connected active player must approve before the override is applied. One denial stops it.</p><div class="forge-approval-progress">${approvalProgressMarkup(request)}</div><div class="forge-approval-actions"><button class="btn primary" data-action="approve-override">✓ Approve</button><button class="btn danger" data-action="deny-override">✕ Deny</button></div></section></div>`;
+  }
+  const voted = request.direction === 'voted';
+  return `<div class="forge-approval-waiting override"><div><strong>🧪 ${voted ? 'Override vote sent' : 'Override requested'}</strong>${approvalProgressMarkup(request)}</div>${request.direction === 'outgoing' ? '<button class="btn small-btn ghost" data-action="cancel-override">Cancel request</button>' : ''}</div>`;
+}
+
+
+function renderCardContextMenu(state) {
+  const menu = ui.cardContextMenu;
+  if (!menu) return '';
+  const found = findCard(menu.cardId, state);
+  if (!found) return '';
+  const x = Math.max(8, Math.min(Number(menu.x || 0), Math.max(8, window.innerWidth - 230)));
+  const y = Math.max(8, Math.min(Number(menu.y || 0), Math.max(8, window.innerHeight - 180)));
+  return `<div class="card-context-menu" style="left:${x}px;top:${y}px" role="menu" aria-label="Card quick menu">
+    <div class="card-context-title"><strong>${escapeHtml(found.card.name)}</strong><span>Quick edit</span></div>
+    <button type="button" data-action="open-card-quick-editor" data-card-id="${found.card.instanceId}" data-editor="counters">◉ Counters</button>
+    <button type="button" data-action="open-card-quick-editor" data-card-id="${found.card.instanceId}" data-editor="keywords">✦ Keyword abilities</button>
+    <button type="button" class="context-close" data-action="close-card-context">Close</button>
+  </div>`;
+}
+
+function renderCardQuickEditor(state) {
+  const editor = ui.cardQuickEditor;
+  if (!editor) return '';
+  const found = findCard(editor.cardId, state);
+  if (!found) return '';
+  const card = found.card;
+  const mode = editor.mode === 'keywords' ? 'keywords' : 'counters';
+  const standardCounters = ['+1/+1', '-1/-1', 'charge', 'page', 'loyalty', 'stun'];
+  const referenced = referencedCounterTypes(card);
+  const counterContent = `<div class="quick-editor-section">
+      <div class="counter-row quick-counter-presets">${standardCounters.map((counter) => `<button class="btn small-btn" data-action="counter" data-card-id="${card.instanceId}" data-counter="${counter}" data-delta="1">+ ${counter}</button>`).join('')}</div>
+      ${referenced.length ? `<div class="quick-referenced-counters">${referenced.map((counter) => { const count = Number(card.counters?.[counter] || 0); return `<div class="named-counter-control"><strong>${escapeHtml(counter)}</strong><div class="named-counter-stepper"><button class="btn small-btn" data-action="counter" data-card-id="${card.instanceId}" data-counter="${escapeHtml(counter)}" data-delta="-1">−</button><span>${count}</span><button class="btn small-btn primary" data-action="counter" data-card-id="${card.instanceId}" data-counter="${escapeHtml(counter)}" data-delta="1">+</button></div></div>`; }).join('')}</div>` : ''}
+      <div class="custom-pt-counter"><label>Power<input id="custom-counter-power" type="number" value="1" step="1" /></label><label>Toughness<input id="custom-counter-toughness" type="number" value="0" step="1" /></label><button class="btn" data-action="custom-pt-counter" data-card-id="${card.instanceId}">Add P/T counter</button></div>
+      ${Object.entries(card.counters || {}).length ? `<div class="quick-current-counters"><h4>Current counters</h4>${Object.entries(card.counters || {}).filter(([, count]) => Number(count || 0) !== 0).map(([counter, count]) => `<div class="counter-row"><span>${escapeHtml(counter)}: ${count}</span><button class="btn small-btn" data-action="counter" data-card-id="${card.instanceId}" data-counter="${escapeHtml(counter)}" data-delta="-1">−</button><button class="btn small-btn" data-action="counter" data-card-id="${card.instanceId}" data-counter="${escapeHtml(counter)}" data-delta="1">+</button></div>`).join('')}</div>` : '<div class="small muted">No counters on this card.</div>'}
+    </div>`;
+  const keywordContent = `<div class="quick-editor-section">${renderManualKeywordEditor(card)}</div>`;
+  return `<div class="modal-backdrop card-quick-editor-backdrop"><section class="modal card-quick-editor-modal" role="dialog" aria-modal="true">
+    <header class="modal-header"><div class="quick-editor-heading"><img src="${escapeHtml(cardSmallImage(card))}" alt=""/><div><h2>${mode === 'counters' ? 'Counters' : 'Keyword abilities'}</h2><p>${escapeHtml(card.name)}</p></div></div><button class="icon-btn" data-action="close-card-quick-editor">×</button></header>
+    <div class="modal-body">${mode === 'counters' ? counterContent : keywordContent}</div>
+  </section></div>`;
+}
+
+function renderLibraryEffectPicker(state) {
+  const picker = ui.libraryEffectPicker;
+  if (!picker) return '';
+  const effect = state.pendingTriggers.find((item) => item.id === picker.effectId);
+  if (!effect) return `<div class="modal-backdrop library-effect-backdrop"><section class="modal small-modal"><header class="modal-header"><h2>Library search finished</h2><button class="icon-btn" data-action="close-library-effect-picker">×</button></header><div class="modal-body"><div class="validation">That pending effect is no longer active. Close this window and continue playing.</div><button class="btn primary" data-action="close-library-effect-picker">Continue</button></div></section></div>`;
+  const smart = smartPendingEffectState(effect, state);
+  if (smart.kind !== 'search-library') return `<div class="modal-backdrop library-effect-backdrop"><section class="modal small-modal"><header class="modal-header"><h2>Library search unavailable</h2><button class="icon-btn" data-action="close-library-effect-picker">×</button></header><div class="modal-body"><div class="validation warn">Forge could no longer match this effect to a library search. The table is not locked; close this window and resolve or dismiss the effect from Pending card effects.</div><button class="btn primary" data-action="close-library-effect-picker">Continue</button></div></section></div>`;
+  if (isOnlineMultiplayer() && multiplayer.localPlayerId && smart.playerId !== multiplayer.localPlayerId) {
+    return `<div class="modal-backdrop"><section class="modal small-modal"><header class="modal-header"><h2>Private library search</h2><button class="icon-btn" data-action="close-library-effect-picker">×</button></header><div class="modal-body"><div class="validation warn">The other player must resolve this library search on their own client so their library stays hidden.</div></div></section></div>`;
+  }
+  const selected = new Set(picker.selected || []);
+  const destinationLabel = smartLibraryDestinationLabel(smart.destination);
+  const cards = smart.cards || [];
+  return `<div class="modal-backdrop library-effect-backdrop"><section class="modal library-effect-modal" role="dialog" aria-modal="true">
+    <header class="modal-header"><div><h2>Search your library</h2><p class="small muted">${escapeHtml(effect.sourceName)} · find ${escapeHtml(smart.filterText || 'a card')} → ${escapeHtml(destinationLabel)}${smart.tapped ? ' tapped' : ''}</p></div><button class="icon-btn" data-action="close-library-effect-picker">×</button></header>
+    <div class="library-effect-toolbar"><input id="library-effect-search" type="search" placeholder="Search matching cards…" value="${escapeHtml(picker.search || '')}"/><span class="library-effect-count">Choose ${smart.zeroAllowed ? 'up to ' : ''}${smart.maxCount}</span></div>
+    <div class="modal-body library-effect-card-grid">${cards.map((card) => {
+      const searchText = `${card.name || ''} ${card.typeLine || ''} ${card.oracleText || ''}`.toLocaleLowerCase();
+      const isSelected = selected.has(card.instanceId);
+      return `<button class="library-effect-option ${isSelected ? 'selected' : ''}" data-action="toggle-library-effect-card" data-effect-id="${effect.id}" data-card-id="${card.instanceId}" data-search-text="${escapeHtml(searchText)}"><img src="${escapeHtml(cardSmallImage(card))}" alt="${escapeHtml(card.name)}"/><span>${escapeHtml(card.name)}</span>${isSelected ? '<b>✓</b>' : ''}</button>`;
+    }).join('') || '<div class="validation warn">No card in the library currently matches this search.</div>'}</div>
+    <footer class="library-effect-footer"><span>${selected.size}/${smart.maxCount} selected</span><div><button class="btn ghost" data-action="close-library-effect-picker">Close</button><button class="btn ghost" data-action="dismiss-library-effect" data-effect-id="${effect.id}">Already resolved manually</button><button class="btn primary" data-action="resolve-library-effect" data-effect-id="${effect.id}" ${(!selected.size && !smart.zeroAllowed) || selected.size > smart.maxCount ? 'disabled' : ''}>${selected.size ? `Move ${selected.size} card${selected.size === 1 ? '' : 's'}` : 'Choose none'}${smart.shuffle ? ' & shuffle' : ''}</button></div></footer>
+  </section></div>`;
+}
+
+function renderAbilityCostChoice(state) {
+  const choice = ui.abilityCostChoice;
+  if (!choice) return '';
+  const source = findCard(choice.cardId, state);
+  if (!source) return '';
+  const candidates = (choice.candidateIds || []).map((id) => findCard(id, state)).filter(Boolean);
+  return `<div class="modal-backdrop ability-cost-backdrop"><section class="modal ability-cost-modal" role="dialog" aria-modal="true">
+    <header class="modal-header"><div><div class="mulligan-kicker">PAY ABILITY COST</div><h2>${escapeHtml(choice.title || 'Choose a card')}</h2><p class="small muted">${escapeHtml(choice.detail || '')}</p></div><button class="icon-btn" data-action="close-ability-cost-choice">×</button></header>
+    <div class="modal-body ability-cost-card-grid">${candidates.map((located) => `<button class="ability-cost-option" data-action="pay-ability-cost-card" data-card-id="${choice.cardId}" data-ability-index="${choice.abilityIndex}" data-cost-kind="${choice.kind}" data-choice-card-id="${located.card.instanceId}"><img src="${escapeHtml(cardImage(located.card))}" alt="${escapeHtml(located.card.name)}"/><span>${escapeHtml(located.card.name)}</span></button>`).join('') || '<div class="validation warn">No legal card is available for this cost anymore.</div>'}</div>
+  </section></div>`;
+}
+
+function render(options = {}) {
+  const force = Boolean(options?.force);
+  if (!force && typeof d20Runtime !== 'undefined' && d20Runtime.canvas?.isConnected && (d20Runtime.dragging || (d20Runtime.releasedAt && !d20Runtime.submitted))) { ui.deferredRender = true; return; }
+  if (!force && ui.pointerActionActive) {
+    ui.deferredRender = true;
+    return;
+  }
+  if (!force && activeSetupEditor()) {
+    ui.setupRenderPending = true;
+    return;
+  }
+  ui.setupRenderPending = false;
+  ui.deferredRender = false;
+  captureInspectorView();
+  // Mobile setup scrolls on .setup-modal itself; desktop can scroll the body.
+  // Preserve both so async precon searches/loads never jump the user back to the top.
+  const setupModal = ui.setupOpen ? app.querySelector('.setup-modal') : null;
+  const setupBody = ui.setupOpen ? app.querySelector('.setup-modal .modal-body') : null;
+  if (setupModal) ui.setupScrollTop = setupModal.scrollTop;
+  if (setupBody) ui.setupBodyScrollTop = setupBody.scrollTop;
+  if (ui.setupOpen) {
+    app.querySelectorAll('.deck-panel[data-deck-panel]').forEach((panel) => {
+      const playerId = panel.dataset.deckPanel;
+      const results = panel.querySelector('.precon-results');
+      if (playerId && results) ui.preconScrollTops[playerId] = results.scrollTop;
+    });
+  }
+  const state = getState();
+  app.innerHTML = `
+    ${renderHeader(state)}
+    ${renderBotStatus(state)}
+    <main class="game-shell">
+      <section class="play-area">${renderTable(state)}</section>
+      <aside class="inspector ${ui.inspectorOpen ? 'open' : ''}">${renderInspector(state)}</aside>
+    </main>
+    ${renderBottomBar(state)}
+    ${renderDrawer(state)}
+    ${renderModals(state)}
+    ${renderCardContextMenu(state)}
+    ${renderCardQuickEditor(state)}
+    ${renderLibraryEffectPicker(state)}
+    ${renderAbilityCostChoice(state)}
+    ${renderLocalDialog()}
+    ${renderUndoApproval()}
+    ${renderOverrideApproval()}
+    ${ui.loading ? renderLoading() : ''}
+  `;
+  requestAnimationFrame(() => {
+    restoreInspectorView();
+    if (document.getElementById('forge-d20-canvas')) initD20Canvas();
+    const replacementSetupModal = ui.setupOpen ? app.querySelector('.setup-modal') : null;
+    const replacementSetupBody = ui.setupOpen ? app.querySelector('.setup-modal .modal-body') : null;
+    if (replacementSetupModal) replacementSetupModal.scrollTop = ui.setupScrollTop || 0;
+    if (replacementSetupBody) replacementSetupBody.scrollTop = ui.setupBodyScrollTop || 0;
+    if (ui.setupOpen) {
+      app.querySelectorAll('.deck-panel[data-deck-panel]').forEach((panel) => {
+        const playerId = panel.dataset.deckPanel;
+        const results = panel.querySelector('.precon-results');
+        if (playerId && results) results.scrollTop = ui.preconScrollTops[playerId] || 0;
+      });
+    }
+    const carousel = document.querySelector('.drawer-carousel');
+    if (carousel) carousel.addEventListener('wheel', horizontalWheel, { passive: false });
+  });
+}
+
+function renderMultiplayerTurnTracker(state) {
+  const order = [...(state.turnOrder || Object.keys(state.players || {}))];
+  for (const id of Object.keys(state.players || {})) if (!order.includes(id)) order.push(id);
+  if (!order.length) return '';
+  const localId = isOnlineMultiplayer() ? multiplayer.localPlayerId : null;
+  return `<div class="turn-order-tracker" aria-label="Turn order">
+    <span class="turn-order-label">Turn order</span>
+    ${order.map((id, index) => {
+      const player = state.players?.[id];
+      if (!player) return '';
+      const active = id === state.activePlayerId;
+      const local = id === localId;
+      const connected = multiplayerPlayerConnected(id);
+      return `<span class="turn-order-seat ${active ? 'active' : ''} ${local ? 'local' : ''} ${player.lost ? 'lost' : ''} ${!connected ? 'offline' : ''}" title="${escapeHtml(player.name)}${player.lost ? ' · eliminated' : !connected ? ' · disconnected' : active ? ' · active player' : ''}"><b>P${String(id).replace(/^p/,'')}</b><span>${escapeHtml(player.name)}</span>${active ? '<em>ACTIVE</em>' : ''}${local ? '<i>YOU</i>' : ''}${!connected ? '<i>OFFLINE</i>' : ''}</span>${index < order.length - 1 ? '<span class="turn-order-arrow">›</span>' : ''}`;
+    }).join('')}
+  </div>`;
+}
+
+function renderHeader(state) {
+  const phase = PHASES[state.phaseIndex] || PHASES[0];
+  const active = state.players?.[state.activePlayerId] || Object.values(state.players || {})[0] || { name: 'Waiting' };
+  const activeConnected = multiplayerPlayerConnected(state.activePlayerId);
+  const hostCanAdvanceDisconnected = isOnlineMultiplayer() && multiplayer.role === 'host' && !activeConnected;
+  const localCanAdvance = !isOnlineMultiplayer() || !multiplayer.localPlayerId || state.activePlayerId === multiplayer.localPlayerId || hostCanAdvanceDisconnected;
+  return `
+    <header class="app-header">
+      <div class="brand">
+        <img src="./forge-mark.svg" alt="" />
+        <div class="brand-text"><h1>The Commander Forge</h1><p>Digital Commander playmat</p></div>
+      </div>
+      <div class="phase-bar" aria-label="Turn phases">
+        <span class="turn-pill">Turn ${state.turnNumber} · ${escapeHtml(active.name)}</span>
+        ${PHASES.map((item, index) => `<span class="phase-chip ${index === state.phaseIndex ? 'active' : ''}" aria-current="${index === state.phaseIndex ? 'step' : 'false'}">${item.label}</span>`).join('')}
+        <button class="btn primary small-btn" data-action="next-phase" ${(localCanAdvance && !multiplayer.pendingTurnActionId) ? '' : 'disabled title="Only the active player can advance the turn."'}>${multiplayer.pendingTurnActionId ? 'Syncing…' : hostCanAdvanceDisconnected ? `Advance for ${escapeHtml(active.name)} ›` : localCanAdvance ? 'Next ›' : `Waiting for ${escapeHtml(active.name)}`}</button>
+        ${isOnlineMultiplayer() || Object.keys(state.players || {}).length > 2 ? renderMultiplayerTurnTracker(state) : ''}
+      </div>
+      <div class="header-actions">
+        ${isOnlineMultiplayer() ? `<button class="network-pill ${multiplayer.status}" data-action="open-setup" title="Open multiplayer room">● ${escapeHtml(multiplayerStatusLabel())}</button>` : ''}
+        <button class="btn small-btn" data-action="undo" title="Undo">↶ <span class="desktop-label">Undo</span></button>
+        <button class="btn small-btn" data-action="coach">✦ <span class="desktop-label">Coach</span></button>
+        <button class="btn small-btn" data-action="open-log">☷ <span class="desktop-label">Log</span></button>
+        <button class="btn small-btn" data-action="open-settings">⚙</button>
+        <button class="btn small-btn" data-action="open-setup">Decks</button>
+      </div>
+    </header>`;
+}
+
+function renderCompactOpponentMat(state, playerId) {
+  const player=state.players?.[playerId];
+  if (!player?.zones) return `<section class="compact-opponent-mat"><div class="validation multiplayer-note">P${String(playerId).replace(/^p/,'')} is preparing…</div></section>`;
+  const battlefield=(player.zones.battlefield||[]).filter((card)=>!card.attachedTo);
+  const handCount=player.zones.hand?.length||0;
+  const active=state.activePlayerId===playerId;
+  const commanderCards=player.zones.command||[];
+  const tokenCount=battlefield.filter((card)=>card.token).length;
+  return `<section class="compact-opponent-mat ${active ? 'active-player' : ''} ${player.lost ? 'lost-player' : ''}" data-player-mat="${playerId}">
+    <header class="compact-opponent-header"><div><span class="compact-player-seat">P${String(playerId).replace(/^p/,'')}</span><strong>${escapeHtml(player.name)}</strong>${active ? '<span class="active-turn-badge">ACTIVE</span>' : ''}</div><div class="compact-life-row"><span>♥ ${Number(player.life||0)}</span><span>☠ ${Number(player.poison||0)}</span><span>✋ ${handCount}</span></div></header>
+    <div class="compact-command-row"><span class="compact-zone-title">Commander</span>${commanderCards.map((card)=>renderCommanderZoneCard(card,state)).join('')||'<span class="muted small">Command zone empty</span>'}</div>
+    <div class="compact-battlefield" data-drop-zone="battlefield" data-player-id="${playerId}"><div class="compact-zone-title">Battlefield · ${battlefield.length}${tokenCount ? ` · ${tokenCount} token${tokenCount===1?'':'s'}`:''}</div><div class="compact-card-grid">${battlefield.map((card)=>renderCard(card,state)).join('')||'<span class="muted small">No permanents</span>'}</div></div>
+    <div class="compact-zone-shortcuts">${renderZonePile(playerId,'graveyard',player.zones.graveyard.length)}${renderZonePile(playerId,'exile',player.zones.exile.length)}<button class="zone-pile" data-action="open-damage" data-player-id="${playerId}"><strong>Cmdr dmg</strong><span>${Math.max(0,...Object.values(player.commanderDamage||{}).map(Number))}/21</span></button></div>
+  </section>`;
+}
+
+function renderTable(state) {
+  const requestedLocalId = isOnlineMultiplayer() && multiplayer.localPlayerId ? multiplayer.localPlayerId : 'p1';
+  const availableIds = Object.keys(state.players || {}).filter((id) => state.players?.[id]?.zones);
+  const localId = state.players?.[requestedLocalId]?.zones
+    ? requestedLocalId
+    : (availableIds.includes('p1') ? 'p1' : availableIds[0]);
+  const ids = (state.turnOrder || availableIds).filter((id) => state.players?.[id]?.zones);
+  if (!localId || !ids.length) return '<div class="validation multiplayer-note">Preparing the table…</div>';
+  if (ids.length <= 2) {
+    const topPlayerId = ids.find((id)=>id!==localId) || (localId==='p1'?'p2':'p1');
+    return `
+      ${state.winner ? `<div class="winner-banner">🏆 ${escapeHtml(state.players[state.winner]?.name || 'A player')} wins the game</div>` : ''}
+      ${renderPendingEffects(state)}
+      <div class="table">
+        ${renderPlayerMat(state, topPlayerId, true)}
+        ${renderStack(state)}
+        ${renderPlayerMat(state, localId, false)}
+      </div>`;
+  }
+  const localIndex=Math.max(0,ids.indexOf(localId));
+  const ordered=[...ids.slice(localIndex+1),...ids.slice(0,localIndex)].filter((id)=>id!==localId);
+  return `
+    ${state.winner ? `<div class="winner-banner">🏆 ${escapeHtml(state.players[state.winner]?.name || 'A player')} wins the game</div>` : ''}
+    ${renderPendingEffects(state)}
+    <div class="table multiplayer-table mp-count-${ids.length}">
+      <section class="opponent-pod-grid">${ordered.map((id)=>renderCompactOpponentMat(state,id)).join('')}</section>
+      ${renderStack(state)}
+      ${renderPlayerMat(state, localId, false)}
+    </div>`;
+}
+
+
+function hasUniqueVisualState(card) {
+  const hasCounters = Object.values(card?.counters || {}).some((value) => Number(value || 0) !== 0);
+  return Boolean(
+    card?.faceDown
+    || card?.attachedTo
+    || (card?.attachments || []).length
+    || hasCounters
+    || String(card?.notes || '').trim()
+    || card?.attacking
+    || card?.blocking
+    || card?.stackFresh
+  );
+}
+
+function isBasicLandCard(card) {
+  const typeLine = String(card?.typeLine || card?.type_line || '');
+  return /\bBasic\b/i.test(typeLine) && /\bLand\b/i.test(typeLine) && !card?.token;
+}
+
+function isUtilityCornerPermanent(card) {
+  if (card?.token) return !isCreature(card);
+  return /\bEnchantment\b/i.test(String(card?.typeLine || card?.type_line || '')) && !isCreature(card);
+}
+
+function canVisuallyStack(card, kind) {
+  if (!card || hasUniqueVisualState(card) || card.commander) return false;
+  if (kind === 'land') return isBasicLandCard(card);
+  if (kind === 'token') return Boolean(card.token);
+  if (kind === 'enchantment') return !card.token && /\bEnchantment\b/i.test(String(card.typeLine || ''));
+  return false;
+}
+
+function visualStackKind(card, allowedKinds) {
+  if (allowedKinds.includes('land') && isBasicLandCard(card)) return 'land';
+  if (allowedKinds.includes('token') && card?.token) return 'token';
+  if (allowedKinds.includes('enchantment') && !card?.token && /\bEnchantment\b/i.test(String(card?.typeLine || ''))) return 'enchantment';
+  return null;
+}
+
+function groupBattlefieldCards(cards, allowedKinds = []) {
+  const groups = [];
+  const grouped = new Map();
+  for (const card of cards || []) {
+    const kind = visualStackKind(card, allowedKinds);
+    if (!kind || !canVisuallyStack(card, kind)) {
+      groups.push({ key: card.instanceId, cards: [card], stacked: false, kind: kind || 'card' });
+      continue;
+    }
+    const key = [
+      kind,
+      String(card.name || '').trim().toLocaleLowerCase(),
+      card.tapped ? 'tapped' : 'untapped',
+      card.summoningSick ? 'sick' : 'ready',
+      Number(card.activeTokenFace || 0),
+      card.controller || card.owner || '',
+    ].join('|');
+    let group = grouped.get(key);
+    if (!group) {
+      group = { key, cards: [], stacked: true, kind };
+      grouped.set(key, group);
+      groups.push(group);
+    }
+    group.cards.push(card);
+  }
+  return groups;
+}
+
+function renderBattlefieldCardGroup(group, state) {
+  if (!group?.cards?.length) return '';
+  if (group.cards.length === 1 || !group.stacked) return renderCard(group.cards[0], state);
+  const selectedId = state.selected?.instanceId;
+  const representative = group.cards.find((card) => card.instanceId === selectedId) || group.cards[0];
+  const tapped = Boolean(representative.tapped);
+  const count = group.cards.length;
+  return `<div class="permanent-stack ${group.kind}-stack ${tapped ? 'tapped-stack' : 'untapped-stack'}" title="${escapeHtml(representative.name)} ×${count} · ${tapped ? 'tapped' : 'untapped'}">
+    <span class="permanent-stack-layer layer-one" aria-hidden="true"></span>
+    <span class="permanent-stack-layer layer-two" aria-hidden="true"></span>
+    ${renderCard(representative, state)}
+    <span class="permanent-stack-count" aria-label="${count} copies">×${count}</span>
+  </div>`;
+}
+
+function renderBattlefieldGroups(groups, state) {
+  return (groups || []).map((group) => renderBattlefieldCardGroup(group, state)).join('');
+}
+
+function renderPlayerMat(state, playerId, opponent) {
+  const player = state.players?.[playerId];
+  if (!player?.zones) {
+    return `<section class="player-mat ${opponent ? 'opponent' : 'you'}"><div class="validation multiplayer-note">Player seat is preparing…</div></section>`;
+  }
+  const battlefield = Array.isArray(player.zones.battlefield) ? player.zones.battlefield : [];
+  const hideHand = isOnlineMultiplayer() && multiplayer.localPlayerId && playerId !== multiplayer.localPlayerId;
+  const maximum = maximumHandSize(state, playerId);
+  const handLabel = `${player.zones.hand.length} / max ${maximum.label}`;
+  const hiddenTokens = Boolean(ui.hiddenTokens[playerId]);
+  const attachedIds = new Set(battlefield.filter((card) => card.attachedTo).map((card) => card.instanceId));
+  const visibleBattlefield = battlefield.filter((card) => !attachedIds.has(card.instanceId) && (!hiddenTokens || !card.token));
+  const utilityPermanents = visibleBattlefield.filter((card) => isUtilityCornerPermanent(card));
+  const lands = visibleBattlefield.filter((card) => isLand(card) && !isUtilityCornerPermanent(card));
+  const otherPermanents = visibleBattlefield.filter((card) => !utilityPermanents.includes(card) && !lands.includes(card));
+  const landGroups = groupBattlefieldCards(lands, ['land']);
+  const utilityGroups = groupBattlefieldCards(utilityPermanents, ['token', 'enchantment']);
+  const permanentGroups = groupBattlefieldCards(otherPermanents, ['token']);
+  const renderedLandGroups = renderBattlefieldGroups(landGroups, state);
+  const renderedUtilityGroups = renderBattlefieldGroups(utilityGroups, state);
+  const renderedPermanentGroups = renderBattlefieldGroups(permanentGroups, state);
+  const tokenCount = battlefield.filter((card) => card.token && !card.attachedTo).length;
+  const hiddenUpperTokenCount = hiddenTokens ? battlefield.filter((card) => card.token && !card.attachedTo && isCreature(card)).length : 0;
+  const hiddenUtilityTokenCount = hiddenTokens ? battlefield.filter((card) => card.token && !card.attachedTo && !isCreature(card)).length : 0;
+  const tokenToggle = tokenCount ? `<button class="token-visibility-btn" data-action="toggle-tokens" data-player-id="${playerId}">${hiddenTokens ? `Show ${tokenCount} token${tokenCount === 1 ? '' : 's'}` : `Hide ${tokenCount} token${tokenCount === 1 ? '' : 's'}`}</button>` : '';
+  const resourceCorners = `<div class="resource-corner land-corner"><span class="resource-corner-label">Lands</span><div class="card-row ${landGroups.length < 4 ? 'corner-aligned' : ''}">${renderedLandGroups}</div></div><div class="resource-corner utility-corner"><span class="resource-corner-label">Enchantments & noncreature tokens</span><div class="card-row ${utilityGroups.length < 4 ? 'corner-aligned-end' : ''}">${renderedUtilityGroups}${hiddenUtilityTokenCount ? `<span class="hidden-token-placeholder">${hiddenUtilityTokenCount} token${hiddenUtilityTokenCount === 1 ? '' : 's'} hidden</span>` : ''}</div></div>`;
+  return `
+    <section class="player-mat ${opponent ? 'opponent' : 'you'}" data-player-mat="${playerId}">
+      <aside class="player-sidebar">
+        ${renderPlayerStatus(state, playerId)}
+        <div class="command-slot zone ${player.zones.command.length ? '' : 'empty'}" data-drop-zone="command" data-player-id="${playerId}">
+          <div class="command-zone-heading">
+            <span>Command Zone</span>
+            <span class="commander-tax-badge">${renderCommanderTaxSummary(player)}</span>
+          </div>
+          <div class="commander-zone-list">${player.zones.command.map((card) => renderCommanderZoneCard(card, state)).join('') || `<span class="muted small command-zone-empty-text">Drop commander here</span>`}</div>
+        </div>
+        <div class="zone-shortcuts">
+          ${renderZonePile(playerId, 'library', player.zones.library.length)}
+          ${renderZonePile(playerId, 'graveyard', player.zones.graveyard.length)}
+          ${renderZonePile(playerId, 'exile', player.zones.exile.length)}
+          <button class="zone-pile" data-action="open-damage" data-player-id="${playerId}"><strong>Commander damage</strong><span>${Math.max(0, ...Object.values(player.commanderDamage).map(Number))}/21 max</span></button>
+        </div>
+      </aside>
+      <div class="board-main ${opponent ? 'opponent-board' : 'you-board'}">
+        ${opponent ? `
+        <div class="zone hand-zone ${!maximum.unlimited && player.zones.hand.length > maximum.value ? 'hand-over-limit' : ''}" data-drop-zone="hand" data-player-id="${playerId}">
+          <span class="zone-label">${escapeHtml(player.name)}'s hand · ${handLabel}</span>
+          <div class="card-row">${hideHand ? renderHiddenHand(state, playerId, player.zones.hand.length) : player.zones.hand.map((card) => renderCard(card, state)).join('')}</div>
+        </div>` : ''}
+        <div class="zone battlefield-zone" data-drop-zone="battlefield" data-player-id="${playerId}">
+          <span class="zone-label">${opponent ? `${escapeHtml(player.name)}'s battlefield` : 'Your battlefield'}</span>
+          <div class="battlefield-tools">${tokenToggle}</div>
+          <div class="battlefield-lanes ${opponent ? 'mirrored-battlefield-lanes' : ''}">
+            ${opponent ? `
+            <div class="battlefield-lane resource-lane" data-drop-zone="battlefield" data-player-id="${playerId}">${resourceCorners}</div>
+            <div class="battlefield-lane permanent-lane" data-drop-zone="battlefield" data-player-id="${playerId}">
+              <span class="battlefield-lane-label">Creatures & other permanents</span>
+              <div class="card-row ${permanentGroups.length < 4 ? 'centered' : ''}">${renderedPermanentGroups}${hiddenUpperTokenCount ? `<span class="hidden-token-placeholder">${hiddenUpperTokenCount} token${hiddenUpperTokenCount === 1 ? '' : 's'} hidden</span>` : ''}</div>
+            </div>` : `
+            <div class="battlefield-lane permanent-lane" data-drop-zone="battlefield" data-player-id="${playerId}">
+              <span class="battlefield-lane-label">Creatures & other permanents</span>
+              <div class="card-row ${permanentGroups.length < 4 ? 'centered' : ''}">${renderedPermanentGroups}${hiddenUpperTokenCount ? `<span class="hidden-token-placeholder">${hiddenUpperTokenCount} token${hiddenUpperTokenCount === 1 ? '' : 's'} hidden</span>` : ''}</div>
+            </div>
+            <div class="battlefield-lane resource-lane" data-drop-zone="battlefield" data-player-id="${playerId}">${resourceCorners}</div>`}
+          </div>
+        </div>
+        ${!opponent ? `
+        <div class="zone hand-zone ${!maximum.unlimited && player.zones.hand.length > maximum.value ? 'hand-over-limit' : ''}" data-drop-zone="hand" data-player-id="${playerId}">
+          <span class="zone-label">Your hand · ${handLabel}</span>
+          <div class="card-row">${player.zones.hand.map((card) => renderCard(card, state)).join('')}</div>
+        </div>` : ''}
+      </div>
+    </section>`;
+}
+
+function getPlayerCommanderCards(player) {
+  const seen = new Set();
+  const commanders = [];
+  for (const zoneCards of Object.values(player.zones || {})) {
+    if (!Array.isArray(zoneCards)) continue;
+    for (const card of zoneCards) {
+      if (!card?.commander || seen.has(card.instanceId)) continue;
+      seen.add(card.instanceId);
+      commanders.push(card);
+    }
+  }
+  return commanders;
+}
+
+function renderCommanderTaxSummary(player) {
+  const commanders = getPlayerCommanderCards(player);
+  if (!commanders.length) return 'Tax +0';
+  const taxes = commanders.map((card) => 2 * Number(player.commanderCastCount?.[card.instanceId] || 0));
+  if (taxes.length === 1) return `Tax +${taxes[0]}`;
+  return `Tax ${taxes.map((tax) => `+${tax}`).join(' / ')}`;
+}
+
+function renderCommanderZoneCard(card, state) {
+  return `<div class="commander-zone-card compact">
+    ${renderCard(card, state, { compact: true })}
+  </div>`;
+}
+
+function renderPlayerStatus(state, playerId) {
+  const player = state.players[playerId];
+  const active = state.activePlayerId === playerId;
+  const landAllowance = landPlayAllowance(state, playerId);
+  const landUsed = Number(player.landPlaysThisTurn || 0);
+  const floating = COLORS.filter((color) => Number(player.mana[color] || 0) > 0)
+    .map((color) => `<span class="mana-chip">${color}<b>${player.mana[color]}</b></span>`)
+    .join('');
+  const sourceGroups = new Map();
+  for (const card of player.zones.battlefield.filter((item) => !item.tapped)) {
+    const label = manaSourceLabel(card);
+    if (!label) continue;
+    sourceGroups.set(label, (sourceGroups.get(label) || 0) + 1);
+  }
+  const available = [...sourceGroups.entries()]
+    .map(([label, count]) => `<span class="source-chip">${escapeHtml(label)}${count > 1 ? ` ×${count}` : ''}</span>`)
+    .join('');
+  const manaPanel = state.settings.manaMode === 'manual'
+    ? `<div class="mana-row" style="margin-top:8px">${COLORS.map((color) => `<button class="btn small-btn" data-action="mana" data-player-id="${playerId}" data-color="${color}" data-delta="1" title="Add ${color} mana">${color}<b>${player.mana[color]}</b></button>`).join('')}<button class="btn small-btn ghost" data-action="clear-mana" data-player-id="${playerId}" title="Clear mana">×</button></div>`
+    : `<div class="automatic-mana"><div><span class="mana-caption">Untapped sources</span><div class="mana-chip-row">${available || '<span class="muted small">None</span>'}</div></div><div><span class="mana-caption">Floating pool</span><div class="mana-chip-row">${floating || '<span class="muted small">Empty</span>'}${floating ? `<button class="icon-btn tiny" data-action="clear-mana" data-player-id="${playerId}" title="Clear floating mana">×</button>` : ''}</div></div></div>`;
+  return `
+    <div class="player-status ${active ? 'active' : ''}">
+      <div class="player-name-row"><span class="player-name">${escapeHtml(player.name)}</span>${active ? '<span class="active-dot" title="Active player"></span>' : ''}</div>
+      <div class="trackers">
+        ${renderTracker(playerId, 'life', 'Life', player.life, [-5, -1, 1, 5])}
+        ${renderTracker(playerId, 'poison', 'Poison', player.poison, [-1, 1])}
+      </div>
+      <div class="turn-rule-status ${landUsed >= landAllowance ? 'used' : ''}"><span>Land plays this turn</span><strong>${landUsed}/${landAllowance}</strong></div>
+      ${manaPanel}
+    </div>`;
+}
+
+function renderTracker(playerId, field, label, value, deltas) {
+  return `<div class="tracker"><div class="tracker-label">${label}</div><div class="tracker-value">${value}</div><div class="tracker-controls">${deltas.map((delta) => `<button data-action="adjust-player" data-player-id="${playerId}" data-field="${field}" data-delta="${delta}">${delta > 0 ? '+' : ''}${delta}</button>`).join('')}</div></div>`;
+}
+
+function renderZonePile(playerId, zone, count) {
+  return `<button class="zone-pile" data-action="open-zone" data-player-id="${playerId}" data-zone="${zone}" data-drop-zone="${zone}"><strong>${ZONE_LABELS[zone]}</strong><span>${count} card${count === 1 ? '' : 's'}</span></button>`;
+}
+
+function renderHiddenHand(state, playerId, count) {
+  const revealed = knownHandRevealCards(state, playerId);
+  const hiddenCount = Math.max(0, count - revealed.length);
+  const revealedHtml = revealed.map((card) => renderPublicRevealCard(card, 'Known in hand', playerId)).join('');
+  const backs = Array.from({ length: Math.min(hiddenCount, 12) }, (_, index) => `<div class="game-card hidden-hand-card" aria-label="Hidden card ${index + 1}"><img src="./card-back.svg" alt="Card back" /></div>`).join('');
+  return `${revealedHtml}${backs}`;
+}
+
+function renderCard(card, state, { compact = false } = {}) {
+  const selected = state.selected?.instanceId === card.instanceId;
+  const badges = [];
+  if (card.commander) badges.push('<span class="card-badge">CMD</span>');
+  if (card.summoningSick) badges.push('<span class="card-badge blue">NEW</span>');
+  if (card.attacking) badges.push('<span class="card-badge red">ATK</span>');
+  if (card.blocking) badges.push('<span class="card-badge blue">BLK</span>');
+  if (card.attachedTo) badges.push('<span class="card-badge purple">ATT</span>');
+  if (card.owner && card.controller && card.owner !== card.controller) {
+    const ownerName = state.players?.[card.owner]?.name || card.owner;
+    const controllerName = state.players?.[card.controller]?.name || card.controller;
+    badges.push(`<span class="card-badge control-badge" title="Owned by ${escapeHtml(ownerName)} · controlled by ${escapeHtml(controllerName)}">CTRL</span>`);
+  }
+  const manaLabel = manaSourceLabel(card);
+  if (manaLabel) badges.push(`<span class="card-badge mana" title="Mana choices">${escapeHtml(manaLabel)}</span>`);
+  for (const [counterType, rawCount] of Object.entries(card.counters || {})) {
+    const count = Number(rawCount || 0);
+    if (!count) continue;
+    const type = String(counterType || '').trim();
+    const pt = type.match(/^([+-]?\d+)\/([+-]?\d+)$/);
+    let label = '';
+    if (pt) {
+      const showPart = (value) => { const number = Number(value || 0); return number > 0 ? `+${number}` : String(number); };
+      label = `${showPart(pt[1])}/${showPart(pt[2])}${count === 1 ? '' : ` ×${count}`}`;
+    } else {
+      const icon = type.toLocaleLowerCase() === 'charge' ? '⚡ ' : type.toLocaleLowerCase() === 'page' ? '📖 ' : '';
+      const prettyType = type.replace(/\b\w/g, (letter) => letter.toLocaleUpperCase());
+      label = `${icon}${prettyType} ${count}`;
+    }
+    badges.push(`<span class="card-badge purple counter-state" title="${escapeHtml(type)} counter${count === 1 ? '' : 's'}: ${count}">${escapeHtml(label)}</span>`);
+  }
+  for (const keyword of (card.manualKeywords || []).slice(0, 4)) {
+    badges.push(`<span class="card-badge blue manual-keyword-badge" title="Granted ability: ${escapeHtml(keyword)}">✦ ${escapeHtml(keyword)}</span>`);
+  }
+  if ((card.mutationPile || []).length > 1) badges.push(`<span class="card-badge purple" title="Merged mutated permanent with ${card.mutationPile.length} cards">MUTATE ×${card.mutationPile.length}</span>`);
+  if (card.castXValue !== null && card.castXValue !== undefined && /\{X\}/i.test(card.manaCost || '')) badges.push(`<span class="card-badge blue" title="X chosen when cast">X=${card.castXValue}</span>`);
+  const image = card.faceDown ? './card-back.svg' : cardSmallImage(card);
+  const attachedCards = (card.attachments || []).map((id) => findCard(id, state)?.card).filter(Boolean);
+  const attachmentFan = attachedCards.length ? `<div class="attachment-fan">${attachedCards.map((attachment, index) => `<button class="attached-mini" data-card-id="${attachment.instanceId}" style="--attachment-index:${index}" title="${escapeHtml(attachment.name)} attached to ${escapeHtml(card.name)}"><img src="${escapeHtml(cardSmallImage(attachment))}" alt="${escapeHtml(attachment.name)}" /></button>`).join('')}</div>` : '';
+  return `<article class="game-card ${selected ? 'selected' : ''} ${card.tapped ? 'tapped' : ''} ${card.attacking ? 'attacking' : ''} ${compact ? 'compact' : ''}" data-card-id="${card.instanceId}" title="${escapeHtml(card.name)}"><img src="${escapeHtml(image)}" alt="${escapeHtml(card.name)}" draggable="false" onerror="this.src='./card-back.svg'" /><div class="badge-row">${badges.join('')}</div>${attachmentFan}${state.settings.showCardNames ? `<div class="card-name-strip">${escapeHtml(card.name)}</div>` : ''}</article>`;
+}
+
+function pendingEffectDecisionPlayerId(effect, smart, state) {
+  if (['sacrifice-permanent', 'discard-card', 'hand-to-graveyard'].includes(smart?.kind) && smart.victimId) return smart.victimId;
+  return smart?.playerId || effect?.controllerId || state.activePlayerId;
+}
+
+function multiplayerCanResolvePendingEffect(effect, smart, state) {
+  if (!isOnlineMultiplayer() || !multiplayer.localPlayerId) return true;
+  return pendingEffectDecisionPlayerId(effect, smart, state) === multiplayer.localPlayerId;
+}
+
+function renderSmartEffectActions(effect, state) {
+  const smart = smartPendingEffectState(effect, state);
+
+  if (['choose-opponent-sacrifice', 'choose-opponent-discard'].includes(smart.kind)) {
+    if (isOnlineMultiplayer() && multiplayer.localPlayerId !== effect.controllerId) return `<div class="small muted">Waiting for ${escapeHtml(multiplayerPlayerName(effect.controllerId))} to choose the target opponent…</div>`;
+    const verb = smart.kind === 'choose-opponent-sacrifice' ? 'sacrifice' : 'discard';
+    return `<div class="mana-choice-group"><div class="small muted wide"><strong>Choose the target opponent.</strong> That player will make the ${verb} choice on their own client.</div>${(smart.victimIds || []).map((id) => `<button class="btn small-btn primary" data-action="choose-effect-opponent" data-effect-id="${effect.id}" data-player-id="${id}">${escapeHtml(multiplayerPlayerName(id))}</button>`).join('')}<button class="btn small-btn ghost" data-action="resolve-effect" data-effect-id="${effect.id}">Resolve manually</button></div>`;
+  }
+
+  if (!multiplayerCanResolvePendingEffect(effect, smart, state)) {
+    const decisionId = pendingEffectDecisionPlayerId(effect, smart, state);
+    return `<div class="small muted">Waiting for ${escapeHtml(multiplayerPlayerName(decisionId))} to resolve this choice on their client.</div>`;
+  }
+
+  if (smart.kind === 'search-library') {
+    const destination = smartLibraryDestinationLabel(smart.destination);
+    const privacyBlocked = isOnlineMultiplayer() && multiplayer.localPlayerId && smart.playerId !== multiplayer.localPlayerId;
+    return `<div class="mana-choice-group"><div class="small muted wide"><strong>Library search recognized.</strong> Find ${escapeHtml(smart.filterText || 'a card')} and put ${smart.maxCount > 1 ? `up to ${smart.maxCount} cards` : 'it'} into ${escapeHtml(destination)}${smart.tapped ? ' tapped' : ''}${smart.shuffle ? ', then shuffle' : ''}.</div><button class="btn small-btn primary" data-action="open-library-effect-picker" data-effect-id="${effect.id}" ${privacyBlocked ? 'disabled' : ''}>🔍 Search library</button>${privacyBlocked ? '<span class="small muted wide">The other player resolves this privately on their client.</span>' : ''}<button class="btn small-btn ghost" data-action="resolve-effect" data-effect-id="${effect.id}">Override — mark resolved</button></div>`;
+  }
+
+  if (smart.kind === 'graveyard-move') {
+    const destination = smartLibraryDestinationLabel(smart.destination);
+    if (!smart.cards.length) return `<div class="mana-choice-group"><span class="small muted wide">No matching card is currently in your graveyard.</span><button class="btn small-btn ghost" data-action="smart-effect-no-result" data-effect-id="${effect.id}">Resolve with no card</button></div>`;
+    if (Number(smart.maxCount || 1) === 1) {
+      return `<div class="mana-choice-group"><div class="small muted wide"><strong>Graveyard move recognized.</strong> Choose ${escapeHtml(smart.filterText || 'a card')} → ${escapeHtml(destination)}${smart.tapped ? ' tapped' : ''}.</div>${smart.cards.slice(0, 30).map((card) => `<button class="btn small-btn primary" data-action="smart-effect-card" data-effect-id="${effect.id}" data-card-id="${card.instanceId}">Move ${escapeHtml(card.name)}</button>`).join('')}<button class="btn small-btn ghost" data-action="resolve-effect" data-effect-id="${effect.id}">Mark resolved manually</button></div>`;
+    }
+  }
+
+  if (smart.kind === 'create-token') {
+    return `<div class="mana-choice-group"><button class="btn small-btn primary" data-action="smart-effect-card" data-effect-id="${effect.id}">Create ${smart.amount > 1 ? `${smart.amount} ` : ''}${escapeHtml(smart.token?.name || 'token')}${smart.amount > 1 ? ' tokens' : ' token'} & resolve</button><button class="btn small-btn ghost" data-action="resolve-effect" data-effect-id="${effect.id}">Already did this — mark resolved</button></div>`;
+  }
+
+  if (smart.kind === 'return-own-graveyard-creatures-total-power') {
+    const chosen = new Set(ui.smartEffectSelections[effect.id] || []);
+    const overrides = ui.smartEffectPowerOverrides[effect.id] || {};
+    const chosenCards = smart.cards.filter((card) => chosen.has(card.instanceId));
+    let unknown = false;
+    let total = 0;
+    for (const card of chosenCards) {
+      const power = card._smartPower ?? (Number.isFinite(Number(overrides[card.instanceId])) ? Number(overrides[card.instanceId]) : null);
+      if (power === null) unknown = true; else total += power;
+    }
+    const over = total > smart.powerLimit;
+    const buttons = smart.cards.slice(0, 30).map((card) => {
+      const selected = chosen.has(card.instanceId);
+      const power = card._smartPower ?? overrides[card.instanceId];
+      const powerLabel = power === null || power === undefined || power === '' ? '?' : power;
+      return `<button class="btn small-btn ${selected ? 'primary' : ''}" data-action="toggle-smart-effect-multi" data-effect-id="${effect.id}" data-card-id="${card.instanceId}">${selected ? '✓ ' : ''}${escapeHtml(card.name)} · P ${escapeHtml(String(powerLabel))}</button>`;
+    }).join('');
+    return `<div class="mana-choice-group"><div class="small muted wide"><strong>Choose any number of creature cards.</strong> Their total power in the graveyard must be ${smart.powerLimit} or less. Choosing zero is legal.</div>${buttons || '<span class="small muted wide">There are no creature cards in your graveyard. You may still resolve this with zero targets.</span>'}<div class="small ${over ? 'danger-text' : 'muted'} wide">Selected: ${chosenCards.length} · total power ${unknown ? `${total} + ?` : total}/${smart.powerLimit}${unknown ? ' · click a ?-power card again to enter its current graveyard power' : ''}</div><button class="btn small-btn primary" data-action="resolve-smart-effect-multi" data-effect-id="${effect.id}" ${over || unknown ? 'disabled' : ''}>Resolve selected creatures</button><button class="btn small-btn ghost" data-action="resolve-effect" data-effect-id="${effect.id}">Override — mark resolved</button></div>`;
+  }
+
+  if (smart.kind === 'return-own-graveyard-creature') {
+    if (!smart.cards.length) return `<div class="mana-choice-group"><span class="small muted wide">No legal creature card is in your graveyard.</span><button class="btn small-btn ghost" data-action="smart-effect-no-result" data-effect-id="${effect.id}">No legal target — remove trigger</button><button class="btn small-btn ghost" data-action="resolve-effect" data-effect-id="${effect.id}">Override — mark resolved</button></div>`;
+    return `<div class="mana-choice-group"><div class="small muted wide">Choose the creature to return</div>${smart.cards.slice(0, 20).map((card) => `<button class="btn small-btn primary" data-action="smart-effect-card" data-effect-id="${effect.id}" data-card-id="${card.instanceId}">Return ${escapeHtml(card.name)}</button>`).join('')}<button class="btn small-btn ghost" data-action="resolve-effect" data-effect-id="${effect.id}">Override — mark resolved</button></div>`;
+  }
+
+  if (['sacrifice-permanent', 'discard-card', 'hand-to-graveyard'].includes(smart.kind)) {
+    const victim = state.players[smart.victimId];
+    const needed = Math.min(Math.max(1, Number(smart.amount || 1)), smart.cards.length);
+    const verb = smart.kind === 'sacrifice-permanent' ? 'Sacrifice' : smart.kind === 'discard-card' ? 'Discard' : 'Put in graveyard';
+    if (!smart.cards.length) return `<div class="mana-choice-group"><span class="small muted wide">${escapeHtml(victim?.name || 'Affected player')} has nothing available for this effect.</span><button class="btn small-btn ghost" data-action="smart-effect-no-result" data-effect-id="${effect.id}">Resolve — no available choice</button><button class="btn small-btn ghost" data-action="resolve-effect" data-effect-id="${effect.id}">Override — mark resolved</button></div>`;
+    if (needed === 1) {
+      return `<div class="mana-choice-group"><div class="small muted wide">${escapeHtml(victim?.name || 'Affected player')} chooses 1 card${smart.kind === 'sacrifice-permanent' ? ` to sacrifice${smart.typeWord ? ` (${escapeHtml(smart.typeWord)})` : ''}` : smart.kind === 'discard-card' ? ' to discard' : ' to put into the graveyard'}</div>${smart.cards.slice(0, 30).map((card) => `<button class="btn small-btn ${smart.kind === 'sacrifice-permanent' ? 'danger' : 'primary'}" data-action="smart-effect-card" data-effect-id="${effect.id}" data-card-id="${card.instanceId}">${verb} ${escapeHtml(card.name)}</button>`).join('')}<button class="btn small-btn ghost" data-action="resolve-effect" data-effect-id="${effect.id}">Override — mark resolved</button></div>`;
+    }
+    const chosen = new Set(ui.smartEffectSelections[effect.id] || []);
+    const buttons = smart.cards.slice(0, 40).map((card) => `<button class="btn small-btn ${chosen.has(card.instanceId) ? 'primary' : ''}" data-action="toggle-smart-effect-multi" data-effect-id="${effect.id}" data-card-id="${card.instanceId}">${chosen.has(card.instanceId) ? '✓ ' : ''}${escapeHtml(card.name)}</button>`).join('');
+    return `<div class="mana-choice-group"><div class="small muted wide">Choose exactly ${needed} card${needed === 1 ? '' : 's'} to ${verb.toLocaleLowerCase()}.</div>${buttons}<div class="small muted wide">Selected: ${chosen.size}/${needed}</div><button class="btn small-btn primary" data-action="resolve-smart-effect-multi" data-effect-id="${effect.id}" ${chosen.size !== needed ? 'disabled' : ''}>Resolve selected cards</button><button class="btn small-btn ghost" data-action="resolve-effect" data-effect-id="${effect.id}">Override — mark resolved</button></div>`;
+  }
+
+  const simpleLabels = {
+    'draw-cards': `Draw ${smart.amount} card${smart.amount === 1 ? '' : 's'}`,
+    'gain-life': `Gain ${smart.amount} life`,
+    'lose-life': `Lose ${smart.amount} life`,
+    'opponents-lose-life': `Each opponent loses ${smart.amount} life`,
+    'mill-cards': `Mill ${smart.amount} card${smart.amount === 1 ? '' : 's'}`,
+  };
+  if (simpleLabels[smart.kind]) return `<div class="mana-choice-group"><button class="btn small-btn primary" data-action="smart-effect-card" data-effect-id="${effect.id}">${escapeHtml(simpleLabels[smart.kind])}</button><button class="btn small-btn ghost" data-action="resolve-effect" data-effect-id="${effect.id}">Override — mark resolved</button></div>`;
+  return '';
+}
+
+function renderPendingEffects(state) {
+  const effects = state.pendingTriggers || [];
+  const combatActive = PHASES[state.phaseIndex]?.id === 'combat'
+    && Object.values(state.players).flatMap((player) => player.zones.battlefield).some((card) => card.attacking || card.blocking);
+  if (!effects.length && !state.stack.length && !combatActive) return '';
+
+  return `<section class="resolution-gate" aria-live="polite">
+    <div class="resolution-gate-header">
+      <div><strong>${state.stack.length ? 'Resolve stack before advancing' : 'Pending card effects'}</strong><span>${state.stack.length ? `${state.stack.length} stack object${state.stack.length === 1 ? '' : 's'}` : ''}${state.stack.length && effects.length ? ' · ' : ''}${effects.length ? `${effects.length} pending effect${effects.length === 1 ? '' : 's'} · effects no longer lock the table` : ''}</span></div>
+      <div class="resolution-gate-tools">${effects.length ? '<button class="btn small-btn ghost" data-action="dismiss-all-effects">Dismiss stale effects</button>' : ''}${combatActive ? '<button class="btn small-btn" data-action="clear-combat">Combat resolved manually</button>' : ''}</div>
+    </div>
+    ${effects.map((effect) => `<article class="pending-effect">
+      <div class="pending-effect-copy">
+        <strong>${escapeHtml(effect.sourceName)}</strong>
+        <span class="small muted">${escapeHtml(effect.kind.replaceAll('-', ' '))}</span>
+        <p>${escapeHtml(effect.text)}</p>
+        ${effect.conditionText ? `<div class="effect-condition ${effect.conditionStatus === 'met' ? 'met' : ''}"><strong>Condition:</strong> ${escapeHtml(effect.conditionText)}${effect.conditionStatus === 'met' ? ' ✓' : ''}</div>` : ''}
+      </div>
+      <div class="pending-effect-actions">
+        ${effect.conditionText && effect.conditionStatus !== 'met' ? `
+          <button class="btn small-btn" data-action="effect-condition" data-effect-id="${effect.id}" data-status="met">Condition met</button>
+          <button class="btn small-btn ghost" data-action="effect-condition" data-effect-id="${effect.id}" data-status="not-met">Condition not met</button>` : ''}
+        ${!effect.conditionText || effect.conditionStatus === 'met' ? (renderSmartEffectActions(effect, state) || `<button class="btn primary small-btn" data-action="resolve-effect" data-effect-id="${effect.id}">Resolved manually</button>`) : ''}
+        ${effect.optional ? `<button class="btn small-btn ghost" data-action="decline-effect" data-effect-id="${effect.id}">Decline “may” effect</button>` : ''}
+      </div>
+    </article>`).join('')}
+  </section>`;
+}
+
+function renderStack(state) {
+  return `<section class="stack-area" data-drop-zone="stack" data-player-id="${state.activePlayerId}"><span class="stack-label">Stack</span><div class="stack-cards">${state.stack.map((card) => `<img class="stack-mini" src="${escapeHtml(cardSmallImage(card))}" alt="${escapeHtml(card.name)}" data-card-id="${card.instanceId}" />`).join('') || '<span class="muted small">Instants and sorceries appear here for responses</span>'}</div>${state.stack.length ? `<button class="btn small-btn" data-action="resolve-stack">Resolve top</button><button class="btn small-btn danger" data-action="counter-stack">Counter top</button>` : ''}</section>`;
+}
+
+function referencedCounterTypes(card) {
+  const types = new Set(Object.keys(card?.counters || {}).map((type) => String(type).toLowerCase()));
+  const text = String(card?.oracleText || '');
+  for (const match of text.matchAll(/\b(?:a|an|one|two|three|four|five|\d+)\s+([a-z][a-z0-9+\/-]*(?:\s+[a-z0-9+\/-]+)?)\s+counters?\b/gi)) {
+    const type = String(match[1] || '').trim().toLowerCase();
+    if (type && !['additional', 'that many', 'each kind'].includes(type)) types.add(type);
+  }
+  return [...types].filter(Boolean);
+}
+
+
+function renderManualKeywordEditor(card) {
+  const applied = card.manualKeywords || [];
+  const options = MANUAL_KEYWORD_OPTIONS.map((keyword) => `<option value="${escapeHtml(keyword)}">${escapeHtml(keyword)}</option>`).join('');
+  const chips = applied.length
+    ? `<div class="manual-keyword-list">${applied.map((keyword) => `<span class="manual-keyword-chip"><span>${escapeHtml(keyword)}</span><button class="icon-btn tiny" data-action="remove-keyword" data-card-id="${card.instanceId}" data-keyword="${escapeHtml(keyword)}" title="Remove ${escapeHtml(keyword)}">×</button></span>`).join('')}</div>`
+    : '<div class="small muted">No extra keyword abilities added.</div>';
+  return `<div class="keyword-ability-editor"><div class="field"><label>Keyword ability</label><select id="manual-keyword-select">${options}</select></div><div class="field"><label>Custom ability wording</label><input id="manual-keyword-custom" placeholder="Example: Ward {3} or Protection from artifacts" /></div><button class="btn" data-action="add-keyword" data-card-id="${card.instanceId}">Add keyword ability</button>${chips}<p class="small muted">These are treated as real granted abilities by combat, targeting, timing, mana, and coach rules until removed.</p></div>`;
+}
+
+function renderKnownRevealInspector(reveal) {
+  const card = reveal.card;
+  const playerName = getState().players?.[reveal.playerId]?.name || reveal.playerId;
+  const ownReveal = !isOnlineMultiplayer() || reveal.playerId === multiplayer.localPlayerId;
+  const zoneLabel = reveal.zone === 'hand'
+    ? (ownReveal ? 'Publicly known in your hand' : 'Known in opponent hand')
+    : (ownReveal ? 'Publicly revealed from your library' : 'Revealed from opponent library');
+  return `
+    <div class="inspector-section" style="display:flex;justify-content:space-between;align-items:center"><h3>Revealed card</h3><button class="icon-btn" data-action="close-inspector">×</button></div>
+    <div class="inspector-section">
+      <img class="inspector-card-image" src="${escapeHtml(publicRevealImage(card, 'normal'))}" alt="${escapeHtml(card.name)}" onerror="this.src='./card-back.svg'" />
+      <h2>${escapeHtml(card.name)}</h2>
+      <div class="muted small">${escapeHtml(card.manaCost || '')} · ${escapeHtml(card.typeLine || '')}</div>
+      ${card.power ? `<div class="small">${escapeHtml(card.power)}/${escapeHtml(card.toughness)}</div>` : ''}
+      <div class="validation ok" style="margin-top:10px"><strong>${escapeHtml(zoneLabel)}</strong><br />Revealed by ${escapeHtml(playerName)}. This view is read-only.</div>
+    </div>
+    <div class="inspector-section"><h3>Oracle text</h3><div class="oracle">${escapeHtml(card.oracleText || 'No Oracle text.')}</div></div>`;
+}
+
+function availableMutateSourcesForTarget(card, selected, state) {
+  if (selected.zone !== 'battlefield' || !isCreature(card) || isHumanCreature(card)) return [];
+  const owner = state.players?.[card.owner];
+  if (!owner) return [];
+  const candidates = [...(owner.zones?.hand || []), ...(owner.zones?.command || [])];
+  const results = [];
+  for (const source of candidates) {
+    if (source.instanceId === card.instanceId) continue;
+    const info = mutateStatus(source.instanceId);
+    if (!info?.hasMutate || !info.canCastMutate) continue;
+    const target = (info.targets || []).find((item) => item.targetId === card.instanceId);
+    if (!target) continue;
+    results.push({ source, info, target });
+  }
+  return results;
+}
+
+function renderProminentMutateActions(card, selected, state, mutateInfo) {
+  const reverseSources = availableMutateSourcesForTarget(card, selected, state);
+  const hasOwnMutate = Boolean(mutateInfo?.hasMutate);
+  const isMerged = Boolean((card.mutationPile || []).length);
+  if (!hasOwnMutate && !reverseSources.length && !isMerged) return '';
+
+  let actionHtml = '';
+  if (hasOwnMutate && mutateInfo.canCastMutate) {
+    if ((mutateInfo.targets || []).length) {
+      actionHtml = (mutateInfo.targets || []).map((item) => `<div class="mana-choice-group prominent-mutate-choice"><div class="small muted wide"><strong>Target:</strong> ${escapeHtml(item.targetName)} · ${escapeHtml(item.cost)}</div><button class="btn primary" data-action="cast-mutate" data-card-id="${card.instanceId}" data-target-id="${item.targetId}" data-position="top">🧬 Mutate on top</button><button class="btn" data-action="cast-mutate" data-card-id="${card.instanceId}" data-target-id="${item.targetId}" data-position="under">🧬 Mutate underneath</button>${state.settings.testOverrides ? `<button class="btn ghost" data-action="cast-mutate" data-card-id="${card.instanceId}" data-target-id="${item.targetId}" data-position="top" data-test-override="true">Test mutate on top · no mana</button><button class="btn ghost" data-action="cast-mutate" data-card-id="${card.instanceId}" data-target-id="${item.targetId}" data-position="under" data-test-override="true">Test mutate underneath · no mana</button>` : ''}</div>`).join('');
+    } else {
+      actionHtml = `<button class="btn primary wide mutate-disabled" type="button" disabled>🧬 Mutate — no legal target</button><div class="validation warn"><strong>Mutate is unavailable right now.</strong><br />${escapeHtml(mutateInfo.reason || 'You need a legal non-Human creature you own on the battlefield.')}</div>`;
+    }
+  } else if (hasOwnMutate && selected.zone === 'battlefield') {
+    const selfMessage = `<div class="validation warn"><strong>${escapeHtml(card.name)} cannot use its own Mutate cost from the battlefield.</strong><br />Mutate is an alternative way to cast the card as a spell. To use this card's printed Mutate cost, it must be in your hand or command zone (if it is your commander).</div>`;
+    if (reverseSources.length) {
+      actionHtml = `${selfMessage}<div class="small muted" style="margin-top:8px"><strong>You can mutate another card onto this creature:</strong></div>${reverseSources.map(({ source, target }) => `<div class="mana-choice-group prominent-mutate-choice"><div class="small muted wide">${escapeHtml(source.name)} · ${escapeHtml(target.cost)}</div><button class="btn primary" data-action="cast-mutate" data-card-id="${source.instanceId}" data-target-id="${card.instanceId}" data-position="top">🧬 Put ${escapeHtml(source.name)} on top</button><button class="btn" data-action="cast-mutate" data-card-id="${source.instanceId}" data-target-id="${card.instanceId}" data-position="under">🧬 Put ${escapeHtml(source.name)} underneath</button>${state.settings.testOverrides ? `<button class="btn ghost" data-action="cast-mutate" data-card-id="${source.instanceId}" data-target-id="${card.instanceId}" data-position="top" data-test-override="true">Test mutate · no mana</button>` : ''}</div>`).join('')}`;
+    } else {
+      actionHtml = `${selfMessage}<button class="btn wide mutate-disabled" type="button" disabled>🧬 No Mutate spell available to put onto this creature</button>`;
+    }
+  } else if (reverseSources.length) {
+    actionHtml = reverseSources.map(({ source, target }) => `<div class="mana-choice-group prominent-mutate-choice"><div class="small muted wide">Mutate ${escapeHtml(source.name)} onto ${escapeHtml(card.name)} · ${escapeHtml(target.cost)}</div><button class="btn primary" data-action="cast-mutate" data-card-id="${source.instanceId}" data-target-id="${card.instanceId}" data-position="top">🧬 Mutate on top</button><button class="btn" data-action="cast-mutate" data-card-id="${source.instanceId}" data-target-id="${card.instanceId}" data-position="under">🧬 Mutate underneath</button></div>`).join('');
+  }
+
+  return `<div class="inspector-section prominent-mutate-panel"><h3>🧬 Mutate</h3>${actionHtml}<p class="small muted mutate-quick-rule">The spell targets a <strong>non-Human creature you own</strong>. On resolution, choose top or underneath. The merged permanent keeps the abilities of every card in the pile.</p></div>`;
+}
+
+function renderMutateRules(card, selected, state, mutateInfo) {
+  if (!mutateInfo?.hasMutate && !(card.mutationPile || []).length) {
+    if (selected.zone === 'battlefield' && isCreature(card)) {
+      const eligible = !isHumanCreature(card);
+      return `<div class="inspector-section"><h3>Mutate target</h3><div class="validation ${eligible ? 'ok' : 'warn'}"><strong>${eligible ? 'Eligible non-Human creature' : 'Not a legal Mutate target'}</strong><br />${eligible ? 'A Mutate creature card you own can target this permanent. Select the Mutate card in your hand or command zone to perform the mutation.' : 'Mutate can target only a non-Human creature with the same owner as the mutating spell. Creatures with Changeling count as Human.'}</div></div>`;
+    }
+    return '';
+  }
+  const pile = card.mutationPile || [];
+  const pileHtml = pile.length ? `<div class="mutation-pile-list"><strong>Merged permanent · mutated ${Number(card.mutationCount || Math.max(0, pile.length - 1))} time(s)</strong>${pile.map((part, index) => `<div class="mutation-pile-row"><span>${index === Number(card.mutationTopIndex || 0) ? '▲ TOP' : 'UNDER'} · ${escapeHtml(part.name)}</span><span>${part.commander ? 'Commander · ' : ''}${part.token ? 'Token' : 'Card'}</span></div>`).join('')}</div>` : '';
+  const status = mutateInfo?.hasMutate ? `<div class="validation ${mutateInfo.canCastMutate ? 'ok' : 'warn'}"><strong>${mutateInfo.canCastMutate ? `Mutate ${escapeHtml(mutateInfo.displayCost || mutateInfo.cost)}` : 'This card has Mutate, but Mutate is not activated from the battlefield.'}</strong><br />${escapeHtml(mutateInfo.reason || (mutateInfo.canCastMutate ? 'Choose a legal target below.' : ''))}</div>` : '';
+  return `<div class="inspector-section mutate-rules-panel"><h3>Mutate rules</h3>${status}${pileHtml}<details open><summary>What Forge applies when you Mutate</summary><ul class="small muted"><li>Mutate is an <strong>alternative casting cost</strong>. The card is cast as a creature spell; it is not an activated ability of a creature already on the battlefield.</li><li>The mutating spell targets a <strong>non-Human creature with the same owner</strong> as the spell. Changeling creatures are Human too, so they are not legal targets.</li><li>Forge applies the mutation <strong>directly on the battlefield</strong> after you choose top or underneath, instead of putting Mutate in the visual stack.</li><li>The <strong>top component supplies the permanent's characteristics</strong> (name, mana cost, colors, types, power/toughness, etc.). The merged permanent has the abilities of every component.</li><li>The merged permanent is the <strong>same permanent that was already on the battlefield</strong>: it keeps its controller, tapped/attacking status, counters, marked damage, Auras, Equipment, and other attachments.</li><li>A mutating creature spell that successfully merges <strong>does not enter the battlefield</strong>, so ordinary ETB abilities do not trigger from the mutating card.</li><li>Every “Whenever this creature mutates” ability on the merged creature triggers, including one printed on the card that just merged. If several trigger, you may choose their resolution order.</li><li>If the target is unavailable when Forge applies the mutation, the creature enters the battlefield normally instead of creating a stuck stack object.</li><li>A merged permanent is one object. You cannot sacrifice or bounce just one component. When it leaves the battlefield, all physical components move to the appropriate zone and are no longer merged. One creature left/died, not one creature per card.</li><li>If any component is your commander, the merged permanent is your commander and its combat damage counts as that commander's damage. Only the commander component moves to the command zone when you choose that option.</li><li>Commander tax is a cost increase, so it is added on top of a commander's Mutate alternative cost.</li></ul></details><p class="small muted">Rare copy, face-down, and unusual cast-permission interactions may still require Test Override while the broader Oracle rules engine is being expanded.</p></div>`;
+}
+
+function renderInspector(state) {
+  if (ui.inspectorMode === 'coach') return renderCoachInspector(state);
+  if (ui.knownRevealSelected) {
+    const known = findKnownRevealCard(ui.knownRevealSelected.playerId, ui.knownRevealSelected.cardId);
+    if (known?.card) return renderKnownRevealInspector(known);
+    ui.knownRevealSelected = null;
+  }
+  const selected = state.selected?.instanceId ? findCard(state.selected.instanceId, state) : null;
+  if (!selected) return `<div class="inspector-empty"><div><div style="font-size:2rem">🃏</div><h3>Select a card</h3><p>Tap a card for actions. Drag it directly between visible zones.</p><button class="btn primary" data-action="coach">Open strategy coach</button></div></div>`;
+  const card = selected.card;
+  const effects = recognizedEffects(card);
+  const activatedAbilities = selected.zone === 'battlefield' ? battlefieldActivatedAbilities(card.instanceId) : [];
+  const ninjaActions = selected.zone === 'hand' ? ninjutsuOptions(card.instanceId) : [];
+  const mutateInfo = mutateStatus(card.instanceId);
+  const mutateActions = mutateInfo.targets || [];
+  const noteValue = Object.hasOwn(ui.noteDrafts, card.instanceId) ? ui.noteDrafts[card.instanceId] : (card.notes || '');
+  const libraryActions = privateLibraryActions(card);
+  return `
+    <div class="inspector-section" style="display:flex;justify-content:space-between;align-items:center"><h3>Card actions</h3><button class="icon-btn" data-action="close-inspector">×</button></div>
+    <div class="inspector-section">
+      <img class="inspector-card-image" src="${escapeHtml(cardImage(card))}" alt="${escapeHtml(card.name)}" onerror="this.src='./card-back.svg'" />
+      <h2>${escapeHtml(card.name)}</h2>
+      <div class="muted small">${escapeHtml(card.manaCost)} · ${escapeHtml(card.typeLine)}</div>
+      ${card.owner && card.controller && card.owner !== card.controller ? `<div class="control-status-line">Owned by ${escapeHtml(state.players[card.owner]?.name || card.owner)} · controlled by ${escapeHtml(state.players[card.controller]?.name || card.controller)}</div>` : ''}
+      ${card.power ? `<div class="small">${escapeHtml(card.power)}/${escapeHtml(card.toughness)}</div>` : ''}${card.commander ? `<div class="small" style="margin-top:5px;color:var(--gold-2)">Cast ${getState().players[card.owner].commanderCastCount[card.instanceId] || 0} time(s) · current tax +${2 * (getState().players[card.owner].commanderCastCount[card.instanceId] || 0)}</div>` : ''}
+    </div>
+    ${renderProminentMutateActions(card, selected, state, mutateInfo)}
+    ${mutateInfo.hasMutate || (card.mutationPile || []).length ? renderMutateRules(card, selected, state, mutateInfo) : ''}
+    <div class="inspector-section"><h3>Quick actions</h3><div class="action-grid">
+      ${selected.zone === 'battlefield' ? `${renderManaTapActions(card, state)}<button class="btn" data-action="toggle-attack" data-card-id="${card.instanceId}">${card.attacking ? 'Stop attack' : '⚔ Attack'}</button>${renderBlockActions(card, state)}${renderAttachActions(card, state)}` : ''}
+      ${/\bAura\b/i.test(String(card.typeLine || '')) && ['hand', 'command'].includes(selected.zone) ? '' : zoneMoveButton(card, 'battlefield', 'Battlefield')}
+      ${isPermanent(card) && selected.zone !== 'battlefield' ? `<button class="btn" data-action="move-card-tapped" data-card-id="${card.instanceId}">Battlefield tapped</button>` : ''}
+      ${selected.zone === 'hand' && isLand(card) ? `<button class="btn ghost wide" data-action="put-land-effect" data-card-id="${card.instanceId}">Put by card effect</button><button class="btn ghost wide" data-action="put-land-effect-tapped" data-card-id="${card.instanceId}">Put tapped by card effect</button>` : ''}
+      ${card.token ? `${selected.zone === 'battlefield' ? `<button class="btn danger" data-action="token-dies" data-card-id="${card.instanceId}">Token dies</button>` : ''}<button class="btn danger" data-action="remove-token" data-card-id="${card.instanceId}">Remove token</button>` : `${zoneMoveButton(card, 'hand', 'Hand')}${zoneMoveButton(card, 'graveyard', 'Graveyard')}${zoneMoveButton(card, 'exile', 'Exile')}${card.commander ? zoneMoveButton(card, 'command', 'Command zone') : ''}${zoneMoveButton(card, 'stack', 'Stack')}<button class="btn" data-action="move-library" data-card-id="${card.instanceId}" data-position="top">Library top</button><button class="btn" data-action="move-library" data-card-id="${card.instanceId}" data-position="bottom">Library bottom</button>`}
+      <button class="btn" data-action="flip-card" data-card-id="${card.instanceId}">${card.tokenFaces?.length > 1 ? 'Transform token' : (card.faceDown ? 'Turn face up' : 'Turn face down')}</button>
+      <button class="btn" data-action="reveal-public" data-card-id="${card.instanceId}">Reveal publicly</button>
+      ${libraryActions.map((effect, index) => `<button class="btn" data-action="card-library-effect" data-card-id="${card.instanceId}" data-effect-index="${index}">${effect.mode.startsWith('reveal') ? '👁 ' : '🔍 '}${escapeHtml(effect.label)}${effect.mode.startsWith('reveal') ? ' from card text' : ' privately'}</button>`).join('')}
+      <button class="btn" data-action="copy-token" data-card-id="${card.instanceId}">Create copy</button>
+      ${selected.zone === 'battlefield' ? `<button class="btn" data-action="queue-manual-effect" data-card-id="${card.instanceId}">Queue manual effect</button>` : ''}
+    </div></div>
+    ${renderTestOverrideActions(card, selected, state)}
+    ${renderAuraEntryActions(card, selected, state)}
+    ${renderControlActions(card, selected, state)}
+    ${renderBorrowedCardActions(card, selected, state)}
+    ${ninjaActions.length ? `<div class="inspector-section"><h3>Ninjutsu</h3><p class="small muted">After blockers are declared, return an unblocked attacker to your hand as part of the activation cost.</p><div class="action-grid">${ninjaActions.map((item) => `<button class="btn primary wide" data-action="activate-ninjutsu" data-card-id="${card.instanceId}" data-attacker-id="${item.attackerId}">Ninjutsu ${escapeHtml(item.cost)} — return ${escapeHtml(item.attackerName)}</button>`).join('')}</div></div>` : ''}
+    ${activatedAbilities.length ? `<div class="inspector-section"><h3>Battlefield abilities</h3><div class="ability-list">${activatedAbilities.map((ability, index) => `<button class="ability-button" data-action="activate-ability" data-card-id="${card.instanceId}" data-ability-index="${index}"><strong>Activate</strong><span>${escapeHtml(ability)}</span></button>`).join('')}</div><p class="small muted">Non-mana abilities are queued for resolution. Tap costs are applied automatically when supported.</p></div>` : ''}
+    <div class="inspector-section quick-edit-hint"><strong>Need counters or a granted keyword?</strong><span>Right-click this card on the table and choose Counters or Keyword abilities.</span></div>
+    <div class="inspector-section"><h3>Oracle text</h3><div class="oracle">${escapeHtml(card.oracleText || 'No Oracle text.')}</div>${effects.length ? `<p class="small muted">Recognized: ${effects.map(escapeHtml).join(' · ')}</p>` : ''}</div>
+    <div class="inspector-section"><h3>Notes</h3><textarea class="card-note" data-card-id="${card.instanceId}" style="min-height:70px">${escapeHtml(noteValue)}</textarea></div>`;
+}
+
+
+
+function renderBlockActions(card, state) {
+  if (!isCreature(card)) return '';
+  const opposingAttackers = Object.values(state.players)
+    .filter((player) => player.id !== card.controller)
+    .flatMap((player) => player.zones.battlefield)
+    .filter((attacker) => attacker.attacking && (!attacker.attackTargetPlayerId || attacker.attackTargetPlayerId === card.controller));
+  if (!opposingAttackers.length) return '';
+  return `<div class="mana-choice-group"><div class="small muted wide">Declare blocker</div>${opposingAttackers.map((attacker) => `<button class="btn" data-action="assign-block" data-card-id="${card.instanceId}" data-attacker-id="${attacker.instanceId}">${card.blocking === attacker.instanceId ? 'Stop blocking' : `Block ${escapeHtml(attacker.name)}`}</button>`).join('')}</div>`;
+}
+
+function renderAttachActions(card, state) {
+  const type = String(card.typeLine || '');
+  if (!/Aura|Equipment|Fortification/.test(type)) return '';
+  const allTargets = Object.values(state.players).flatMap((player) => player.zones.battlefield || []);
+  const legalTargets = allTargets.filter((target) => target.instanceId !== card.instanceId && attachmentTargetLegality(card, target, state).legal);
+  if (!legalTargets.length) {
+    if (/Aura/.test(type)) return `<div class="mana-choice-group"><div class="small muted wide">No legal Aura attachment target is currently available.</div></div>`;
+    return '';
+  }
+  return `<div class="mana-choice-group"><div class="small muted wide">Attach to</div>${legalTargets.slice(0, 20).map((target) => {
+    const controller = state.players[target.controller]?.name || target.controller;
+    return `<button class="btn" data-action="attach-card" data-card-id="${card.instanceId}" data-target-id="${target.instanceId}">${escapeHtml(target.name)}${target.controller !== card.controller ? ` · ${escapeHtml(controller)}` : ''}</button>`;
+  }).join('')}</div>`;
+}
+
+function renderAuraEntryActions(card, selected, state) {
+  if (!/\bAura\b/i.test(String(card.typeLine || '')) || selected.zone === 'battlefield') return '';
+  const targets = Object.values(state.players).flatMap((player) => player.zones.battlefield || [])
+    .filter((target) => attachmentTargetLegality(card, target, state).legal);
+  if (!targets.length) return `<div class="inspector-section"><h3>Aura</h3><p class="small muted">No legal object is available for this Aura to enchant right now.</p></div>`;
+  if (['hand', 'command'].includes(selected.zone)) {
+    return `<div class="inspector-section"><h3>Cast Aura</h3><p class="small muted">Choose the Aura's target now. If that target becomes illegal before resolution, the Aura spell will not resolve.</p><div class="action-grid">${targets.slice(0, 24).map((target) => `<button class="btn primary" data-action="cast-aura" data-card-id="${card.instanceId}" data-target-id="${target.instanceId}">Enchant ${escapeHtml(target.name)}</button>${state.settings.testOverrides ? `<button class="btn ghost" data-action="cast-aura" data-card-id="${card.instanceId}" data-target-id="${target.instanceId}" data-test-override="true">Test cast free → ${escapeHtml(target.name)}</button>` : ''}`).join('')}</div></div>`;
+  }
+  if (['graveyard', 'exile'].includes(selected.zone)) {
+    return `<div class="inspector-section"><h3>Put Aura onto battlefield by effect</h3><p class="small muted">Choose what it enters attached to. This does not target unless the card effect putting it onto the battlefield says it targets.</p><div class="action-grid">${targets.slice(0, 24).map((target) => `<button class="btn" data-action="put-public-battlefield" data-card-id="${card.instanceId}" data-controller-id="${card.controller || card.owner}" data-target-id="${target.instanceId}">Attach to ${escapeHtml(target.name)}</button>`).join('')}</div></div>`;
+  }
+  return '';
+}
+
+function renderControlActions(card, selected, state) {
+  if (selected.zone !== 'battlefield') return '';
+  const currentController = card.controller || selected.playerId;
+  const choices = Object.values(state.players).filter((player) => player.id !== currentController);
+  if (!choices.length) return '';
+  const ownerName = state.players[card.owner]?.name || card.owner;
+  const controllerName = state.players[currentController]?.name || currentController;
+  const allowedChoices = isOnlineMultiplayer()
+    ? choices.filter((player) => player.id === multiplayer.localPlayerId || currentController === multiplayer.localPlayerId)
+    : choices;
+  if (!allowedChoices.length) return '';
+  return `<div class="inspector-section control-section"><h3>Control</h3><p class="small muted">Owned by <strong>${escapeHtml(ownerName)}</strong> · controlled by <strong>${escapeHtml(controllerName)}</strong>. Changing control is not a zone change and does not retrigger ETB abilities.</p><div class="action-grid">${allowedChoices.map((player) => `<button class="btn control-action" data-action="change-control" data-card-id="${card.instanceId}" data-controller-id="${player.id}">${player.id === multiplayer.localPlayerId && isOnlineMultiplayer() ? 'Gain control (card effect)' : `Give control to ${escapeHtml(player.name)}`}</button>`).join('')}</div></div>`;
+}
+
+function renderBorrowedCardActions(card, selected, state) {
+  if (!['graveyard', 'exile'].includes(selected.zone)) return '';
+  const playerChoices = isOnlineMultiplayer()
+    ? [state.players[multiplayer.localPlayerId]].filter(Boolean)
+    : Object.values(state.players);
+  const useful = playerChoices.filter((player) => player.id !== card.owner || selected.zone === 'exile');
+  if (!useful.length) return '';
+  return `<div class="inspector-section"><h3>Use by card effect</h3><p class="small muted">For effects that let you cast, play, steal, or reanimate another player's card. Ownership stays with the original owner.</p>${useful.map((player) => { const auraTargets = /\bAura\b/i.test(String(card.typeLine || '')) ? Object.values(state.players).flatMap((p) => p.zones.battlefield || []).filter((target) => attachmentTargetLegality({ ...card, controller: player.id }, target, state).legal) : []; return `<div class="mana-choice-group"><div class="small muted wide">Under ${escapeHtml(player.name)}'s control</div>${isLand(card) ? `<button class="btn" data-action="play-public-land" data-card-id="${card.instanceId}" data-controller-id="${player.id}">Play land</button>` : /\bAura\b/i.test(String(card.typeLine || '')) ? (auraTargets.length ? auraTargets.slice(0, 20).map((target) => `<button class="btn primary" data-action="cast-public-free" data-card-id="${card.instanceId}" data-controller-id="${player.id}" data-target-id="${target.instanceId}">Cast free → enchant ${escapeHtml(target.name)}</button><button class="btn" data-action="put-public-battlefield" data-card-id="${card.instanceId}" data-controller-id="${player.id}" data-target-id="${target.instanceId}">Put attached → ${escapeHtml(target.name)}</button>`).join('') : '<span class="small muted wide">No legal Aura target.</span>') : `<button class="btn primary" data-action="cast-public-free" data-card-id="${card.instanceId}" data-controller-id="${player.id}">Cast without paying mana cost</button>${isPermanent(card) ? `<button class="btn" data-action="put-public-battlefield" data-card-id="${card.instanceId}" data-controller-id="${player.id}">Put onto battlefield</button>` : ''}`}</div>`; }).join('')}</div>`;
+}
+
+function renderTestOverrideActions(card, selected, state) {
+  if (!state.settings.testOverrides) return '';
+  const players = Object.values(state.players || {});
+  const controllerId = card.controller || selected.playerId || card.owner;
+  const ownerId = card.owner || selected.playerId || controllerId;
+  const battlefieldButtons = players.map((player) => `<button class="btn ghost" data-action="test-force-move" data-card-id="${card.instanceId}" data-target-player-id="${player.id}" data-zone="battlefield">Force battlefield → ${escapeHtml(player.name)}</button>`).join('');
+  return `<div class="inspector-section test-override-section"><h3>🧪 Test Override</h3><div class="validation warn"><strong>Sandbox controls</strong><br />These intentionally bypass mana, timing, land-play, and normal zone restrictions so you can build a board state or test a combo. They are not a claim that the move is legal in Magic.</div><div class="action-grid">${battlefieldButtons}<button class="btn ghost" data-action="test-force-move" data-card-id="${card.instanceId}" data-target-player-id="${ownerId}" data-zone="hand">Force owner hand</button><button class="btn ghost" data-action="test-force-move" data-card-id="${card.instanceId}" data-target-player-id="${ownerId}" data-zone="graveyard">Force owner graveyard</button><button class="btn ghost" data-action="test-force-move" data-card-id="${card.instanceId}" data-target-player-id="${ownerId}" data-zone="exile">Force owner exile</button><button class="btn ghost" data-action="test-force-move" data-card-id="${card.instanceId}" data-target-player-id="${controllerId}" data-zone="stack">Force stack / no cost</button><button class="btn ghost" data-action="test-force-move" data-card-id="${card.instanceId}" data-target-player-id="${ownerId}" data-zone="library" data-position="top">Force library top</button><button class="btn ghost" data-action="test-force-move" data-card-id="${card.instanceId}" data-target-player-id="${ownerId}" data-zone="library" data-position="bottom">Force library bottom</button></div><p class="small muted">In online play, Test Override requests go to every other connected active player. The action happens only after unanimous approval. Undo uses the same table-wide approval system.</p></div>`;
+}
+
+function renderManaTapActions(card, state) {
+  if (card.tapped) return `<button class="btn" data-action="toggle-tap" data-card-id="${card.instanceId}">↺ Untap</button>`;
+  const choices = manaProductionChoices(card, { player: state.players[card.controller] });
+  if (state.settings.manaMode === 'manual' || !choices.length) {
+    return `<button class="btn" data-action="toggle-tap" data-card-id="${card.instanceId}">↻ Tap</button>`;
+  }
+  const manaButtons = choices.map((choice, index) => `<button class="btn mana-choice" data-action="tap-mana" data-card-id="${card.instanceId}" data-choice-index="${index}">↻ Tap → ${escapeHtml(choice.label)}</button>`).join('');
+  return `<div class="mana-choice-group"><div class="small muted wide">Choose what this source produces</div>${manaButtons}<button class="btn ghost" data-action="toggle-tap-only" data-card-id="${card.instanceId}">Tap without adding mana</button></div>`;
+}
+
+function zoneMoveButton(card, zone, label) {
+  return `<button class="btn" data-action="move-card" data-card-id="${card.instanceId}" data-zone="${zone}">${label}</button>`;
+}
+
+function simpleCoachReason(result) {
+  const details = result.explanationDetails || {};
+  const reasons = details.visibleReasons || [];
+  if (['play-land', 'advance-land'].includes(result.type)) return 'It gives you more mana and does not spend a card already on the battlefield.';
+  if (result.type === 'attack') return reasons.find((reason) => /blocker|evasion|damage|attack/i.test(reason)) || 'This attack gets useful damage through without risking more creatures than necessary.';
+  if (result.type === 'hold') return reasons[0] || 'Keeping mana and cards available lets you react to what the opponent does.';
+  if (result.type === 'sequence') return reasons[0] || 'Doing these actions in this order uses your mana more efficiently and leaves a stronger board.';
+  if (result.type === 'activate-ability') return reasons[0] || 'This ability gives the best immediate value from the cards already on your battlefield.';
+  if (/cast/i.test(result.type || '')) return reasons.find((reason) => /contributes|supports|answer|draw|removal|mana/i.test(reason)) || reasons[0] || 'This spell improves your board more than the other available plays.';
+  return details.headline || result.explanation || 'This is the strongest simple line found from the visible board.';
+}
+
+function simpleCoachRisk(result) {
+  const details = result.explanationDetails || {};
+  const level = details.riskLevel || 'Low';
+  if (level === 'Low') return 'Low risk from the public information currently available.';
+  if (level === 'Low–moderate') return 'Some risk: the opponent may have an answer, but the play is still reasonable.';
+  if (level === 'Moderate') return 'Be careful: the opponent has enough open resources that interaction is plausible.';
+  return 'High risk: the opponent is likely able to disrupt this play based on visible mana and public history.';
+}
+
+function renderCoachInspector(state) {
+  const active = state.players[state.activePlayerId];
+  const defense = defenseAdvice(state);
+  const defenseHtml = defense ? `<div class="inspector-section"><h3>Simple defense plan for ${escapeHtml(defense.defenderName)}</h3>${defense.assignments.map((item) => `<div class="coach-result"><strong>Do this: ${escapeHtml(item.blocker)} blocks ${escapeHtml(item.attacker)}</strong><p class="small"><strong>Why:</strong> ${escapeHtml(item.reason)}</p></div>`).join('') || '<div class="validation">No useful legal blocks were found.</div>'}<p class="small">Damage still expected: ${defense.expectedDamage}</p></div>` : '';
+  const resultsHtml = ui.coach
+    ? ui.coach.results.slice(0, 6).map((result, index) => {
+      const details = result.explanationDetails || {};
+      const visible = (details.visibleReasons || []).map((reason) => `<li>${escapeHtml(reason)}</li>`).join('');
+      const memory = (details.publicMemoryReasons || []).map((reason) => `<li>${escapeHtml(reason)}</li>`).join('');
+      const safer = index === 0 && result.saferAlternative
+        ? `<div class="coach-safe"><strong>Safer option:</strong> ${escapeHtml(result.saferAlternative.label)}</div>`
+        : '';
+      return `<article class="coach-result ${index === 0 ? 'best' : ''}">
+        <div class="coach-simple-step"><span class="coach-step-number">${index + 1}</span><div><strong>Do this:</strong> ${escapeHtml(result.label)}</div></div>
+        <p class="coach-simple-why"><strong>Why:</strong> ${escapeHtml(simpleCoachReason(result))}</p>
+        <p class="coach-simple-risk"><strong>Watch out:</strong> ${escapeHtml(simpleCoachRisk(result))}</p>
+        ${safer}
+        <details class="coach-detail-toggle"><summary>See the detailed reasoning</summary>${visible ? `<div class="coach-detail"><strong>Board reasons:</strong><ul>${visible}</ul></div>` : ''}${memory ? `<div class="coach-detail"><strong>Known public information:</strong><ul>${memory}</ul></div>` : ''}<div class="small muted">Score ${result.score >= 0 ? '+' : ''}${result.score} · Confidence ${result.confidence || 0}% · sampled range ${result.range[0]} to ${result.range[1]}</div></details>
+      </article>`;
+    }).join('')
+    : '<div class="validation">Press Analyze and the coach will tell you what to do first and explain why in plain language.</div>';
+  const audit = ui.coach?.informationSetAudit;
+  const auditHtml = audit ? `<details class="coach-audit"><summary>What information the coach used</summary><div class="small"><div>✓ Your hand and every public zone</div><div>✓ Visible cards, counters, granted keywords, attachments, and usable mana</div><div>✓ Cards the opponent publicly revealed</div><div>✗ It cannot see the opponent's hidden hand or library</div></div></details>` : '';
+  const analysisMeta = ui.coach
+    ? `${ui.coach.results.length} useful choices checked in ${(Number(ui.coach.elapsedMs || 0) / 1000).toFixed(1)} seconds${ui.coach.truncated ? ' using the faster crowded-board limit' : ''}.`
+    : 'Checks legal plays, attacks, mana, rules, and short action sequences.';
+  return `<div class="inspector-section" style="display:flex;justify-content:space-between;align-items:center"><h3>Strategy coach</h3><button class="icon-btn" data-action="close-inspector">×</button></div><div class="coach-panel"><p class="small muted">The coach gives a simple action first, then explains why. Detailed calculations stay hidden unless you open them.</p><button class="btn primary wide" data-action="run-coach" ${ui.coachRunning ? 'disabled' : ''}>${ui.coachRunning ? 'Analyzing…' : `Analyze ${escapeHtml(active.name)}'s position`}</button><p class="small">${analysisMeta}</p>${resultsHtml}${auditHtml}</div>${defenseHtml}`;
+}
+
+function renderDrawer(state) {
+  if (!ui.drawer) return '<section class="zone-drawer" aria-hidden="true"></section>';
+  const { playerId, zone } = ui.drawer;
+  const player = state.players[playerId];
+  let cards = player.zones[zone] || [];
+  if (ui.drawerSearch.trim()) cards = cards.filter((card) => card.name.toLocaleLowerCase().includes(ui.drawerSearch.trim().toLocaleLowerCase()));
+  else if (zone === 'library' && ui.libraryReveal?.playerId === playerId) cards = cards.slice(0, 1);
+  const remoteHiddenLibrary = isOnlineMultiplayer() && multiplayer.localPlayerId && playerId !== multiplayer.localPlayerId && zone === 'library';
+  const hideLibrary = remoteHiddenLibrary || (zone === 'library' && !ui.drawerSearch.trim() && ui.libraryReveal?.playerId !== playerId);
+  const libraryTools = remoteHiddenLibrary
+    ? '<span class="small muted">Opponent library is hidden</span>'
+    : `<input type="search" id="drawer-search" value="${escapeHtml(ui.drawerSearch)}" placeholder="Search library by name" /><button class="btn small-btn" data-action="shuffle-library" data-player-id="${playerId}">Shuffle</button><button class="btn small-btn" data-action="open-scry" data-player-id="${playerId}">Scry…</button><button class="btn small-btn" data-action="open-private-look" data-player-id="${playerId}">Private look…</button><button class="btn small-btn" data-action="reveal-top" data-player-id="${playerId}">Reveal publicly</button><button class="btn small-btn" data-action="draw" data-player-id="${playerId}" data-amount="1">Draw</button><button class="btn small-btn" data-action="mill" data-player-id="${playerId}" data-amount="1">Mill</button>`;
+  return `<section class="zone-drawer open" aria-label="${ZONE_LABELS[zone]}"><div class="drawer-header"><div><div class="drawer-title">${escapeHtml(player.name)} · ${ZONE_LABELS[zone]}</div><div class="small muted">${player.zones[zone].length} card${player.zones[zone].length === 1 ? '' : 's'}</div></div><div class="drawer-tools">${zone === 'library' ? libraryTools : `<input type="search" id="drawer-search" value="${escapeHtml(ui.drawerSearch)}" placeholder="Filter cards" />`}<button class="icon-btn" data-action="close-drawer">×</button></div></div><div class="drawer-carousel" data-drop-zone="${zone}" data-player-id="${playerId}">${hideLibrary ? (remoteHiddenLibrary ? renderRemoteLibraryBacks(state, playerId, player.zones.library.length) : renderLibraryBacks(state, playerId, player.zones.library.length)) : cards.map((card) => renderCard(card, state)).join('') || '<span class="muted">No matching cards.</span>'}</div></section>`;
+}
+
+function renderLibraryBacks(state, playerId, count) {
+  const revealed = knownLibraryRevealRecords(state, playerId);
+  const hiddenCount = Math.max(0, count - revealed.length);
+  const visible = Math.min(7, hiddenCount);
+  const revealedHtml = revealed.map((entry) => renderPublicRevealCard(
+    entry.card,
+    entry.position === 'top' ? 'Revealed top' : 'Publicly revealed',
+    playerId,
+  )).join('');
+  return `${revealedHtml}${Array.from({ length: visible }, () => `<div class="game-card card-back-stack"><img src="./card-back.svg" alt="Hidden library card" /></div>`).join('')}<div class="validation"><strong>${revealed.length ? `${revealed.length} revealed card${revealed.length === 1 ? '' : 's'} visible to both players.` : 'Library is hidden.'}</strong><br />Use Private look for card effects. Publicly revealed cards remain inspectable until they become unknown.</div>`;
+}
+
+function renderRemoteLibraryBacks(state, playerId, count) {
+  const revealed = knownLibraryRevealRecords(state, playerId);
+  const hiddenCount = Math.max(0, count - revealed.length);
+  const visible = Math.min(7, hiddenCount);
+  const revealedHtml = revealed.map((entry) => renderPublicRevealCard(
+    entry.card,
+    entry.position === 'top' ? 'Revealed top' : 'Revealed from library',
+    playerId,
+  )).join('');
+  return `${revealedHtml}${Array.from({ length: visible }, () => `<div class="game-card card-back-stack"><img src="./card-back.svg" alt="Hidden library card" /></div>`).join('')}<div class="validation"><strong>${revealed.length ? `${revealed.length} revealed card${revealed.length === 1 ? '' : 's'} visible.` : 'Library is hidden.'}</strong><br />Click a revealed card to inspect it on the right. All other identities and library order remain private.</div>`;
+}
+
+function renderBottomBar() {
+  return `<nav class="bottom-bar"><button data-action="next-phase"><strong>›</strong>Phase</button><button data-action="coach"><strong>✦</strong>Coach</button><button data-action="open-token"><strong>＋</strong>Token</button><button data-action="undo"><strong>↶</strong>Undo</button><button data-action="open-settings"><strong>⚙</strong>Tools</button></nav>`;
+}
+
+
+function secureD20Roll() {
+  const values = new Uint32Array(1);
+  if (globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(values);
+    return 1 + (values[0] % 20);
+  }
+  return 1 + Math.floor(Math.random() * 20);
+}
+
+function d20Geometry() {
+  if (d20Runtime.faceCache) return d20Runtime.faceCache;
+  const phi = (1 + Math.sqrt(5)) / 2;
+  const raw = [
+    [-1, phi, 0], [1, phi, 0], [-1, -phi, 0], [1, -phi, 0],
+    [0, -1, phi], [0, 1, phi], [0, -1, -phi], [0, 1, -phi],
+    [phi, 0, -1], [phi, 0, 1], [-phi, 0, -1], [-phi, 0, 1],
+  ];
+  const vertices = raw.map(([x,y,z]) => {
+    const len = Math.hypot(x,y,z);
+    return [x/len,y/len,z/len];
+  });
+  let edge = Infinity;
+  for (let i=0;i<vertices.length;i++) for (let j=i+1;j<vertices.length;j++) {
+    const d=Math.hypot(vertices[i][0]-vertices[j][0],vertices[i][1]-vertices[j][1],vertices[i][2]-vertices[j][2]);
+    if (d>0.01 && d<edge) edge=d;
+  }
+  const faces=[];
+  for (let i=0;i<vertices.length;i++) for (let j=i+1;j<vertices.length;j++) for (let k=j+1;k<vertices.length;k++) {
+    const dist=(a,b)=>Math.hypot(vertices[a][0]-vertices[b][0],vertices[a][1]-vertices[b][1],vertices[a][2]-vertices[b][2]);
+    if ([dist(i,j),dist(j,k),dist(k,i)].every((d)=>Math.abs(d-edge)<0.02)) faces.push([i,j,k]);
+  }
+  d20Runtime.faceCache={vertices,faces};
+  return d20Runtime.faceCache;
+}
+
+function rotateD20Point(point, rotation) {
+  let [x,y,z]=point;
+  let c=Math.cos(rotation.x), q=Math.sin(rotation.x);
+  [y,z]=[y*c-z*q,y*q+z*c];
+  c=Math.cos(rotation.y); q=Math.sin(rotation.y);
+  [x,z]=[x*c+z*q,-x*q+z*c];
+  c=Math.cos(rotation.z); q=Math.sin(rotation.z);
+  [x,y]=[x*c-y*q,x*q+y*c];
+  return [x,y,z];
+}
+
+function drawD20Canvas(canvas) {
+  if (!canvas?.isConnected) return;
+  const rect=canvas.getBoundingClientRect();
+  const dpr=Math.min(2,globalThis.devicePixelRatio||1);
+  const width=Math.max(320,Math.floor(rect.width||700));
+  const height=Math.max(260,Math.floor(rect.height||390));
+  if (canvas.width!==Math.floor(width*dpr) || canvas.height!==Math.floor(height*dpr)) {
+    canvas.width=Math.floor(width*dpr); canvas.height=Math.floor(height*dpr);
+  }
+  const ctx=canvas.getContext('2d');
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,width,height);
+  const bg=ctx.createRadialGradient(width/2,height/2,20,width/2,height/2,Math.max(width,height)*0.7);
+  bg.addColorStop(0,'rgba(45,57,43,.88)'); bg.addColorStop(1,'rgba(7,16,21,.98)');
+  ctx.fillStyle=bg; ctx.fillRect(0,0,width,height);
+  ctx.strokeStyle='rgba(212,166,84,.32)'; ctx.lineWidth=2; ctx.strokeRect(2,2,width-4,height-4);
+  if (!d20Runtime.pos.x) d20Runtime.pos={x:width/2,y:height/2};
+  d20Runtime.pos.x=Math.max(72,Math.min(width-72,d20Runtime.pos.x));
+  d20Runtime.pos.y=Math.max(72,Math.min(height-72,d20Runtime.pos.y));
+  const {vertices,faces}=d20Geometry();
+  const radius=Math.max(54,Math.min(78,width/9));
+  const rotated=vertices.map((v)=>rotateD20Point(v,d20Runtime.rotation));
+  const projected=rotated.map(([x,y,z])=>{
+    const scale=radius*(1.05+z*0.10);
+    return [d20Runtime.pos.x+x*scale,d20Runtime.pos.y+y*scale,z];
+  });
+  const ordered=faces.map((face,index)=>({face,index,z:face.reduce((sum,i)=>sum+rotated[i][2],0)/3})).sort((a,b)=>a.z-b.z);
+  for (const item of ordered) {
+    const pts=item.face.map((i)=>projected[i]);
+    const shade=Math.max(0.18,Math.min(0.78,(item.z+1)/2));
+    ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]); ctx.lineTo(pts[1][0],pts[1][1]); ctx.lineTo(pts[2][0],pts[2][1]); ctx.closePath();
+    ctx.fillStyle=`rgba(${Math.floor(34+shade*58)},${Math.floor(73+shade*55)},${Math.floor(63+shade*40)},.98)`;
+    ctx.fill(); ctx.strokeStyle='rgba(231,190,95,.9)'; ctx.lineWidth=1.25; ctx.stroke();
+    if (item.z>-.10) {
+      const cx=(pts[0][0]+pts[1][0]+pts[2][0])/3, cy=(pts[0][1]+pts[1][1]+pts[2][1])/3;
+      ctx.fillStyle='rgba(255,244,211,.92)'; ctx.font=`700 ${Math.max(10,Math.floor(radius/5.4))}px system-ui,sans-serif`; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(String((item.index%20)+1),cx,cy);
+    }
+  }
+  if (d20Runtime.dragging) {
+    ctx.fillStyle='rgba(255,236,180,.9)'; ctx.font='700 14px system-ui,sans-serif'; ctx.textAlign='center'; ctx.fillText('Release to throw',d20Runtime.pos.x,d20Runtime.pos.y+radius+30);
+  }
+}
+
+function capD20Velocity(vx,vy,max=950) {
+  const speed=Math.hypot(vx,vy);
+  if (speed<=max || !speed) return {x:vx,y:vy};
+  const ratio=max/speed; return {x:vx*ratio,y:vy*ratio};
+}
+
+function initD20Canvas() {
+  const canvas=document.getElementById('forge-d20-canvas');
+  if (!isOnlineMultiplayer()) scheduleSoloBotD20Roll();
+  if (!canvas || d20Runtime.canvas===canvas) return;
+
+  const sessionKey=String(canvas.dataset.d20Session || '');
+  const sameSession=Boolean(sessionKey && d20Runtime.sessionKey===sessionKey);
+
+  if (d20Runtime.raf) cancelAnimationFrame(d20Runtime.raf);
+  d20Runtime.canvas=canvas;
+
+  if (!sameSession) {
+    d20Runtime.sessionKey=sessionKey;
+    d20Runtime.dragging=false;
+    d20Runtime.pos={x:0,y:0};
+    d20Runtime.velocity={x:0,y:0};
+    d20Runtime.angular={x:0,y:0,z:0};
+    d20Runtime.lastPointer=null;
+    d20Runtime.releasedAt=0;
+    d20Runtime.submitted=false;
+  } else if (d20Runtime.dragging) {
+    // If the DOM gets refreshed while dragging, preserve the gesture by
+    // turning the current motion into a throw instead of snapping to center.
+    d20Runtime.dragging=false;
+    d20Runtime.releasedAt=performance.now();
+    let {x:vx,y:vy}=d20Runtime.velocity;
+    if (Math.hypot(vx,vy)<170) {
+      const angle=Math.random()*Math.PI*2;
+      vx=Math.cos(angle)*360;
+      vy=Math.sin(angle)*360;
+    }
+    d20Runtime.velocity=capD20Velocity(vx,vy,950);
+    d20Runtime.angular={
+      x:Math.max(-11,Math.min(11,vy/80)),
+      y:Math.max(-11,Math.min(11,vx/80)),
+      z:Math.max(-8,Math.min(8,(vx-vy)/130)),
+    };
+    d20Runtime.lastPointer=null;
+  }
+
+  const canRoll=canvas.dataset.canRoll==='true';
+  const point=(event)=>{const r=canvas.getBoundingClientRect();return{x:event.clientX-r.left,y:event.clientY-r.top,time:performance.now()};};
+  canvas.addEventListener('pointerdown',(event)=>{
+    if (!canRoll || d20Runtime.submitted) return;
+    const p=point(event); const radius=105;
+    if (d20Runtime.pos.x && Math.hypot(p.x-d20Runtime.pos.x,p.y-d20Runtime.pos.y)>radius) return;
+    canvas.setPointerCapture?.(event.pointerId);
+    d20Runtime.dragging=true; d20Runtime.pos={x:p.x,y:p.y}; d20Runtime.velocity={x:0,y:0}; d20Runtime.lastPointer=p; d20Runtime.releasedAt=0;
+    event.preventDefault();
+  });
+  canvas.addEventListener('pointermove',(event)=>{
+    if (!d20Runtime.dragging) return;
+    const p=point(event), last=d20Runtime.lastPointer||p, dt=Math.max(8,p.time-last.time)/1000;
+    const raw=capD20Velocity((p.x-last.x)/dt,(p.y-last.y)/dt,950);
+    d20Runtime.velocity={x:d20Runtime.velocity.x*0.35+raw.x*0.65,y:d20Runtime.velocity.y*0.35+raw.y*0.65};
+    d20Runtime.pos={x:p.x,y:p.y}; d20Runtime.lastPointer=p;
+  });
+  const release=(event)=>{
+    if (!d20Runtime.dragging) return;
+    d20Runtime.dragging=false; d20Runtime.releasedAt=performance.now();
+    let {x:vx,y:vy}=d20Runtime.velocity;
+    if (Math.hypot(vx,vy)<170) { const angle=Math.random()*Math.PI*2; vx=Math.cos(angle)*360; vy=Math.sin(angle)*360; }
+    d20Runtime.velocity=capD20Velocity(vx,vy,950);
+    d20Runtime.angular={x:Math.max(-11,Math.min(11,vy/80)),y:Math.max(-11,Math.min(11,vx/80)),z:Math.max(-8,Math.min(8,(vx-vy)/130))};
+    try { canvas.releasePointerCapture?.(event.pointerId); } catch {}
+  };
+  canvas.addEventListener('pointerup',release); canvas.addEventListener('pointercancel',release);
+  let last=performance.now();
+  const animate=(now)=>{
+    if (!canvas.isConnected) return;
+    const dt=Math.min(.034,Math.max(.001,(now-last)/1000)); last=now;
+    const rect=canvas.getBoundingClientRect(), w=Math.max(320,rect.width), h=Math.max(260,rect.height), r=72;
+    if (!d20Runtime.dragging && d20Runtime.releasedAt) {
+      d20Runtime.pos.x+=d20Runtime.velocity.x*dt; d20Runtime.pos.y+=d20Runtime.velocity.y*dt;
+      if (d20Runtime.pos.x<r) { d20Runtime.pos.x=r; d20Runtime.velocity.x=Math.abs(d20Runtime.velocity.x)*.72; }
+      if (d20Runtime.pos.x>w-r) { d20Runtime.pos.x=w-r; d20Runtime.velocity.x=-Math.abs(d20Runtime.velocity.x)*.72; }
+      if (d20Runtime.pos.y<r) { d20Runtime.pos.y=r; d20Runtime.velocity.y=Math.abs(d20Runtime.velocity.y)*.72; }
+      if (d20Runtime.pos.y>h-r) { d20Runtime.pos.y=h-r; d20Runtime.velocity.y=-Math.abs(d20Runtime.velocity.y)*.72; }
+      const friction=Math.pow(.976,dt*60); d20Runtime.velocity.x*=friction; d20Runtime.velocity.y*=friction;
+      const angularFriction=Math.pow(.986,dt*60); d20Runtime.angular.x*=angularFriction; d20Runtime.angular.y*=angularFriction; d20Runtime.angular.z*=angularFriction;
+      d20Runtime.rotation.x+=d20Runtime.angular.x*dt; d20Runtime.rotation.y+=d20Runtime.angular.y*dt; d20Runtime.rotation.z+=d20Runtime.angular.z*dt;
+      const elapsed=now-d20Runtime.releasedAt, speed=Math.hypot(d20Runtime.velocity.x,d20Runtime.velocity.y);
+      if (!d20Runtime.submitted && (elapsed>4200 || (elapsed>1150 && speed<38))) {
+        d20Runtime.submitted=true; d20Runtime.velocity={x:0,y:0}; d20Runtime.angular={x:0,y:0,z:0};
+        submitStartingRoll(secureD20Roll());
+      }
+    } else if (!d20Runtime.dragging) {
+      d20Runtime.rotation.y+=dt*.32; d20Runtime.rotation.x+=dt*.16;
+    }
+    drawD20Canvas(canvas);
+    d20Runtime.raf=requestAnimationFrame(animate);
+  };
+  d20Runtime.raf=requestAnimationFrame(animate);
+}
+
+function renderStartingRollModal(state) {
+  const roll=state.startingRoll;
+  if (!roll?.active) return '';
+
+  const online=isOnlineMultiplayer();
+  const localId=online ? multiplayer.localPlayerId : soloStartingRollPlayerId(state);
+  const required=new Set(roll.requiredPlayerIds || Object.keys(state.players));
+  const localResult=Number(roll.results?.[localId] || 0);
+  const botRolling=!online && bot.enabled && localId===bot.playerId && !localResult;
+  const canRoll=Boolean(localId) && required.has(localId) && !localResult && !botRolling;
+
+  const results=Object.keys(state.players || {}).map((id)=>{
+    const result=Number(roll.results?.[id]||0), waiting=required.has(id)&&!result;
+    return `<div class="d20-player-result ${result ? 'rolled' : waiting ? 'waiting' : 'not-required'}"><span>${escapeHtml(state.players[id]?.name || id)}</span><strong>${result ? result : waiting ? 'ROLL' : '—'}</strong></div>`;
+  }).join('');
+
+  const turnPrompt=!online && localId
+    ? (bot.enabled && localId===bot.playerId
+      ? `${escapeHtml(state.players[localId]?.name || 'Autoplay Bot')} is rolling…`
+      : `${escapeHtml(state.players[localId]?.name || localId)}: throw the D20.`)
+    : '';
+
+  const waitingText=botRolling
+    ? `<div class="d20-instruction waiting"><strong>${escapeHtml(state.players[localId]?.name || 'Autoplay Bot')} is rolling…</strong><span>The bot uses the same fair 1–20 result generator.</span></div>`
+    : `<div class="d20-instruction waiting"><strong>${localResult ? `${escapeHtml(state.players[localId]?.name || 'You')} rolled ${localResult}.` : localId && required.has(localId) ? 'Waiting for this roll…' : 'Waiting for the remaining players.'}</strong><span>${online ? 'Waiting for the remaining players.' : 'The next local player will roll on this same die.'}</span></div>`;
+
+  const d20SessionKey = [
+    state.onlineGameId || 'solo',
+    Number(roll.round || 1),
+    localId || 'spectator',
+    required.has(localId) ? 'required' : 'waiting',
+  ].join('|');
+  return `<div class="modal-backdrop starting-roll-backdrop"><section class="modal starting-roll-modal" role="dialog" aria-modal="true" aria-labelledby="starting-roll-title"><header class="starting-roll-header"><div><div class="mulligan-kicker">WHO GOES FIRST?</div><h2 id="starting-roll-title">Throw the D20</h2><p>${escapeHtml(turnPrompt || roll.message || 'Highest roll goes first.')}</p></div><span class="d20-round">Round ${Number(roll.round || 1)}</span></header><div class="starting-roll-body"><div class="d20-results-grid">${results}</div><div class="d20-arena-wrap"><canvas id="forge-d20-canvas" data-can-roll="${canRoll ? 'true' : 'false'}" data-d20-session="${escapeHtml(d20SessionKey)}"></canvas>${canRoll ? '<div class="d20-instruction"><strong>Click and hold the die, drag, then release to throw.</strong><span>Throw speed is capped so the die stays on the table. It has momentum, friction, and bounces off the arena edges.</span></div>' : waitingText}</div></div></section></div>`;
+}
+
+
+function renderAttackTargetPicker(state) {
+  const cardId=ui.attackTargetPicker?.cardId;
+  if (!cardId) return '';
+  const found=findCard(cardId,state);
+  if (!found) return '';
+  const choices=Object.keys(state.players||{}).filter((id)=>id!==(found.card.controller||found.playerId)&&!state.players[id].lost);
+  return `<div class="modal-backdrop"><section class="modal small-modal attack-target-modal"><header class="modal-header"><div><h2>Who is ${escapeHtml(found.card.name)} attacking?</h2><p class="small muted">In multiplayer Commander, each attacker can attack a different opponent.</p></div><button class="icon-btn" data-action="close-attack-target">×</button></header><div class="modal-body"><div class="attack-target-grid">${choices.map((id)=>`<button class="attack-target-choice" data-action="choose-attack-target" data-card-id="${cardId}" data-target-player-id="${id}"><span>P${String(id).replace(/^p/,'')}</span><strong>${escapeHtml(state.players[id].name)}</strong><small>${Number(state.players[id].life||0)} life · ${Number(state.players[id].poison||0)} poison</small></button>`).join('')}</div></div></section></div>`;
+}
+
+function renderModals(state) {
+  return `${ui.setupOpen ? renderSetupModal(state) : ''}${ui.settingsOpen ? renderSettingsModal(state) : ''}${ui.attackTargetPicker ? renderAttackTargetPicker(state) : ''}${ui.predefinedTokensOpen ? renderPredefinedTokenModal(state) : ''}${ui.tokenOpen && !ui.tokenPeek ? renderTokenModal(state) : ''}${ui.tokenOpen && ui.tokenPeek ? renderTokenPeekReturn() : ''}${state.startingRoll?.active ? renderStartingRollModal(state) : ''}${state.openingHands?.active ? renderMulliganModal(state) : ''}${ui.damageOpen ? renderDamageModal(state) : ''}${ui.logOpen ? renderLogModal(state) : ''}${ui.publicRevealNotice ? renderPublicRevealModal(state) : ''}${ui.scry ? renderPrivateLibraryModal(state) : ''}`;
+}
+
+function renderPrivateLibraryModal(state) {
+  const tool = ui.scry;
+  if (!tool) return '';
+  const player = state.players[tool.playerId];
+  const cardById = new Map(player.zones.library.map((card) => [card.instanceId, card]));
+  const destinationLabels = { top: 'Top', bottom: 'Bottom', hand: 'Hand', graveyard: 'Graveyard', exile: 'Exile' };
+  const handCount = tool.items.filter((item) => item.destination === 'hand').length;
+  const validHand = handCount >= tool.handRequired && (!tool.handLimit || handCount <= tool.handLimit);
+  const cards = tool.items.map((item) => {
+    const card = cardById.get(item.cardId);
+    if (!card) return '';
+    const sameDestination = tool.items.filter((entry) => entry.destination === item.destination);
+    const place = sameDestination.findIndex((entry) => entry.cardId === item.cardId);
+    return `<article class="scry-card"><img src="${escapeHtml(cardImage(card))}" alt="${escapeHtml(card.name)}" onerror="this.src='./card-back.svg'" /><h3>${escapeHtml(card.name)}</h3><div class="scry-destinations">${tool.allowedDestinations.map((destination) => `<button class="${item.destination === destination ? 'active' : ''}" data-action="scry-destination" data-card-id="${card.instanceId}" data-destination="${destination}">${destinationLabels[destination]}</button>`).join('')}</div>${tool.allowReveal ? `<button class="btn wide scry-reveal-choice ${item.reveal ? 'active' : ''}" data-action="scry-reveal" data-card-id="${card.instanceId}">${item.reveal ? '✓ Publicly reveal' : '👁 Publicly reveal'}</button>` : ''}<div class="scry-order"><button class="btn small-btn" data-action="scry-order" data-card-id="${card.instanceId}" data-direction="up" ${place <= 0 ? 'disabled' : ''}>← Earlier</button><span>${escapeHtml(destinationLabels[item.destination])} #${place + 1}</span><button class="btn small-btn" data-action="scry-order" data-card-id="${card.instanceId}" data-direction="down" ${place >= sameDestination.length - 1 ? 'disabled' : ''}>Later →</button></div></article>`;
+  }).join('');
+  const instruction = tool.mode === 'scry'
+    ? 'Choose any number for the bottom. Cards left on top can be reordered. Scry does not put a card into your hand.'
+    : tool.mode === 'reveal-until'
+      ? `Reveal cards one at a time until you reach ${tool.conditionText || 'the named condition'}, then choose the destinations required by the card.`
+      : tool.mode === 'reveal'
+        ? 'The card text marked these cards for a public reveal. Choose the destinations required by the effect.'
+        : 'Choose where each privately viewed card goes. Only use Hand when the effect actually allows it.';
+  return `<div class="modal-backdrop scry-backdrop"><section class="modal scry-modal"><header class="modal-header"><div><h2>${escapeHtml(tool.label)}</h2><p class="small muted">Private view for ${escapeHtml(player.name)} · only this browser receives these card identities.</p></div><button class="icon-btn" data-action="close-scry">×</button></header><div class="modal-body"><div class="validation scry-privacy"><strong>These cards stay private unless you mark one as Publicly reveal.</strong><br />Publicly revealed cards remain visible and inspectable for both players until they become hidden again.</div><p class="small">${escapeHtml(instruction)}</p>${tool.handLimit ? `<div class="validation ${validHand ? 'ok' : 'error'}">Hand selection: ${handCount}/${tool.handLimit}${tool.handRequired ? ` · choose at least ${tool.handRequired}` : ' · optional'}</div>` : ''}${tool.drawAfter ? `<div class="validation ok">After these choices, draw ${tool.drawAfter} card${tool.drawAfter === 1 ? '' : 's'} automatically.</div>` : ''}<div class="scry-card-grid">${cards}</div>${tool.dynamicReveal ? `<button class="btn wide" data-action="scry-reveal-next">Reveal next card</button>` : ''}<div class="scry-order-help"><strong>Ordering:</strong> Top #1 becomes the next card of the library. The last Bottom card becomes the absolute bottom card.</div><div class="scry-footer"><button class="btn" data-action="close-scry">Cancel</button><button class="btn primary" data-action="confirm-scry" ${validHand ? '' : 'disabled'}>Confirm private choices</button></div></div></section></div>`;
+}
+
+function renderPublicRevealModal(state) {
+  const reveal = ui.publicRevealNotice;
+  if (!reveal?.card) return '';
+  const playerName = state.players?.[reveal.playerId]?.name || reveal.playerId;
+  const locationLabel = reveal.zone === 'library' ? (reveal.position === 'top' ? 'the top of their library' : 'their library') : 'their hand';
+  return `<div class="modal-backdrop public-reveal-backdrop"><section class="modal small-modal public-reveal-modal"><header class="modal-header"><div><h2>Public card reveal</h2><p class="small muted">${escapeHtml(playerName)} revealed this card from ${escapeHtml(locationLabel)}.</p></div><button class="icon-btn" data-action="close-public-reveal">×</button></header><div class="modal-body"><img class="public-reveal-large-image" src="${escapeHtml(publicRevealImage(reveal.card, 'normal'))}" alt="${escapeHtml(reveal.card.name)}" onerror="this.src='./card-back.svg'" /><h3>${escapeHtml(reveal.card.name)}</h3><p class="small muted">${escapeHtml(reveal.card.manaCost || '')} · ${escapeHtml(reveal.card.typeLine || '')}</p><p class="public-reveal-oracle">${escapeHtml(reveal.card.oracleText || '')}</p><button class="btn primary wide" data-action="close-public-reveal">Done</button></div></section></div>`;
+}
+
+function renderSetupModal(state) {
+  const solo = !isOnlineMultiplayer();
+  const content = solo
+    ? `${renderBotSetupControls()}<div class="setup-grid">${renderDeckPanel('p1')}${renderDeckPanel('p2')}</div><div class="setup-footer"><div><button class="btn" data-action="demo-game">Load interactive demo</button> <button class="btn" data-action="import-save">Import saved game</button></div><button class="btn primary" data-action="start-game" ${bothDraftsReady() ? '' : 'disabled'}>Shuffle, draw 7, and start</button></div>`
+    : renderOnlineSetup(state);
+  const modeTitle = solo ? 'Solo Practice Setup' : 'Online Multiplayer Setup';
+  const modeSubtitle = solo
+    ? (bot.enabled ? 'Choose your deck and an opponent deck. The autoplay bot will pilot Player 2.' : 'Choose both local decks, then shuffle and begin.')
+    : 'Host or join a 2–6 player Commander room. Everyone loads a deck and readies up before the host starts.';
+  const headerAction = state.started
+    ? '<button class="icon-btn" data-action="close-setup">×</button>'
+    : '<button class="btn ghost small-btn" data-action="back-title">‹ Main menu</button>';
+  return `<div class="modal-backdrop"><section class="modal setup-modal"><header class="modal-header"><div><h2>${modeTitle}</h2><div class="small muted">${modeSubtitle}</div></div>${headerAction}</header><div class="modal-body">${content}<input id="save-file-input" class="hidden" type="file" accept="application/json" /></div></section></div>`;
+}
+
+function renderDeckPanel(playerId) {
+  const draft = ui.drafts[playerId];
+  return `<section class="deck-panel" data-deck-panel="${playerId}"><h3>${isOnlineMultiplayer() ? `Player ${String(playerId).replace(/^p/, '')} / You` : (playerId === 'p1' ? 'Player 1 / You' : (bot.enabled ? 'Opponent / Autoplay Bot' : 'Player 2'))}</h3><div class="field"><label>Player name</label><input data-draft-field="name" data-player-id="${playerId}" value="${escapeHtml(draft.name)}" /></div><div class="segmented"><button class="${draft.source === 'custom' ? 'active' : ''}" data-action="deck-source" data-player-id="${playerId}" data-source="custom">Paste decklist</button><button class="${draft.source === 'precon' ? 'active' : ''}" data-action="deck-source" data-player-id="${playerId}" data-source="precon">Official precon</button></div>${draft.source === 'custom' ? renderCustomDraft(playerId, draft) : renderPreconDraft(playerId, draft)}${draft.cards.length ? renderCommanderSelection(playerId, draft) : ''}${draft.validation ? renderValidation(draft.validation) : ''}</section>`;
+}
+
+function renderCustomDraft(playerId, draft) {
+  return `<div class="field"><label>Decklist format: <code>1 Satoru Umezawa</code></label><textarea data-draft-field="text" data-player-id="${playerId}" placeholder="1 Commander Name\n1 Sol Ring\n1 Arcane Signet\n...">${escapeHtml(draft.text)}</textarea></div><button class="btn primary" data-action="prepare-custom" data-player-id="${playerId}">Load cards and validate</button>`;
+}
+
+function renderPreconDraft(playerId, draft) {
+  return `<div class="field"><label>Search official deck name</label><div style="display:flex;gap:6px"><input data-draft-field="preconQuery" data-player-id="${playerId}" value="${escapeHtml(draft.preconQuery)}" placeholder="Grave Danger" /><button class="btn" data-action="search-precon" data-player-id="${playerId}">Search</button></div></div><div class="precon-results">${draft.preconResults.map((deck) => `<button class="precon-item" data-action="load-precon" data-player-id="${playerId}" data-file-name="${escapeHtml(deck.fileName)}"><span><strong>${escapeHtml(deck.name)}</strong><br /><span class="small muted">${escapeHtml(deck.type || deck.code)} · ${escapeHtml(deck.releaseDate || '')}</span></span><span>Load ›</span></button>`).join('') || '<div class="validation">Search MTGJSON for a preconstructed deck.</div>'}</div>`;
+}
+
+function renderCommanderSelection(playerId, draft) {
+  const options = draft.candidates.map((card) => `<option value="${escapeHtml(card.name)}" ${draft.commanders[0] === card.name ? 'selected' : ''}>${escapeHtml(card.name)}</option>`).join('');
+  const secondaryOptions = `<option value="">No second commander</option>${draft.candidates.map((card) => `<option value="${escapeHtml(card.name)}" ${draft.commanders[1] === card.name ? 'selected' : ''}>${escapeHtml(card.name)}</option>`).join('')}`;
+  return `<div class="field" style="margin-top:10px"><label>Commander</label><select data-commander-select="primary" data-player-id="${playerId}"><option value="">Choose commander</option>${options}</select></div><div class="field"><label>Second commander, only when rules allow</label><select data-commander-select="secondary" data-player-id="${playerId}">${secondaryOptions}</select></div>`;
+}
+
+function renderValidation(validation) {
+  return `<div class="validation ${validation.errors.length ? 'error' : 'ok'}" style="margin-top:10px"><strong>${validation.errors.length ? 'Deck needs changes' : `Ready · ${validation.total}/100 cards`}</strong>${validation.errors.length ? `<ul>${validation.errors.map((error) => `<li>${escapeHtml(error)}</li>`).join('')}</ul>` : ''}${validation.warnings.length ? `<ul>${validation.warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join('')}</ul>` : ''}</div>`;
+}
+
+function renderSettingsModal(state) {
+  const v6 = window.CommanderForgeEngine6?.getStatus?.() || { state: 'starting', version: '6.10.1' };
+  const engineStatus = v6.state === 'ready'
+    ? `<div class="validation ok"><strong>Engine 6 ready.</strong> ${escapeHtml(v6.version || '6.10.1')} · Browser Web Worker${v6.lastSyncAt ? ' · table mirrored' : ''}${v6.lastCompile?.cards != null ? ` · ${v6.lastCompile.cards} card definitions analyzed${v6.lastCompile.unsupportedClauses ? ` · ${v6.lastCompile.unsupportedClauses} unsupported Oracle clause(s) kept for fallback` : ''}` : ''}</div>`
+    : v6.state === 'error'
+      ? `<div class="validation error"><strong>Engine 6 error:</strong> ${escapeHtml(v6.error || 'Unknown worker error')}</div>`
+      : `<div class="validation"><strong>Engine 6:</strong> Starting browser rules worker…</div>`;
+  return `<div class="modal-backdrop"><section class="modal small-modal"><header class="modal-header"><h2>Table tools</h2><button class="icon-btn" data-action="close-settings">×</button></header><div class="modal-body"><div class="field"><label>Rules enforcement</label><select id="rules-mode"><option value="free" ${state.settings.rulesMode === 'free' ? 'selected' : ''}>Free table: never block moves</option><option value="learning" ${state.settings.rulesMode === 'learning' ? 'selected' : ''}>Learning: explain and allow override</option><option value="strict" ${state.settings.rulesMode === 'strict' ? 'selected' : ''}>Strict basics: block known illegal moves</option></select></div><div class="field"><label>Mana handling</label><select id="mana-mode"><option value="manual" ${state.settings.manaMode === 'manual' ? 'selected' : ''}>Manual: tap and edit counters yourself</option><option value="assisted" ${state.settings.manaMode === 'assisted' ? 'selected' : ''}>Assisted: tapping a source adds its mana</option><option value="auto" ${state.settings.manaMode === 'auto' || !state.settings.manaMode ? 'selected' : ''}>Auto-pay: casting taps suggested sources</option></select><div class="small muted" style="margin-top:5px">Dual and hybrid-looking sources appear as choices such as U / B. The floating pool still stores the actual color chosen.</div></div><label><input type="checkbox" id="auto-draw" ${state.settings.autoDraw ? 'checked' : ''}/> Auto draw during draw step <span class="small muted">(starting player skips the first draw only in 1v1; 3+ player Commander draws normally)</span></label><br /><label><input type="checkbox" id="enforce-land-plays" ${state.settings.enforceLandPlays !== false ? 'checked' : ''}/> Enforce normal land-play limit</label><div class="small muted settings-help">Normally one land may be played during your turn. Battlefield effects that say you may play additional lands increase the limit automatically. Use the card’s “Put by card effect” action when an effect puts a land onto the battlefield instead of playing it.</div><label><input type="checkbox" id="test-overrides" ${state.settings.testOverrides !== false ? 'checked' : ''}/> Enable Test Override / sandbox controls</label><div class="small muted settings-help">Adds explicit force-move, no-cost cast, Mutate, and phase-advance overrides for testing combinations. These controls intentionally allow states that normal Magic rules would reject.</div><label><input type="checkbox" id="show-names" ${state.settings.showCardNames ? 'checked' : ''}/> Show card-name strips</label><div class="field" style="margin-top:10px"><label>Information-set samples per move</label><input id="coach-rollouts" type="number" min="40" max="240" step="20" value="${state.settings.coachRollouts}" /></div><div class="engine-bridge-settings"><h3>Commander Forge Engine 6</h3><p class="small muted">The new rules core now runs directly in your browser inside a background Web Worker. No rules gateway, Java server, API key, or monthly hosting is required. During this alpha, the current table remains the safe gameplay authority while Engine 6 mirrors every game-state update and its deterministic rules modules are migrated in.</p>${engineStatus}<div class="action-grid" style="margin-top:10px"><button class="btn" data-action="test-engine6">Test Engine 6</button><div class="validation"><strong>Autoplay opponent:</strong> ${bot.enabled ? `${escapeHtml(BOT_DIFFICULTIES[bot.difficulty]?.label || 'Strong')} · ${escapeHtml(bot.speed)}` : 'Off'}</div></div><p class="small muted">Alpha 1 foundation includes a real stack/priority core, events and triggered abilities, state-based actions, replacement/continuous-effect frameworks, combat damage, commander damage/tax, targeting primitives, Mutate, Ninjutsu, Web Worker isolation, legal-action generation, and undo snapshots. Card coverage will expand on top of this core.</p></div><div class="action-grid"><button class="btn" data-action="switch-player">Switch active player</button><button class="btn" data-action="open-token">Create custom token</button><button class="btn predefined-token-btn" data-action="open-predefined-tokens">Predefined tokens</button><button class="btn" data-action="random-tool" data-kind="d6">Roll D6</button><button class="btn" data-action="random-tool" data-kind="d20">Roll D20</button><button class="btn" data-action="random-tool" data-kind="coin">Flip coin</button><button class="btn" data-action="export-save">Export save</button><button class="btn" data-action="import-save">Import save</button>${(isOnlineMultiplayer() ? [multiplayer.localPlayerId].filter(Boolean) : Object.keys(state.players || {})).map((id) => `<button class="btn danger" data-action="concede" data-player-id="${id}">${escapeHtml(state.players[id]?.name || id)} concede</button>`).join('')}<button class="btn danger wide" data-action="reset-game">Reset entire table</button></div><input id="settings-file-input" class="hidden" type="file" accept="application/json" /></div></section></div>`;
+}
+
+
+function predefinedTokenMatches(card, search = '', filter = 'all') {
+  if (!card) return false;
+
+  const faces = Array.isArray(card.tokenFaces) ? card.tokenFaces : [];
+  const searchable = [
+    card.name,
+    card.typeLine,
+    card.oracleText,
+    ...(card.colors || []),
+    ...faces.flatMap((face) => [
+      face?.name,
+      face?.typeLine,
+      face?.oracleText,
+      ...(face?.colors || []),
+    ]),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLocaleLowerCase();
+
+  const terms = String(search || '')
+    .trim()
+    .toLocaleLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (terms.length && !terms.every((term) => searchable.includes(term))) return false;
+
+  const typeText = [
+    card.typeLine,
+    ...faces.map((face) => face?.typeLine || ''),
+  ]
+    .join(' ')
+    .toLocaleLowerCase();
+
+  const creature = /\bcreature\b/.test(typeText);
+  const artifact = /\bartifact\b/.test(typeText);
+
+  if (filter === 'creature') return creature;
+  if (filter === 'artifact') return artifact;
+  if (filter === 'other') return !creature && !artifact;
+  return true;
+}
+
+function renderPredefinedTokenModal(state) {
+  const localPlayerId = isOnlineMultiplayer() ? multiplayer.localPlayerId : ui.predefinedTokenPlayerId;
+  if (isOnlineMultiplayer() && localPlayerId) ui.predefinedTokenPlayerId = localPlayerId;
+  const filtered = ui.predefinedTokens.filter((card) => predefinedTokenMatches(card, ui.predefinedTokenSearch, ui.predefinedTokenFilter));
+  const visible = filtered.slice(0, ui.predefinedTokenLimit);
+  const playerOptions = isOnlineMultiplayer()
+    ? `<option value="${escapeHtml(localPlayerId)}">${escapeHtml(state.players[localPlayerId]?.name || localPlayerId)}</option>`
+    : ['p1', 'p2'].map((id) => `<option value="${id}" ${ui.predefinedTokenPlayerId === id ? 'selected' : ''}>${escapeHtml(state.players[id]?.name || id)}</option>`).join('');
+  const status = ui.predefinedTokensLoading
+    ? `<div class="validation predefined-token-status"><span class="mini-spinner"></span>${escapeHtml(ui.predefinedTokenProgress || 'Loading token definitions…')}</div>`
+    : ui.predefinedTokensError
+      ? `<div class="validation error predefined-token-status">${escapeHtml(ui.predefinedTokensError)} <button class="btn small-btn" data-action="refresh-predefined-tokens">Retry</button></div>`
+      : `<div class="small muted predefined-token-count">${filtered.length} matching token definition${filtered.length === 1 ? '' : 's'} · supplied by Scryfall</div>`;
+  const cards = visible.map((card) => {
+    const creature = /(?:^|\s)Creature(?:\s|$)/i.test(card.typeLine || '');
+    const stats = creature ? `<span class="predefined-token-stats">${escapeHtml(card.power || '0')}/${escapeHtml(card.toughness || '0')}</span>` : '';
+    const faces = card.tokenFaces?.length > 1 ? '<span class="predefined-token-dfc">Double-faced</span>' : '';
+    return `<article class="predefined-token-item"><img src="${escapeHtml(card.imageSmall || card.image || './card-back.svg')}" alt="${escapeHtml(card.name)}" loading="lazy" onerror="this.src='./card-back.svg'" /><div class="predefined-token-copy"><div class="predefined-token-title"><strong>${escapeHtml(card.name)}</strong>${stats}${faces}</div><div class="small muted">${escapeHtml(card.typeLine || 'Token')}</div><p>${escapeHtml(card.oracleText || 'No rules text.')}</p></div><button class="btn primary small-btn" data-action="create-predefined-token" data-token-id="${escapeHtml(card.scryfallId || card.oracleId || card.name)}">Create</button></article>`;
+  }).join('');
+  const more = filtered.length > visible.length
+    ? `<button class="btn wide" data-action="more-predefined-tokens">Show more (${filtered.length - visible.length} remaining)</button>`
+    : '';
+  return `<div class="modal-backdrop token-backdrop"><section class="modal predefined-token-modal"><header class="modal-header"><div><h2>Predefined tokens</h2><p class="small muted">Official token definitions with their printed type, stats, abilities, colors, and images. Create them only when a spell or ability tells you to.</p></div><button class="icon-btn" data-action="close-predefined-tokens">×</button></header><div class="modal-body"><div class="predefined-token-controls"><div class="field"><label>Controller</label><select id="predefined-token-player">${playerOptions}</select></div><div class="field"><label>Quantity</label><input id="predefined-token-quantity" type="number" min="1" max="100" value="${Number(ui.predefinedTokenQuantity || 1)}" /></div><label class="predefined-token-tapped"><input id="predefined-token-tapped" type="checkbox" ${ui.predefinedTokenTapped ? 'checked' : ''}/> Enter tapped</label><div class="field predefined-token-filter"><label>Type</label><select id="predefined-token-filter"><option value="all" ${ui.predefinedTokenFilter === 'all' ? 'selected' : ''}>All tokens</option><option value="creature" ${ui.predefinedTokenFilter === 'creature' ? 'selected' : ''}>Creature tokens</option><option value="artifact" ${ui.predefinedTokenFilter === 'artifact' ? 'selected' : ''}>Artifact tokens</option><option value="other" ${ui.predefinedTokenFilter === 'other' ? 'selected' : ''}>Other tokens</option></select></div></div><div class="predefined-token-search-row"><input id="predefined-token-search" value="${escapeHtml(ui.predefinedTokenSearch)}" placeholder="Search Zombie, Treasure, Food, Incubator…" autocomplete="off"/><button class="btn small-btn" data-action="refresh-predefined-tokens" title="Refresh token catalog">↻</button></div>${status}<div class="predefined-token-list">${cards || (!ui.predefinedTokensLoading ? '<div class="validation">No token definitions match that search.</div>' : '')}</div>${more}<div class="small muted predefined-token-rules-note">Tokens enter the battlefield under the chosen player’s control. Creature tokens have summoning sickness unless another effect gives them haste. Double-faced predefined tokens get a Transform token action.</div></div></section></div>`;
+}
+
+async function openPredefinedTokens(force = false) {
+  ui.settingsOpen = false;
+  ui.predefinedTokensOpen = true;
+  ui.predefinedTokenPlayerId = isOnlineMultiplayer() ? multiplayer.localPlayerId : (ui.predefinedTokenPlayerId || getState().activePlayerId);
+  render({ force: true });
+  if (ui.predefinedTokensLoading || (ui.predefinedTokens.length && !force)) return;
+  ui.predefinedTokensLoading = true;
+  ui.predefinedTokensError = '';
+  ui.predefinedTokenProgress = 'Connecting to the token catalog…';
+  render({ force: true });
+  try {
+    ui.predefinedTokens = await fetchPredefinedTokens(force, (progress) => {
+      ui.predefinedTokenProgress = progress.message || 'Loading token definitions…';
+      const node = document.querySelector('.predefined-token-status');
+      if (node && ui.predefinedTokensLoading) node.lastChild.textContent = ui.predefinedTokenProgress;
+    });
+  } catch (error) {
+    console.error('Predefined token catalog failed', error);
+    ui.predefinedTokensError = `${error?.message || 'Could not load the token catalog.'} Check the connection and press Retry.`;
+  } finally {
+    ui.predefinedTokensLoading = false;
+    render({ force: true });
+  }
+}
+
+function createSelectedPredefinedToken(tokenId) {
+  const token = ui.predefinedTokens.find((card) => (card.scryfallId || card.oracleId || card.name) === tokenId);
+  if (!token) { toast('That token definition is not loaded.', true); return; }
+  const state = getState();
+  const playerId = isOnlineMultiplayer() ? multiplayer.localPlayerId : (document.querySelector('#predefined-token-player')?.value || ui.predefinedTokenPlayerId || state.activePlayerId);
+  const quantity = Math.max(1, Math.min(100, Math.floor(Number(document.querySelector('#predefined-token-quantity')?.value || ui.predefinedTokenQuantity || 1))));
+  const tapped = document.querySelector('#predefined-token-tapped')?.checked ?? ui.predefinedTokenTapped;
+  if (!playerId || !state.players[playerId]) { toast('Choose a valid controller.', true); return; }
+  ui.predefinedTokenPlayerId = playerId;
+  ui.predefinedTokenQuantity = quantity;
+  ui.predefinedTokenTapped = tapped;
+  createToken(playerId, token, { quantity, tapped });
+  toast(`${quantity > 1 ? `${quantity} ${token.name} tokens` : `${token.name} token`} created${tapped ? ' tapped' : ''}.`);
+}
+
+function renderTokenModal() {
+  const draft = ui.tokenDraft || createTokenDraft();
+  return `<div class="modal-backdrop token-backdrop"><section class="modal small-modal token-modal"><header class="modal-header"><div><h2>Create a token</h2><p class="small muted">You can hide this window to inspect the battlefield without losing the draft.</p></div><button class="icon-btn" data-action="close-token">×</button></header><div class="modal-body"><div class="field"><label>Controller</label><select id="token-player" data-token-field="playerId">${isOnlineMultiplayer() ? `<option value="${multiplayer.localPlayerId}" selected>${escapeHtml(getState().players[multiplayer.localPlayerId]?.name || multiplayer.localPlayerId)}</option>` : `<option value="p1" ${draft.playerId === 'p1' ? 'selected' : ''}>Player 1</option><option value="p2" ${draft.playerId === 'p2' ? 'selected' : ''}>Player 2</option>`}</select></div><div class="field"><label>Name</label><input id="token-name" data-token-field="name" value="${escapeHtml(draft.name)}" /></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div class="field"><label>Power</label><input id="token-power" data-token-field="power" type="number" value="${Number(draft.power)}" /></div><div class="field"><label>Toughness</label><input id="token-toughness" data-token-field="toughness" type="number" value="${Number(draft.toughness)}" /></div></div><div class="field"><label>Type line</label><input id="token-type" data-token-field="typeLine" value="${escapeHtml(draft.typeLine)}" /></div><div class="field"><label>Keywords, comma separated</label><input id="token-keywords" data-token-field="keywords" value="${escapeHtml(draft.keywords)}" placeholder="Flying, Haste" /></div><div class="token-colors"><div class="field"><label>Card color</label><input id="token-frame-color" data-token-field="frameColor" type="color" value="${escapeHtml(draft.frameColor)}" /></div><div class="field"><label>Accent</label><input id="token-accent-color" data-token-field="accentColor" type="color" value="${escapeHtml(draft.accentColor)}" /></div><div class="field"><label>Text</label><input id="token-text-color" data-token-field="textColor" type="color" value="${escapeHtml(draft.textColor)}" /></div></div><div class="token-modal-actions"><button class="btn ghost" data-action="peek-token-battlefield">View battlefield</button><button class="btn primary" data-action="create-token">Create on battlefield</button></div></div></section></div>`;
+}
+
+function renderTokenPeekReturn() {
+  return `<div class="token-peek-return" role="status"><span>Token draft paused</span><button class="btn primary small-btn" data-action="resume-token-creator">Return to token creator</button><button class="icon-btn tiny" data-action="close-token" title="Discard token draft">×</button></div>`;
+}
+
+function renderMulliganModal(state) {
+  const onlineLocalId = isOnlineMultiplayer() && multiplayer.localPlayerId ? multiplayer.localPlayerId : null;
+  const hideBotHand = botIsActiveSolo();
+  const playerIds = onlineLocalId ? [onlineLocalId] : (hideBotHand ? ['p1'] : ['p1', 'p2']);
+
+  const playerPanels = playerIds.map((playerId) => {
+    const player = state.players[playerId];
+    if (!player) return '';
+    const kept = Boolean(state.openingHands.kept[playerId]);
+    const required = Number(state.openingHands.bottomRequired[playerId] || 0);
+    const selected = ui.mulliganBottomSelections[playerId] || new Set();
+    const instruction = kept
+      ? 'Opening hand locked in.'
+      : required
+        ? `Choose ${required} card${required === 1 ? '' : 's'} to put on the bottom, then keep.`
+        : 'Keep this seven, or take a mulligan and draw a fresh seven.';
+
+    return `<article class="mulligan-player ${kept ? 'kept' : ''}">
+      <header class="mulligan-player-header">
+        <div><h3>${escapeHtml(player.name)}</h3><span class="small muted">${escapeHtml(instruction)}</span></div>
+        <div class="mulligan-status-stack"><span class="mulligan-count">Mulligans ${player.mulligans}</span>${kept ? '<span class="kept-badge">✓ Kept</span>' : required ? `<span class="bottom-count">Bottom ${required}</span>` : '<span class="free-mulligan-badge">Free first mulligan</span>'}</div>
+      </header>
+      <div class="mulligan-hand" aria-label="${escapeHtml(player.name)} opening hand">
+        ${player.zones.hand.map((card) => {
+          const isSelected = selected.has(card.instanceId);
+          return `<button class="mulligan-card ${isSelected ? 'selected' : ''}" data-action="toggle-mulligan-card" data-player-id="${playerId}" data-card-id="${card.instanceId}" ${kept || !required ? 'disabled' : ''} title="${escapeHtml(card.name)}">
+            <span class="mulligan-card-art"><img src="${escapeHtml(cardImage(card))}" alt="${escapeHtml(card.name)}" loading="eager" />${isSelected ? '<span class="mulligan-bottom-overlay">BOTTOM</span>' : ''}</span>
+            <span class="mulligan-card-name">${escapeHtml(card.name)}</span>
+          </button>`;
+        }).join('')}
+      </div>
+      ${kept ? '' : `<footer class="mulligan-actions"><div class="small muted mulligan-selection-status">${required ? `Selected ${selected.size}/${required} to bottom` : 'Your first mulligan is free in Commander.'}</div><div class="mulligan-action-buttons"><button class="btn" data-action="mulligan" data-player-id="${playerId}">Mulligan</button><button class="btn primary" data-action="keep-hand" data-player-id="${playerId}" ${selected.size !== required ? 'disabled' : ''}>${required ? `Bottom ${required} & keep` : 'Keep this hand'}</button></div></footer>`}
+    </article>`;
+  }).join('');
+
+  let opponentStatus = '';
+  if (onlineLocalId) {
+    const remoteIds = Object.keys(state.players || {}).filter((id) => id !== onlineLocalId);
+    opponentStatus = `<div class="multiplayer-mulligan-status-grid">${remoteIds.map((id) => {
+      const kept = Boolean(state.openingHands.kept[id]);
+      return `<div class="mulligan-private-status ${kept ? 'ready' : ''}"><span class="mulligan-private-icon">${kept ? '✓' : '🔒'}</span><div><strong>${escapeHtml(state.players[id]?.name || id)}</strong><span>${kept ? 'Kept their opening hand.' : 'Choosing whether to keep or mulligan…'}</span></div></div>`;
+    }).join('')}</div>`;
+  } else if (hideBotHand) {
+    const botKept = Boolean(state.openingHands.kept[bot.playerId]);
+    opponentStatus = `<div class="mulligan-private-status bot ${botKept ? 'ready' : ''}"><span class="mulligan-private-icon">🤖</span><div><strong>${escapeHtml(botPlayerName(state))}</strong><span>${botKept ? 'Bot kept its opening hand.' : 'Bot is evaluating its opening hand…'}</span></div></div>`;
+  }
+
+  const d20WinnerNotice = isOnlineMultiplayer() && state.startingRoll?.winnerId ? `<div class="mulligan-first-player">🎲 <strong>${escapeHtml(state.players[state.startingRoll.winnerId]?.name || state.startingRoll.winnerId)}</strong> won the D20 roll and will take the first turn.${Object.keys(state.players || {}).length > 2 ? " The starting player will draw on turn 1." : " In 1v1, the starting player skips the first draw."}</div>` : "";
+  return `<div class="modal-backdrop mulligan-backdrop"><section class="modal mulligan-modal" role="dialog" aria-modal="true" aria-labelledby="mulligan-heading"><header class="modal-header mulligan-modal-header"><div><div class="mulligan-kicker">OPENING HAND</div><h2 id="mulligan-heading">Keep or mulligan?</h2><p class="small muted">Commander gives you one free mulligan. Later mulligans still draw seven, then you put one additional card on the bottom for each mulligan after the first.</p>${d20WinnerNotice}</div></header><div class="modal-body mulligan-grid ${playerIds.length === 1 ? 'single' : 'dual'}">${playerPanels}${opponentStatus}</div></section></div>`;
+}
+
+
+function renderDamageModal(state) {
+  const targetId = ui.damageOpen;
+  const target = state.players[targetId];
+  const sources = Object.values(state.players).flatMap((player) => Object.values(player.zones).flat()).filter((card) => card.commander && card.owner !== targetId);
+  return `<div class="modal-backdrop"><section class="modal small-modal"><header class="modal-header"><h2>${escapeHtml(target.name)} · Commander damage</h2><button class="icon-btn" data-action="close-damage">×</button></header><div class="modal-body">${sources.length ? sources.map((card) => { const sourceId = (card.mutationPile || []).find((part) => part.commander)?.instanceId || card.instanceId; return `<div class="player-status" style="margin-bottom:8px"><div class="player-name-row"><span>${escapeHtml(card.name)}${(card.mutationPile || []).length > 1 ? ' · merged commander' : ''}</span><strong>${target.commanderDamage[sourceId] || 0}/21</strong></div><div class="tracker-controls"><button data-action="commander-damage" data-player-id="${targetId}" data-source-id="${sourceId}" data-delta="-5">-5</button><button data-action="commander-damage" data-player-id="${targetId}" data-source-id="${sourceId}" data-delta="-1">-1</button><button data-action="commander-damage" data-player-id="${targetId}" data-source-id="${sourceId}" data-delta="1">+1</button><button data-action="commander-damage" data-player-id="${targetId}" data-source-id="${sourceId}" data-delta="5">+5</button></div></div>`; }).join('') : '<div class="validation">Load an opposing commander first.</div>'}</div></section></div>`;
+}
+
+function renderLogModal(state) {
+  return `<div class="modal-backdrop"><section class="modal small-modal"><header class="modal-header"><h2>Game log</h2><button class="icon-btn" data-action="close-log">×</button></header><div class="modal-body">${state.log.map((item) => `<div class="validation" style="margin-bottom:6px"><span class="small muted">${new Date(item.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span><br />${escapeHtml(item.text)}</div>`).join('') || '<div class="validation">Actions will appear here.</div>'}</div></section></div>`;
+}
+
+function renderLoading() {
+  const cancel = ui.coachRunning ? '<button class="btn ghost" data-action="cancel-coach">Stop analysis</button>' : '';
+  return `<div class="loading-overlay"><div class="loading-card"><div class="spinner"></div><strong>${escapeHtml(ui.loading.title || 'Working…')}</strong><p class="muted">${escapeHtml(ui.loading.message || '')}</p>${cancel}</div></div>`;
+}
+
+function bothDraftsReady() {
+  return ['p1', 'p2'].every((id) => ui.drafts[id].ready && !ui.drafts[id].validation?.errors.length);
+}
+
+function toast(message, error = false) {
+  const node = document.createElement('div');
+  node.className = `toast ${error ? 'error' : ''}`;
+  node.textContent = message;
+  toastRoot.append(node);
+  setTimeout(() => node.remove(), 3100);
+}
+
+function showLoading(title, message = '') { ui.loading = { title, message }; render(); }
+function updateLoading(message) { if (ui.loading) { ui.loading.message = message; const node = document.querySelector('.loading-card p'); if (node) node.textContent = message; else render(); } }
+function hideLoading() { ui.loading = null; render(); }
+
+function horizontalWheel(event) {
+  if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+    event.preventDefault();
+    event.currentTarget.scrollLeft += event.deltaY;
+  }
+}
+
+
+// A remote sync or another action can request a full render between pointerdown
+// and click. Defer that render until pointerup so the pressed button remains in
+// the DOM long enough for the browser to deliver its click.
+app.addEventListener('pointerdown', (event) => {
+  if (event.target.closest?.('[data-action]')) ui.pointerActionActive = true;
+}, true);
+function releasePointerAction() {
+  if (!ui.pointerActionActive) return;
+  ui.pointerActionActive = false;
+  if (ui.deferredRender) queueMicrotask(() => render({ force: true }));
+}
+app.addEventListener('pointerup', releasePointerAction, true);
+app.addEventListener('pointercancel', releasePointerAction, true);
+window.addEventListener('blur', releasePointerAction);
+
+app.addEventListener('contextmenu', (event) => {
+  const cardNode = event.target.closest?.('.game-card[data-card-id]');
+  if (!cardNode) return;
+  const cardId = cardNode.dataset.cardId;
+  const found = findCard(cardId, getState());
+  if (!found) return;
+  event.preventDefault();
+  getState().selected = { instanceId: cardId };
+  ui.inspectorMode = 'card';
+  ui.cardQuickEditor = null;
+  ui.cardContextMenu = {
+    cardId,
+    x: event.clientX,
+    y: event.clientY,
+  };
+  render({ force: true });
+});
+
+app.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-action]');
+  if (!button) {
+    if (ui.cardContextMenu && !event.target.closest?.('.card-context-menu')) { ui.cardContextMenu = null; render({ force: true }); }
+    return;
+  }
+  const action = button.dataset.action;
+  if (!multiplayerActionAllowed(button, action)) {
+    toast('In online mode, each player controls their own cards and turn actions.', true);
+    return;
+  }
+  engineBridge.onUiAction(action, { ...button.dataset }, getState());
+  try {
+    if (action === 'setup-mode') {
+      const mode = button.dataset.mode;
+      if (mode === 'solo') disconnectMultiplayer();
+      else { multiplayer.mode = 'online'; render(); }
+    }
+    if (action === 'host-online') createOnlineHost();
+    if (action === 'join-online') joinOnlineHost(document.querySelector('#join-code')?.value || multiplayer.pendingJoinCode);
+    if (action === 'request-seat-assignment') {
+      multiplayer.seatAssignmentAttempts = 0;
+      if (!multiplayer.connection?.open) {
+        multiplayer.guestConnectAttempts = 0;
+        multiplayer.guestConnecting = false;
+        connectGuestToHost({ immediate: true });
+        toast('Trying the host connection again.');
+      } else {
+        requestGuestSeatAssignment({ immediate: true });
+        toast('Seat assignment requested again.');
+      }
+    }
+    if (action === 'disconnect-online') disconnectMultiplayer();
+    if (action === 'toggle-lobby-ready') {
+      const playerId = multiplayer.localPlayerId;
+      const draft = playerId ? ensureDraftForPlayer(playerId) : null;
+      const valid = Boolean(draft?.ready && !draft?.validation?.errors?.length && draft?.commanders?.length);
+      if (!playerId || !valid) toast('Load and validate your deck before readying up.', true);
+      else {
+        const ready = !Boolean(multiplayer.readyByPlayer[playerId]);
+        multiplayer.readyByPlayer[playerId] = ready;
+        if (multiplayer.role === 'host') broadcastLobbyState();
+        else sendNetwork({ type: 'ready-state', playerId, ready });
+        render({ force: true });
+        if (ready) maybeProcessPendingOnlineStart();
+      }
+    }
+    if (action === 'copy-invite-code') { await navigator.clipboard?.writeText(multiplayer.roomCode); toast('Invite code copied.'); }
+    if (action === 'copy-invite-link') { await navigator.clipboard?.writeText(button.dataset.link || ''); toast('Invite link copied.'); }
+    if (action === 'next-phase') {
+      const live = getState();
+      const humanAttackWaiting = botIsActiveSolo() && live.activePlayerId === 'p1' && PHASES[live.phaseIndex]?.id === 'combat' && live.players.p1?.zones?.battlefield?.some((card) => card.attacking);
+      if (botIsActiveSolo() && bot.pendingCombat) botResolveCombatAndContinue();
+      else if (humanAttackWaiting) { botAssignDefense(live); toast('Autoplay Bot chose its blocks. Press Next again or use Resolve combat & continue.'); }
+      else if (isOnlineMultiplayer()) requestAuthoritativeNextPhase();
+      else handleResult(nextPhase());
+    }
+    if (action === 'undo') requestUndoApproval();
+    if (action === 'approve-undo') approveUndoRequest();
+    if (action === 'deny-undo') denyUndoRequest();
+    if (action === 'cancel-undo') cancelUndoRequest();
+    if (action === 'approve-override') approveOverrideRequest();
+    if (action === 'deny-override') denyOverrideRequest();
+    if (action === 'cancel-override') cancelOverrideRequest();
+    if (action === 'bot-toggle-pause') { bot.paused = !bot.paused; botCancelSchedule(); render({ force: true }); if (!bot.paused) botSchedule(100); }
+    if (action === 'bot-takeover') { bot.enabled = false; bot.paused = false; bot.pendingSpell = null; bot.pendingCombat = null; botCancelSchedule(); saveBotPrefs(); render({ force: true }); toast('You now control Player 2 manually.'); }
+    if (action === 'bot-stack-continue') botAdvanceStackPriority();
+    if (action === 'bot-resolve-combat') botResolveCombatAndContinue();
+    if (action === 'local-dialog-confirm') resolveLocalDialog(true);
+    if (action === 'local-dialog-cancel') resolveLocalDialog(false);
+    if (action === 'close-card-context') { ui.cardContextMenu = null; render({ force: true }); }
+    if (action === 'open-card-quick-editor') {
+      ui.cardContextMenu = null;
+      ui.cardQuickEditor = { cardId: button.dataset.cardId, mode: button.dataset.editor || 'counters' };
+      render({ force: true });
+    }
+    if (action === 'close-card-quick-editor') { ui.cardQuickEditor = null; render({ force: true }); }
+    if (action === 'open-library-effect-picker') {
+      const effectId = button.dataset.effectId;
+      ui.libraryEffectPicker = { effectId, selected: [], search: '' };
+      render({ force: true });
+    }
+    if (action === 'close-library-effect-picker') { ui.libraryEffectPicker = null; render({ force: true }); }
+    if (action === 'dismiss-library-effect') {
+      const effectId = button.dataset.effectId;
+      ui.libraryEffectPicker = null;
+      handleResult(resolvePendingEffect(effectId));
+    }
+    if (action === 'close-ability-cost-choice') { ui.abilityCostChoice = null; render({ force: true }); }
+    if (action === 'pay-ability-cost-card') {
+      const kind = button.dataset.costKind;
+      const choices = kind === 'sacrifice' ? { sacrificeId: button.dataset.choiceCardId } : { discardId: button.dataset.choiceCardId };
+      handleResult(activateBattlefieldAbility(button.dataset.cardId, Number(button.dataset.abilityIndex || 0), choices));
+    }
+    if (action === 'toggle-library-effect-card') {
+      const picker = ui.libraryEffectPicker;
+      if (!picker || picker.effectId !== button.dataset.effectId) return;
+      const effect = getState().pendingTriggers.find((item) => item.id === picker.effectId);
+      if (!effect) { ui.libraryEffectPicker = null; render({ force: true }); toast('That library effect already finished.'); return; }
+      const smart = smartPendingEffectState(effect, getState());
+      if (smart.kind !== 'search-library') { ui.libraryEffectPicker = null; render({ force: true }); toast('That effect is no longer a library search.', true); return; }
+      const selected = new Set(picker.selected || []);
+      const cardId = button.dataset.cardId;
+      if (selected.has(cardId)) selected.delete(cardId);
+      else if (selected.size < Number(smart.maxCount || 1)) selected.add(cardId);
+      else if (Number(smart.maxCount || 1) === 1) { selected.clear(); selected.add(cardId); }
+      else { toast(`Choose at most ${smart.maxCount} cards.`, true); return; }
+      picker.selected = [...selected];
+      render({ force: true });
+    }
+    if (action === 'resolve-library-effect') {
+      const picker = ui.libraryEffectPicker;
+      if (!picker) return;
+      const effectId = picker.effectId;
+      const selected = [...(picker.selected || [])];
+      // Close the modal before the state mutation removes its pending effect.
+      // Otherwise the render emitted by updateState can leave a stale modal
+      // backdrop on screen even though the search already resolved.
+      ui.libraryEffectPicker = null;
+      const result = resolveSmartLibraryEffect(effectId, selected);
+      handleResult(result);
+      if (result?.ok === false) render({ force: true });
+    }
+    if (action === 'coach') { ui.inspectorMode = 'coach'; ui.inspectorOpen = true; render(); }
+    if (action === 'cancel-coach') {
+      if (ui.coachRunning) {
+        ui.coachRunId += 1;
+        ui.coachRunning = false;
+        hideLoading();
+        toast('Coach analysis stopped.');
+      }
+      return;
+    }
+    if (action === 'run-coach') {
+      if (ui.coachRunning) { toast('The coach is already analyzing this position.'); return; }
+      ui.coachRunning = true;
+      const runId = ++ui.coachRunId;
+      let lastProgressPaint = 0;
+      showLoading('Analyzing possible lines', 'Finding legal plays without freezing the table…');
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      try {
+        const snapshot = deepClone(getState());
+        const result = await analyzePositionAsync(snapshot, snapshot.activePlayerId, snapshot.settings.coachRollouts, {
+          maxDurationMs: 7500,
+          shouldCancel: () => runId !== ui.coachRunId,
+          onProgress: (message) => {
+            const now = Date.now();
+            if (runId === ui.coachRunId && now - lastProgressPaint >= 240) {
+              lastProgressPaint = now;
+              updateLoading(message);
+            }
+          },
+        });
+        if (runId === ui.coachRunId && result) ui.coach = result;
+      } catch (error) {
+        console.error('Coach analysis failed', error);
+        toast(`Coach analysis stopped: ${error?.message || 'unknown error'}`, true);
+      } finally {
+        if (runId === ui.coachRunId) {
+          ui.coachRunning = false;
+          hideLoading();
+        }
+      }
+    }
+    if (action === 'close-inspector') { ui.inspectorOpen = false; ui.knownRevealSelected = null; getState().selected = null; ui.inspectorMode = 'card'; render(); }
+    if (action === 'inspect-revealed-card') { ui.knownRevealSelected = { playerId: button.dataset.playerId, cardId: button.dataset.knownCardId }; ui.inspectorMode = 'card'; ui.inspectorOpen = true; render(); }
+    if (action === 'open-log') { ui.logOpen = true; render(); }
+    if (action === 'close-log') { ui.logOpen = false; render(); }
+    if (action === 'close-public-reveal') { ui.publicRevealNotice = null; render(); }
+    if (action === 'open-settings') { ui.settingsOpen = true; render(); }
+    if (action === 'test-engine6') {
+      try {
+        const result = await window.CommanderForgeEngine6?.ping?.();
+        toast(result?.status === 'ready' ? `Engine 6 ready · ${result.version}` : 'Engine 6 did not answer.', result?.status !== 'ready');
+      } catch (error) {
+        toast(`Engine 6 test failed: ${error?.message || 'unknown error'}`, true);
+      }
+      render({ force: true });
+    }
+    if (action === 'test-engine-connection') {
+      saveSettingsFromModal();
+      const endpoint = document.querySelector('#external-rules-engine-endpoint')?.value || getState().settings.externalRulesEngineEndpoint || '';
+      const result = await engineBridge.health(endpoint);
+      toast(result.ok ? `Rules gateway connected${result.version ? ` · ${result.version}` : ''}.` : (result.message || 'Rules gateway connection failed.'), !result.ok);
+      render({ force: true });
+    }
+    if (action === 'close-settings') { saveSettingsFromModal(); ui.settingsOpen = false; render(); }
+    if (action === 'open-setup') { ui.setupOpen = true; render(); }
+    if (action === 'close-setup') { ui.setupOpen = false; render(); }
+    if (action === 'back-title') { if (isOnlineMultiplayer()) disconnectMultiplayer(); ui.setupOpen = false; window.CommanderForgeTitle?.show?.(); render(); }
+    if (action === 'open-token') { ui.settingsOpen = false; ui.tokenOpen = true; ui.tokenPeek = false; render(); }
+    if (action === 'open-predefined-tokens') await openPredefinedTokens(false);
+    if (action === 'refresh-predefined-tokens') await openPredefinedTokens(true);
+    if (action === 'close-predefined-tokens') { ui.predefinedTokensOpen = false; render(); }
+    if (action === 'create-predefined-token') createSelectedPredefinedToken(button.dataset.tokenId);
+    if (action === 'more-predefined-tokens') { ui.predefinedTokenLimit += 80; render(); }
+    if (action === 'toggle-tokens') { const playerId = button.dataset.playerId; ui.hiddenTokens[playerId] = !ui.hiddenTokens[playerId]; render(); }
+    if (action === 'close-token') { ui.tokenOpen = false; ui.tokenPeek = false; ui.tokenDraft = createTokenDraft(); render(); }
+    if (action === 'peek-token-battlefield') { captureTokenDraftFromModal(); ui.tokenPeek = true; render(); }
+    if (action === 'resume-token-creator') { ui.tokenPeek = false; render(); }
+    if (action === 'create-token') createTokenFromModal();
+    if (action === 'open-damage') { ui.damageOpen = button.dataset.playerId; render(); }
+    if (action === 'close-damage') { ui.damageOpen = null; render(); }
+    if (action === 'adjust-player') adjustPlayer(button.dataset.playerId, button.dataset.field, Number(button.dataset.delta));
+    if (action === 'commander-damage') adjustCommanderDamage(button.dataset.playerId, button.dataset.sourceId, Number(button.dataset.delta));
+    if (action === 'mana') adjustMana(button.dataset.playerId, button.dataset.color, Number(button.dataset.delta));
+    if (action === 'clear-mana') clearMana(button.dataset.playerId);
+    if (action === 'open-zone') { ui.drawer = { playerId: button.dataset.playerId, zone: button.dataset.zone }; ui.drawerSearch = ''; ui.libraryReveal = null; render(); }
+    if (action === 'close-drawer') { ui.drawer = null; ui.drawerSearch = ''; render(); }
+    if (action === 'shuffle-library') { clearPublishedLibraryReveals(button.dataset.playerId); shuffleLibrary(button.dataset.playerId); }
+    if (action === 'open-scry') { const answer = prompt('How many cards should you scry?', '1'); const amount = answer === null ? 0 : Math.floor(Number(answer)); if (amount > 0) openPrivateLibraryTool(button.dataset.playerId, { mode: 'scry', amount, label: `Scry ${amount}`, allowedDestinations: ['top', 'bottom'] }); }
+    if (action === 'open-private-look') { const answer = prompt('How many top cards does the effect let you look at?', '1'); const amount = answer === null ? 0 : Math.floor(Number(answer)); if (amount > 0) openPrivateLibraryTool(button.dataset.playerId, { mode: 'look', amount, label: `Private look at top ${amount}`, allowedDestinations: ['top', 'bottom', 'hand', 'graveyard', 'exile'], handLimit: amount }); }
+    if (action === 'reveal-top') { const result = revealTopPublicly(button.dataset.playerId); handleResult(result); if (result?.ok) publishPublicReveal(result.card, button.dataset.playerId, 'library', { position: 'top', notifyLocal: true }); ui.libraryReveal = { playerId: button.dataset.playerId }; render(); }
+    if (action === 'card-library-effect') { const located = findCard(button.dataset.cardId, getState()); if (located) { const effect = privateLibraryActions(located.card)[Number(button.dataset.effectIndex || 0)]; if (effect) { let amount = effect.amount; if (!amount) { const answer = prompt('Choose the value of X for this effect:', '1'); amount = answer === null ? 0 : Math.floor(Number(answer)); } if (amount > 0) openPrivateLibraryTool(located.card.controller || located.card.owner, { ...effect, amount, sourceCardId: located.card.instanceId, label: effect.label.replace('X', String(amount)) }); } } }
+    if (action === 'scry-destination') setPrivateLibraryDestination(button.dataset.cardId, button.dataset.destination);
+    if (action === 'scry-reveal') togglePrivateLibraryReveal(button.dataset.cardId);
+    if (action === 'scry-reveal-next') revealNextPrivateLibraryCard();
+    if (action === 'scry-order') movePrivateLibraryItem(button.dataset.cardId, button.dataset.direction);
+    if (action === 'confirm-scry') confirmPrivateLibraryTool();
+    if (action === 'close-scry') { ui.scry = null; render(); }
+    if (action === 'draw') draw(button.dataset.playerId, Number(button.dataset.amount || 1));
+    if (action === 'mill') mill(button.dataset.playerId, Number(button.dataset.amount || 1));
+    if (action === 'toggle-tap') handleResult(toggleTap(button.dataset.cardId));
+    if (action === 'toggle-tap-only') handleResult(toggleTap(button.dataset.cardId, { mana: false }));
+    if (action === 'tap-mana') handleResult(tapForMana(button.dataset.cardId, Number(button.dataset.choiceIndex || 0)));
+    if (action === 'toggle-attack') { const result=toggleAttack(button.dataset.cardId); if (result?.needsAttackTarget) { ui.attackTargetPicker={cardId:button.dataset.cardId}; render({force:true}); } else handleResult(result); }
+    if (action === 'choose-attack-target') { const result=toggleAttack(button.dataset.cardId, button.dataset.targetPlayerId); ui.attackTargetPicker=null; handleResult(result); }
+    if (action === 'close-attack-target') { ui.attackTargetPicker=null; render({force:true}); }
+    if (action === 'activate-ninjutsu') handleResult(activateNinjutsu(button.dataset.cardId, button.dataset.attackerId));
+    if (action === 'cast-mutate') {
+      if (button.dataset.testOverride === 'true') requestOverrideApproval({ action: 'cast-mutate-test', cardId: button.dataset.cardId, targetId: button.dataset.targetId, position: button.dataset.position || 'top' });
+      else handleResult(castForMutate(button.dataset.cardId, button.dataset.targetId, button.dataset.position, { force: false }));
+    }
+    if (action === 'assign-block') handleResult(assignBlocker(button.dataset.cardId, button.dataset.attackerId));
+    if (action === 'attach-card') handleResult(attachCard(button.dataset.cardId, button.dataset.targetId));
+    if (action === 'cast-aura') {
+      if (button.dataset.testOverride === 'true') requestOverrideApproval({ action: 'cast-aura-test', cardId: button.dataset.cardId, targetId: button.dataset.targetId });
+      else handleResult(castAuraTargeting(button.dataset.cardId, button.dataset.targetId, { force: false }));
+    }
+    if (action === 'change-control') handleResult(changeControl(button.dataset.cardId, button.dataset.controllerId));
+    if (action === 'cast-public-free') handleResult(castPublicCardForFree(button.dataset.cardId, button.dataset.controllerId, { targetId: button.dataset.targetId || null }));
+    if (action === 'put-public-battlefield') handleResult(putPublicCardOntoBattlefield(button.dataset.cardId, button.dataset.controllerId, { targetId: button.dataset.targetId || null }));
+    if (action === 'play-public-land') handleResult(playPublicLand(button.dataset.cardId, button.dataset.controllerId));
+    if (action === 'reveal-public') { const located = findCard(button.dataset.cardId, getState()); const result = revealCardPublicly(button.dataset.cardId); handleResult(result); if (result?.ok && located && ['hand', 'library'].includes(located.zone)) publishPublicReveal(located.card, located.card.owner || located.playerId, located.zone, { notifyLocal: true }); }
+    if (action === 'test-force-move') requestOverrideApproval({ action: 'test-force-move', cardId: button.dataset.cardId, targetPlayerId: button.dataset.targetPlayerId, zone: button.dataset.zone, position: button.dataset.position || 'top' });
+    if (action === 'move-card') await moveSelectedToWithUi(button.dataset.cardId, button.dataset.zone);
+    if (action === 'move-card-tapped') await moveSelectedToBattlefieldTappedWithUi(button.dataset.cardId);
+    if (action === 'put-land-effect') await moveSelectedToWithUi(button.dataset.cardId, 'battlefield', 'top', { force: true, countsAsLandPlay: false });
+    if (action === 'put-land-effect-tapped') await moveSelectedToWithUi(button.dataset.cardId, 'battlefield', 'top', { force: true, countsAsLandPlay: false, enterTapped: true });
+    if (action === 'token-dies') handleResult(removeToken(button.dataset.cardId, { died: true, destination: 'graveyard' }));
+    if (action === 'remove-token') handleResult(removeToken(button.dataset.cardId));
+    if (action === 'move-library') await moveSelectedToWithUi(button.dataset.cardId, 'library', button.dataset.position);
+    if (action === 'flip-card') flipCard(button.dataset.cardId);
+    if (action === 'copy-token') copyAsToken(button.dataset.cardId);
+    if (action === 'counter') addCounter(button.dataset.cardId, button.dataset.counter, Number(button.dataset.delta));
+    if (action === 'custom-pt-counter') {
+      const power = Math.trunc(Number(document.querySelector('#custom-counter-power')?.value || 0));
+      const toughness = Math.trunc(Number(document.querySelector('#custom-counter-toughness')?.value || 0));
+      if (!power && !toughness) toast('Choose a power or toughness change.', true);
+      else {
+        const signed = (value) => `${value >= 0 ? '+' : ''}${value}`;
+        addCounter(button.dataset.cardId, `${signed(power)}/${signed(toughness)}`, 1);
+      }
+    }
+    if (action === 'add-keyword') {
+      const custom = String(document.querySelector('#manual-keyword-custom')?.value || '').trim();
+      const selectedKeyword = String(document.querySelector('#manual-keyword-select')?.value || '').trim();
+      handleResult(updateManualKeyword(button.dataset.cardId, custom || selectedKeyword, true));
+    }
+    if (action === 'remove-keyword') handleResult(updateManualKeyword(button.dataset.cardId, button.dataset.keyword, false));
+    if (action === 'choose-effect-opponent') {
+      const effectId = button.dataset.effectId;
+      const playerId = button.dataset.playerId;
+      const effect = getState().pendingTriggers?.find((item) => item.id === effectId);
+      if (!effect) return toast('That pending effect is no longer available.', true);
+      if (isOnlineMultiplayer() && multiplayer.localPlayerId !== effect.controllerId) return toast('Only the effect controller chooses the target opponent.', true);
+      updateState((draft) => {
+        const pending = draft.pendingTriggers?.find((item) => item.id === effectId);
+        if (pending && draft.players?.[playerId] && playerId !== pending.controllerId) pending.chosenPlayerId = playerId;
+      }, { log: `${multiplayerPlayerName(effect.controllerId)} chose ${multiplayerPlayerName(playerId)} for ${effect.sourceName}.` });
+    }
+    if (action === 'effect-condition') handleResult(setPendingEffectCondition(button.dataset.effectId, button.dataset.status));
+    if (action === 'toggle-smart-effect-multi') {
+      const effectId = button.dataset.effectId;
+      const cardId = button.dataset.cardId;
+      const smart = smartPendingEffectState(getState().pendingTriggers.find((item) => item.id === effectId), getState());
+      const card = smart.cards?.find((item) => item.instanceId === cardId);
+      ui.smartEffectSelections[effectId] ||= [];
+      const selected = new Set(ui.smartEffectSelections[effectId]);
+      if (selected.has(cardId)) selected.delete(cardId);
+      else {
+        if (smart.kind === 'return-own-graveyard-creatures-total-power' && card && (card._smartPower === null || card._smartPower === undefined)) {
+          const answer = prompt(`${card.name} has nonnumeric power in the graveyard. Enter its current power for this effect:`);
+          if (answer === null) return;
+          const power = Number(answer);
+          if (!Number.isFinite(power)) { toast('Enter a valid number for power.'); return; }
+          ui.smartEffectPowerOverrides[effectId] ||= {};
+          ui.smartEffectPowerOverrides[effectId][cardId] = power;
+        }
+        if (['sacrifice-permanent', 'discard-card', 'hand-to-graveyard'].includes(smart.kind)) {
+          const needed = Math.min(Math.max(1, Number(smart.amount || 1)), smart.cards.length);
+          if (selected.size >= needed) { toast(`Choose exactly ${needed} cards.`, true); return; }
+        }
+        selected.add(cardId);
+      }
+      ui.smartEffectSelections[effectId] = [...selected];
+      render();
+    }
+    if (action === 'resolve-smart-effect-multi') {
+      const effectId = button.dataset.effectId;
+      const result = resolveSmartPendingEffectMulti(effectId, ui.smartEffectSelections[effectId] || [], ui.smartEffectPowerOverrides[effectId] || {});
+      if (result?.ok) { delete ui.smartEffectSelections[effectId]; delete ui.smartEffectPowerOverrides[effectId]; }
+      handleResult(result);
+    }
+    if (action === 'smart-effect-card') handleResult(resolveSmartPendingEffect(button.dataset.effectId, button.dataset.cardId));
+    if (action === 'smart-effect-no-result') handleResult(resolveSmartPendingEffectNoResult(button.dataset.effectId));
+    if (action === 'resolve-effect') handleResult(resolvePendingEffect(button.dataset.effectId));
+    if (action === 'decline-effect') handleResult(resolvePendingEffect(button.dataset.effectId, { decline: true }));
+    if (action === 'dismiss-all-effects') handleResult(dismissAllPendingEffects());
+    if (action === 'clear-combat') handleResult(clearCombatMarkers());
+    if (action === 'activate-ability') handleResult(activateBattlefieldAbility(button.dataset.cardId, Number(button.dataset.abilityIndex || 0)));
+    if (action === 'queue-manual-effect') {
+      const description = prompt('Describe the effect that must be resolved before continuing:');
+      if (description) {
+        const condition = prompt('Optional condition that must be true before this effect happens. Leave blank when unconditional:') || '';
+        handleResult(queueManualEffect(button.dataset.cardId, description, condition));
+      }
+    }
+    if (action === 'resolve-stack') handleResult(resolveStackTop());
+    if (action === 'counter-stack') counterStackTop();
+    if (action === 'switch-player') switchActivePlayer();
+    if (action === 'toggle-mulligan-card') { const set = ui.mulliganBottomSelections[button.dataset.playerId]; const id = button.dataset.cardId; if (set.has(id)) set.delete(id); else set.add(id); render(); }
+    if (action === 'mulligan') { const playerId = button.dataset.playerId; const bottoms = mulligan(playerId); ui.mulliganBottomSelections[playerId].clear(); sendMulliganStatus(playerId); toast(bottoms ? `Draw 7, then choose ${bottoms} card(s) for the bottom.` : 'Free Commander mulligan: draw 7.'); }
+    if (action === 'keep-hand') { const playerId = button.dataset.playerId; const result = keepOpeningHand(playerId, [...ui.mulliganBottomSelections[playerId]]); handleResult(result); if (result?.ok) { ui.mulliganBottomSelections[playerId].clear(); sendMulliganStatus(playerId); } }
+    if (action === 'concede') { if (confirm(`${getState().players[button.dataset.playerId].name} concedes?`)) concede(button.dataset.playerId); }
+    if (action === 'random-tool') runRandomTool(button.dataset.kind);
+    if (action === 'export-save') downloadJson(`commander-forge-turn-${getState().turnNumber}.json`, getState());
+    if (action === 'import-save') triggerFilePicker();
+    if (action === 'reset-game') resetGamePrompt();
+    if (action === 'deck-source') { const draft = ui.drafts[button.dataset.playerId]; draft.source = button.dataset.source; if (draft.source === 'precon') await ensurePreconIndex(); render(); }
+    if (action === 'prepare-custom') await prepareCustomDeck(button.dataset.playerId);
+    if (action === 'search-precon') await searchPrecons(button.dataset.playerId);
+    if (action === 'load-precon') await loadPrecon(button.dataset.playerId, button.dataset.fileName);
+    if (action === 'start-game') { if (isOnlineMultiplayer()) startOnlineGame(); else startGame(); }
+    if (action === 'demo-game') loadDemoGame();
+  } catch (error) {
+    console.error(error);
+    hideLoading();
+    toast(error.message || 'Something went wrong.', true);
+  }
+});
+
+app.addEventListener('input', (event) => {
+  const target = event.target;
+  if (target.id === 'library-effect-search' && ui.libraryEffectPicker) {
+    const query = String(target.value || '').trim().toLocaleLowerCase();
+    ui.libraryEffectPicker.search = target.value || '';
+    app.querySelectorAll('.library-effect-option').forEach((node) => {
+      const haystack = String(node.dataset.searchText || '').toLocaleLowerCase();
+      node.hidden = Boolean(query) && !query.split(/\s+/).every((term) => haystack.includes(term));
+    });
+    return;
+  }
+  if (target.matches?.('[data-draft-field]')) {
+    const playerId = target.dataset.playerId;
+    const field = target.dataset.draftField;
+    if (ui.drafts[playerId] && field) ui.drafts[playerId][field] = target.value;
+  }
+  if (target.id === 'join-code') multiplayer.pendingJoinCode = target.value;
+  if (target.matches?.('.card-note') && multiplayerCanControlCard(target.dataset.cardId)) ui.noteDrafts[target.dataset.cardId] = target.value;
+});
+
+app.addEventListener('focusout', (event) => {
+  const target = event.target;
+  if (target?.matches?.('.card-note') && multiplayerCanControlCard(target.dataset.cardId)) {
+    const cardId = target.dataset.cardId; const value = Object.hasOwn(ui.noteDrafts, cardId) ? ui.noteDrafts[cardId] : target.value;
+    updateCardNote(cardId, value); delete ui.noteDrafts[cardId];
+  }
+  if (ui.setupRenderPending) scheduleSetupRenderFlush();
+}, true);
+
+app.addEventListener('input', debounce((event) => {
+  const target = event.target;
+  if (target.matches('[data-draft-field]')) {
+    ui.drafts[target.dataset.playerId][target.dataset.draftField] = target.value;
+    if (isOnlineMultiplayer() && target.dataset.playerId === multiplayer.localPlayerId) setTimeout(sendLocalDraft, 160);
+  }
+  if (target.matches('[data-token-field]')) {
+    const field = target.dataset.tokenField;
+    ui.tokenDraft[field] = ['power', 'toughness'].includes(field) ? Number(target.value || 0) : target.value;
+  }
+  if (target.id === 'predefined-token-search') {
+    const position = target.selectionStart ?? target.value.length;
+    ui.predefinedTokenSearch = target.value;
+    ui.predefinedTokenLimit = 80;
+    render();
+    requestAnimationFrame(() => {
+      const replacement = document.querySelector('#predefined-token-search');
+      replacement?.focus({ preventScroll: true });
+      replacement?.setSelectionRange(position, position);
+    });
+  }
+  if (target.id === 'drawer-search') {
+    const position = target.selectionStart ?? target.value.length;
+    ui.drawerSearch = target.value;
+    render();
+    requestAnimationFrame(() => {
+      const replacement = document.querySelector('#drawer-search');
+      replacement?.focus();
+      replacement?.setSelectionRange(position, position);
+    });
+  }
+  if (target.matches('.card-note')) {
+    if (multiplayerCanControlCard(target.dataset.cardId)) ui.noteDrafts[target.dataset.cardId] = target.value;
+  }
+}, 120));
+
+app.addEventListener('change', (event) => {
+  const target = event.target;
+  if (target.matches?.('[data-bot-setting]')) { setBotPreference(target.dataset.botSetting, target.value); return; }
+  if (target.id === 'predefined-token-player') ui.predefinedTokenPlayerId = target.value;
+  if (target.id === 'predefined-token-quantity') ui.predefinedTokenQuantity = Math.max(1, Math.min(100, Math.floor(Number(target.value || 1))));
+  if (target.id === 'predefined-token-tapped') ui.predefinedTokenTapped = target.checked;
+  if (target.id === 'predefined-token-filter') { ui.predefinedTokenFilter = target.value; ui.predefinedTokenLimit = 80; render(); }
+  if (target.matches('[data-token-field]')) {
+    const field = target.dataset.tokenField;
+    ui.tokenDraft[field] = ['power', 'toughness'].includes(field) ? Number(target.value || 0) : target.value;
+  }
+  if (target.matches('[data-commander-select]')) {
+    const draft = ui.drafts[target.dataset.playerId];
+    const index = target.dataset.commanderSelect === 'primary' ? 0 : 1;
+    draft.commanders[index] = target.value;
+    draft.commanders = draft.commanders.filter(Boolean);
+    refreshDraftValidation(target.dataset.playerId);
+    if (isOnlineMultiplayer() && target.dataset.playerId === multiplayer.localPlayerId) sendLocalDraft();
+    render({ force: true });
+  }
+});
+
+function flushCardNoteDrafts() {
+  const entries = Object.entries(ui.noteDrafts || {}); if (!entries.length) return;
+  for (const [cardId, value] of entries) updateCardNote(cardId, value);
+  ui.noteDrafts = Object.create(null);
+}
+window.addEventListener('pagehide', flushCardNoteDrafts);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushCardNoteDrafts(); });
+
+function saveSettingsFromModal() {
+  const mode = document.querySelector('#rules-mode');
+  if (!mode) return;
+  updateState((draft) => {
+    draft.settings.rulesMode = mode.value;
+    draft.settings.manaMode = document.querySelector('#mana-mode')?.value || 'auto';
+    draft.settings.hideOpponentHand = false;
+    draft.settings.autoDraw = document.querySelector('#auto-draw')?.checked ?? true;
+    draft.settings.enforceLandPlays = document.querySelector('#enforce-land-plays')?.checked ?? true;
+    draft.settings.testOverrides = document.querySelector('#test-overrides')?.checked ?? true;
+    draft.settings.externalRulesEngineMode = document.querySelector('#external-rules-engine-mode')?.value === 'shadow' ? 'shadow' : 'local';
+    draft.settings.externalRulesEngineEndpoint = String(document.querySelector('#external-rules-engine-endpoint')?.value || '').trim().replace(/\/+$/, '');
+    draft.settings.showCardNames = document.querySelector('#show-names')?.checked ?? true;
+    draft.settings.coachRollouts = Math.max(40, Math.min(240, Number(document.querySelector('#coach-rollouts')?.value || 240)));
+  }, { snapshot: false });
+}
+
+function captureTokenDraftFromModal() {
+  const read = (selector, fallback = '') => document.querySelector(selector)?.value ?? fallback;
+  ui.tokenDraft = {
+    playerId: read('#token-player', ui.tokenDraft.playerId || 'p1'),
+    name: read('#token-name', ui.tokenDraft.name || 'Zombie'),
+    power: Number(read('#token-power', ui.tokenDraft.power ?? 2)),
+    toughness: Number(read('#token-toughness', ui.tokenDraft.toughness ?? 2)),
+    typeLine: read('#token-type', ui.tokenDraft.typeLine || 'Token Creature — Zombie'),
+    keywords: read('#token-keywords', ui.tokenDraft.keywords || ''),
+    frameColor: read('#token-frame-color', ui.tokenDraft.frameColor || '#1f3329'),
+    accentColor: read('#token-accent-color', ui.tokenDraft.accentColor || '#d4a654'),
+    textColor: read('#token-text-color', ui.tokenDraft.textColor || '#f4f1e8'),
+  };
+  return ui.tokenDraft;
+}
+
+function createTokenFromModal() {
+  const draft = captureTokenDraftFromModal();
+  const name = draft.name.trim() || 'Token';
+  const typeLine = draft.typeLine.trim() || 'Token Creature';
+  const keywords = String(draft.keywords || '').split(',').map((value) => value.trim()).filter(Boolean);
+  createToken(draft.playerId, {
+    name,
+    power: Number(draft.power || 0),
+    toughness: Number(draft.toughness || 0),
+    typeLine,
+    keywords,
+    frameColor: draft.frameColor,
+    accentColor: draft.accentColor,
+    textColor: draft.textColor,
+  });
+  ui.tokenOpen = false;
+  ui.tokenPeek = false;
+  ui.tokenDraft = createTokenDraft();
+  toast(`${name} token created.`);
+}
+
+
+function handleResult(result) {
+  if (!result) return;
+  if (result.requiresOverride && typeof result.retry === 'function') {
+    const config = result.overridePrompt || {
+      title: 'Override required',
+      kicker: 'TEST OVERRIDE',
+      icon: '🧪',
+      confirmLabel: 'Use Test Override',
+      cancelLabel: 'Cancel',
+    };
+    confirmWithForgeUI(result.message || 'This move needs a rules override.', config).then((approved) => {
+      if (!approved) {
+        toast('Move cancelled.');
+        return;
+      }
+      handleResult(result.retry());
+    });
+    return;
+  }
+  if (result.ok === false) toast(result.message || 'Action not allowed.', true);
+}
+
+function moveSelectedTo(cardId, zone, position = 'top', options = {}) {
+  return moveSelectedToWithUi(cardId, zone, position, options);
+}
+
+function moveSelectedToBattlefieldTapped(cardId) {
+  return moveSelectedToBattlefieldTappedWithUi(cardId);
+}
+
+async function ensurePreconIndex() {
+  if (ui.preconIndex) return;
+  showLoading('Loading official precons', 'Downloading the MTGJSON deck index…');
+  try { ui.preconIndex = await fetchPreconIndex(); }
+  finally { hideLoading(); }
+}
+
+async function searchPrecons(playerId) {
+  await ensurePreconIndex();
+  const draft = ui.drafts[playerId];
+  const query = draft.preconQuery.trim().toLocaleLowerCase();
+  draft.preconResults = (ui.preconIndex || [])
+    .filter((deck) => !query || `${deck.name} ${deck.code} ${deck.type}`.toLocaleLowerCase().includes(query))
+    .sort((a, b) => (b.releaseDate || '').localeCompare(a.releaseDate || ''))
+    .slice(0, 100);
+  render();
+}
+
+async function prepareCustomDeck(playerId) {
+  const draft = ui.drafts[playerId];
+  const liveText = document.querySelector(`[data-draft-field="text"][data-player-id="${playerId}"]`)?.value;
+  if (typeof liveText === 'string') draft.text = liveText;
+  const liveName = document.querySelector(`[data-draft-field="name"][data-player-id="${playerId}"]`)?.value;
+  if (typeof liveName === 'string') draft.name = liveName;
+  const parsed = parseDecklist(draft.text);
+  if (parsed.errors.length) {
+    draft.validation = { errors: parsed.errors, warnings: [], total: parsed.entries.reduce((s, e) => s + e.count, 0) };
+    draft.ready = false;
+    render();
+    return;
+  }
+  showLoading(`Loading ${draft.name}'s deck`, 'Looking up card names and images with Scryfall…');
+  const result = await fetchCardsByNames(parsed.entries, ({ message }) => updateLoading(message));
+  draft.entries = parsed.entries;
+  draft.byName = result.byName;
+  draft.cards = result.cards;
+  draft.candidates = commanderCandidates(result.cards);
+  if (!draft.commanders.length && draft.candidates.length === 1) draft.commanders = [draft.candidates[0].name];
+  if (result.notFound.length) {
+    draft.validation = { errors: [`Scryfall could not find: ${result.notFound.join(', ')}.`], warnings: [], total: parsed.entries.reduce((s, e) => s + e.count, 0) };
+    draft.ready = false;
+  } else refreshDraftValidation(playerId);
+  hideLoading();
+  if (isOnlineMultiplayer() && playerId === multiplayer.localPlayerId) sendLocalDraft();
+}
+
+async function loadPrecon(playerId, fileName) {
+  const draft = ui.drafts[playerId];
+  const entry = (ui.preconIndex || []).find((deck) => deck.fileName === fileName);
+  if (!entry) throw new Error('Precon entry not found.');
+  showLoading(`Loading ${entry.name}`, 'Downloading the official deck list…');
+  const precon = await fetchPreconDeck(entry);
+  updateLoading('Loading card images and Oracle text…');
+  const result = await fetchCardsByNames(precon.entries, ({ message }) => updateLoading(message));
+  draft.entries = precon.entries;
+  draft.byName = result.byName;
+  draft.cards = result.cards;
+  draft.candidates = commanderCandidates(result.cards);
+  draft.commanders = precon.commanderNames.filter((name) => result.byName[name.toLocaleLowerCase()]).slice(0, 2);
+  draft.text = precon.entries.map((item) => `${item.count} ${item.name}`).join('\n');
+  draft.selectedPrecon = entry;
+  if (result.notFound.length) draft.validation = { errors: [`Missing card data: ${result.notFound.join(', ')}.`], warnings: [], total: precon.entries.reduce((s, e) => s + e.count, 0) };
+  else refreshDraftValidation(playerId);
+  hideLoading();
+  if (isOnlineMultiplayer() && playerId === multiplayer.localPlayerId) sendLocalDraft();
+}
+
+function refreshDraftValidation(playerId) {
+  const draft = ui.drafts[playerId];
+  draft.validation = validateDeck(draft.entries, draft.byName, draft.commanders);
+  draft.ready = draft.validation.errors.length === 0;
+  if (isOnlineMultiplayer() && playerId === multiplayer.localPlayerId && draft.ready && multiplayer.pendingStartMessage) setTimeout(maybeProcessPendingOnlineStart, 0);
+}
+
+function startGame() {
+  if (!bothDraftsReady()) return toast('Both decks must pass validation first.', true);
+  const next = createInitialState();
+
+  for (const playerId of ['p1', 'p2']) {
+    const draft = ui.drafts[playerId];
+    next.players[playerId].name = draft.name.trim() || next.players[playerId].name;
+    if (playerId === bot.playerId && bot.enabled && next.players[playerId].name === 'Player 2') {
+      next.players[playerId].name = 'Autoplay Bot';
+    }
+    buildPlayerDeck(next.players[playerId], draft, draft.commanders);
+    drawCards(next, playerId, 7);
+  }
+
+  next.started = true;
+  next.turnOrder = ['p1', 'p2'];
+  next.activePlayerId = 'p1';
+  next.priorityPlayerId = 'p1';
+  next.openingHands = {
+    active: false,
+    kept: { p1: false, p2: false },
+    bottomRequired: { p1: 0, p2: 0 },
+  };
+  next.startingRoll = {
+    active: true,
+    round: 1,
+    requiredPlayerIds: ['p1', 'p2'],
+    results: {},
+    winnerId: null,
+    message: bot.enabled
+      ? 'Throw against the Autoplay Bot. Highest roll goes first.'
+      : 'Each local player throws the D20. Highest roll goes first.',
+  };
+
+  next.log.unshift({
+    id: uid('log'),
+    time: new Date().toISOString(),
+    text: 'Both decks shuffled and drew seven. Roll the D20 to determine the starting player.',
+  });
+
+  setState(next);
+  ui.setupOpen = false;
+  ui.inspectorOpen = false;
+  ui.drawer = null;
+  ui.mulliganBottomSelections = { p1: new Set(), p2: new Set() };
+
+  clearTimeout(d20Runtime.botRollTimer);
+  d20Runtime.botRollTimer = null;
+
+  toast(bot.enabled
+    ? 'Throw the D20. The Autoplay Bot will roll after you.'
+    : 'Roll the D20 for each player to determine who goes first.');
+}
+
+function loadDemoGame() {
+  if (isOnlineMultiplayer()) return toast('The interactive demo is only available in solo practice.', true);
+  const next = createInitialState();
+  next.started = true;
+  next.players.p1.name = 'You';
+  next.players.p2.name = 'Practice Opponent';
+  seedDemoPlayer(next.players.p1, ['Satoru Umezawa', 'Changeling Outcast', 'Sol Ring', 'Island', 'Swamp', 'Baleful Strix', 'Blightsteel Colossus', 'Lightning Greaves', 'Fallen Shinobi']);
+  seedDemoPlayer(next.players.p2, ['Gisa and Geralf', 'Mire Triton', 'Gray Merchant of Asphodel', 'Island', 'Swamp', 'Diregraf Captain', 'Murder', 'Sol Ring', 'Zombie Token']);
+  next.log.unshift({ id: uid('log'), time: new Date().toISOString(), text: 'Interactive demo loaded.' });
+  setState(next);
+  ui.setupOpen = false;
+  toast('Demo loaded. Try dragging cards between zones.');
+}
+
+function seedDemoPlayer(player, names) {
+  const cards = names.map((name, index) => demoCard(name, player.id, index));
+  cards[0].commander = true;
+  player.zones.command = [cards.shift()];
+  player.commanderCastCount[player.zones.command[0].instanceId] = 0;
+  player.zones.hand = cards.slice(0, 5);
+  player.zones.battlefield = cards.slice(5, 7).map((card) => ({ ...card, summoningSick: false }));
+  player.zones.library = shuffle([...cards.slice(7), ...Array.from({ length: 20 }, (_, i) => demoCard(`Practice Card ${i + 1}`, player.id, i + 20))]);
+}
+
+function demoCard(name, owner, index) {
+  const land = /Island|Swamp|Practice Card/.test(name) && index % 3 === 0;
+  const creature = !land && !/Sol Ring|Lightning Greaves|Murder/.test(name);
+  return {
+    instanceId: uid('demo'), scryfallId: null, name,
+    manaCost: land ? '' : creature ? '{2}{U}{B}' : '{1}', manaValue: land ? 0 : creature ? 4 : 1,
+    typeLine: land ? 'Basic Land' : creature ? 'Creature — Practice' : /Murder/.test(name) ? 'Instant' : 'Artifact',
+    oracleText: demoOracleText(name, land),
+    producedMana: demoProducedMana(name, land),
+    power: creature ? String((index % 5) + 1) : '', toughness: creature ? String((index % 4) + 2) : '',
+    keywords: name.includes('Changeling') ? ['Unblockable'] : [], colors: [], colorIdentity: [], legalities: { commander: 'legal' },
+    image: './demo-card.svg', imageSmall: './demo-card.svg', owner, controller: owner,
+    tapped: false, summoningSick: false, attacking: false, faceDown: false, token: false, commander: false, counters: {}, notes: '',
+  };
+}
+
+
+function demoProducedMana(name, land) {
+  if (name === 'Island') return ['U'];
+  if (name === 'Swamp') return ['B'];
+  if (name === 'Sol Ring') return ['C'];
+  if (land) return ['C'];
+  return [];
+}
+
+function demoOracleText(name, land) {
+  if (name === 'Island') return '{T}: Add {U}.';
+  if (name === 'Swamp') return '{T}: Add {B}.';
+  if (name === 'Sol Ring') return '{T}: Add {C}{C}.';
+  if (land) return '{T}: Add {C}.';
+  return `Demo Oracle text for ${name}. Resolve card-specific effects manually.`;
+}
+
+function triggerFilePicker() {
+  const input = document.querySelector('#settings-file-input') || document.querySelector('#save-file-input');
+  input?.click();
+}
+
+document.addEventListener('change', async (event) => {
+  if (!['settings-file-input', 'save-file-input'].includes(event.target.id)) return;
+  const file = event.target.files?.[0];
+  if (!file) return;
+  try {
+    const parsed = JSON.parse(await file.text());
+    importState(parsed);
+    ui.settingsOpen = false;
+    ui.setupOpen = false;
+    toast('Saved game imported.');
+  } catch (error) { toast(error.message || 'Could not import save.', true); }
+});
+
+
+function runRandomTool(kind) {
+  let result;
+  if (kind === 'coin') result = Math.random() < .5 ? 'Heads' : 'Tails';
+  else result = String(Math.floor(Math.random() * Number(kind.replace('d', ''))) + 1);
+  updateState(() => {}, { snapshot: false, log: `${kind === 'coin' ? 'Coin flip' : kind.toUpperCase()} result: ${result}.` });
+  toast(`${kind === 'coin' ? 'Coin' : kind.toUpperCase()}: ${result}`);
+}
+
+function resetGamePrompt() {
+  if (!confirm('Reset the entire table and remove the current saved game?')) return;
+  if (isOnlineMultiplayer()) disconnectMultiplayer();
+  resetState();
+  ui.settingsOpen = false;
+  ui.setupOpen = true;
+  ui.drafts = { p1: createDraft('Player 1'), p2: createDraft('Player 2') };
+}
+
+const dragState = { candidate: null, active: false, ghost: null, over: null, overCard: null };
+
+document.addEventListener('pointerdown', (event) => {
+  const card = event.target.closest('.game-card[data-card-id], .stack-mini[data-card-id], .attached-mini[data-card-id]');
+  if (!card || event.button > 0) return;
+  dragState.candidate = {
+    cardId: card.dataset.cardId,
+    startX: event.clientX,
+    startY: event.clientY,
+    pointerId: event.pointerId,
+    image: card.querySelector('img')?.src || card.src,
+    draggable: multiplayerCanControlCard(card.dataset.cardId),
+  };
+});
+
+document.addEventListener('pointermove', (event) => {
+  const candidate = dragState.candidate;
+  if (!candidate || candidate.pointerId !== event.pointerId) return;
+  const distance = Math.hypot(event.clientX - candidate.startX, event.clientY - candidate.startY);
+  if (!candidate.draggable) return;
+  if (!dragState.active && distance > 9) {
+    dragState.active = true;
+    dragState.ghost = document.createElement('div');
+    dragState.ghost.className = 'drag-ghost';
+    dragState.ghost.innerHTML = `<img src="${escapeHtml(candidate.image)}" alt="Dragging card" />`;
+    document.body.append(dragState.ghost);
+    document.body.classList.add('dragging');
+  }
+  if (!dragState.active) return;
+  event.preventDefault();
+  dragState.ghost.style.left = `${event.clientX}px`;
+  dragState.ghost.style.top = `${event.clientY}px`;
+  dragState.over?.classList.remove('drag-over');
+  dragState.overCard?.classList.remove('attachment-drop-target');
+  dragState.ghost.style.display = 'none';
+  const under = document.elementFromPoint(event.clientX, event.clientY);
+  dragState.ghost.style.display = '';
+  const source = findCard(candidate.cardId, getState());
+  const targetCardElement = under?.closest('.game-card[data-card-id]') || null;
+  const target = targetCardElement ? findCard(targetCardElement.dataset.cardId, getState()) : null;
+  const canAttach = source && target && source.card.instanceId !== target.card.instanceId
+    && source.zone === 'battlefield' && target.zone === 'battlefield'
+    && attachmentTargetLegality(source.card, target.card, getState()).legal;
+  dragState.overCard = canAttach ? targetCardElement : null;
+  dragState.overCard?.classList.add('attachment-drop-target');
+  dragState.over = canAttach ? null : (under?.closest('[data-drop-zone]') || null);
+  dragState.over?.classList.add('drag-over');
+}, { passive: false });
+
+document.addEventListener('pointerup', (event) => {
+  const candidate = dragState.candidate;
+  if (!candidate || candidate.pointerId !== event.pointerId) return;
+  if (dragState.active) {
+    if (dragState.overCard) {
+      handleResult(attachCard(candidate.cardId, dragState.overCard.dataset.cardId));
+    } else {
+      const target = dragState.over;
+      if (target) {
+      const zone = target.dataset.dropZone;
+      const playerId = target.dataset.playerId || getState().activePlayerId;
+      if (isOnlineMultiplayer() && playerId !== multiplayer.localPlayerId) {
+        toast('Move your own cards on your own side in online mode.', true);
+      } else {
+        const result = moveCard(candidate.cardId, playerId, zone);
+        handleResult(result);
+      }
+      }
+    }
+  } else {
+    selectCard(candidate.cardId);
+  }
+  cleanupDrag();
+});
+
+document.addEventListener('pointercancel', cleanupDrag);
+
+function cleanupDrag() {
+  dragState.over?.classList.remove('drag-over');
+  dragState.overCard?.classList.remove('attachment-drop-target');
+  dragState.ghost?.remove();
+  dragState.candidate = null;
+  dragState.active = false;
+  dragState.ghost = null;
+  dragState.over = null;
+  dragState.overCard = null;
+  document.body.classList.remove('dragging');
+}
+
+function selectCard(cardId) {
+  if (!findCard(cardId, getState())) return;
+  ui.knownRevealSelected = null;
+  updateState((draft) => { draft.selected = { instanceId: cardId }; }, { snapshot: false });
+  ui.inspectorMode = 'card';
+  ui.inspectorOpen = true;
+  render();
+}
+
+// Service worker temporarily disabled by the synchronized recovery build.
+
+})();

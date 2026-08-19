@@ -1,0 +1,14 @@
+Commander Forge 6.10.1 validation
+
+PASS — tactical stack creates coach state
+PASS — tactical virtual slots initialized per player
+PASS — common tactical effects guarded
+PASS — bot deterministic tutor path
+PASS — bot auto-resolves supported pending effects
+PASS — bot uses real library resolver
+PASS — bot tutor choice is scored
+PASS — Three Visits branch uses real resolveStackTop
+PASS — 6.10.1 protocol
+PASS — 6.10.1 bundle loaded
+PASS — all JavaScript bundles pass node --check
+PASS — exact missing-virtual regression simulation
