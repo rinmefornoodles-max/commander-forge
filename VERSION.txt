@@ -1,1 +1,1 @@
-6.10.1-autoplay-stack-tutor-hotfix
+6.10.2-bot-oracle-auto-resolution

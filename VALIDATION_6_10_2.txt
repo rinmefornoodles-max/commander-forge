@@ -1,0 +1,22 @@
+Commander Forge 6.10.2 validation
+
+PASS — fight parser exists
+PASS — Fight for the Throne pattern recognizes delayed monarch
+PASS — smart fight effect exists
+PASS — fight resolver exists
+PASS — simultaneous fight damage
+PASS — one legal target rule
+PASS — delayed death watcher
+PASS — commander condition for monarch
+PASS — monarch end step draw
+PASS — monarch combat transfer
+PASS — bot cast-time target planner
+PASS — priority banner shows targets
+PASS — bot real stack resolution
+PASS — unsupported bot effect pauses
+PASS — game export includes fight resolver
+PASS — main import includes fight resolver
+PASS — 6.10.2 protocol
+PASS — 6.10.2 bundle
+PASS — all JavaScript bundles pass node --check
+PASS — Fight for the Throne parser smoke test
