@@ -1,4 +1,4 @@
-COMMANDER FORGE 6.0 ALPHA 6.6 — GITHUB UPLOAD
+COMMANDER FORGE 6.0 ALPHA 6.7 — GITHUB UPLOAD
 
 Upload EVERY file in this folder to the ROOT of:
 rinmefornoodles-max/commander-forge
@@ -6,12 +6,12 @@ rinmefornoodles-max/commander-forge
 Replace index.html.
 
 IMPORTANT:
-Host and every guest must all show Version 6.0 Alpha 6.6.
+Host and every guest should all show Version 6.0 Alpha 6.7.
 
 Test:
 1. Hard refresh all devices.
 2. Create a 3-player room.
 3. Join Player 2 and Player 3.
-4. Player 3 should now reach their deck setup without a `reading 'zones'` runtime error.
-5. Everyone loads decks and presses Ready.
-6. Start the game; gameplay state synchronization begins only after the online game is created.
+4. Everyone loads a deck and presses Ready.
+5. Host presses Start game & roll D20.
+6. The game should create all player seats and open the D20 screen instead of showing `createPlayer is not defined`.

@@ -1,0 +1,7 @@
+Commander Forge 6.0 Alpha 6.7 validation
+
+PASS — all JavaScript bundles pass node --check
+PASS — createPlayer is exported by state.js
+PASS — createPlayer is imported by main.js
+PASS — createOnlineInitialState can call createPlayer for 2–6 seats
+PASS — Alpha 6.7 multiplayer protocol/version references updated
