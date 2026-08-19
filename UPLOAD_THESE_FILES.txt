@@ -1,4 +1,4 @@
-COMMANDER FORGE 6.10.2 — GITHUB UPLOAD
+COMMANDER FORGE 6.10.3 — GITHUB UPLOAD
 
 1. Extract this ZIP.
 2. Upload EVERY file to the ROOT of:
@@ -7,17 +7,13 @@ COMMANDER FORGE 6.10.2 — GITHUB UPLOAD
 4. Hard refresh with Ctrl + Shift + R.
 
 You should see:
-Version 6.10.2
+Version 6.10.3
 
-TEST FIGHT FOR THE THRONE
+TEST TERRAMORPHIC EXPANSE
 1. Start Solo Practice with Autoplay Bot.
-2. Let the bot cast Fight for the Throne.
-3. The priority banner should show both chosen targets.
-4. Press `Pass · let bot spell resolve`.
-5. The bot's creature should get a +1/+1 counter.
-6. The two targeted creatures should fight automatically.
-7. Lethal fight damage should move the creature to the graveyard.
-8. If the tracked opponent creature dies this turn while the bot controls its commander, the bot becomes the monarch.
-9. The monarch gets a crown badge and draws at its end step.
-
-If a different spell still has unsupported instructions, Forge should pause the bot and tell you what instruction is missing instead of silently doing nothing.
+2. Give the bot Terramorphic Expanse on the battlefield and at least one basic land in its library.
+3. Let the bot choose to activate it.
+4. Terramorphic Expanse should be sacrificed, not simply remain tapped.
+5. The bot should fetch a legal basic land.
+6. The fetched land should enter tapped.
+7. The library should shuffle.

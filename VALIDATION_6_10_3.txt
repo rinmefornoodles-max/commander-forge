@@ -1,0 +1,14 @@
+Commander Forge 6.10.3 validation
+
+PASS — bot activated abilities route through real game engine
+PASS — bot calls activateBattlefieldAbility
+PASS — bot automatically resolves resulting pending effects
+PASS — self-sacrifice activation costs recognized
+PASS — bot can choose sacrifice cost permanent
+PASS — bot can choose discard cost card
+PASS — creature tap abilities respect summoning sickness
+PASS — library search result can report chosen card
+PASS — 6.10.3 protocol
+PASS — 6.10.3 bundle
+PASS — all JavaScript bundles pass node --check
+PASS — exact Terramorphic Expanse cost/effect parser regression check
