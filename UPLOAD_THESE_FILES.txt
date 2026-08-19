@@ -1,4 +1,4 @@
-COMMANDER FORGE 6.10.3 — GITHUB UPLOAD
+COMMANDER FORGE 6.10.4 — GITHUB UPLOAD
 
 1. Extract this ZIP.
 2. Upload EVERY file to the ROOT of:
@@ -7,13 +7,18 @@ COMMANDER FORGE 6.10.3 — GITHUB UPLOAD
 4. Hard refresh with Ctrl + Shift + R.
 
 You should see:
-Version 6.10.3
+Version 6.10.4
 
 TEST TERRAMORPHIC EXPANSE
 1. Start Solo Practice with Autoplay Bot.
-2. Give the bot Terramorphic Expanse on the battlefield and at least one basic land in its library.
-3. Let the bot choose to activate it.
-4. Terramorphic Expanse should be sacrificed, not simply remain tapped.
-5. The bot should fetch a legal basic land.
-6. The fetched land should enter tapped.
-7. The library should shuffle.
+2. Let the bot play/activate Terramorphic Expanse.
+3. `activationMetadata is not defined` should be gone.
+4. Terramorphic should tap + sacrifice, fetch a basic land tapped, and shuffle.
+
+TEST SACRIFICE BUTTON
+1. Select one of your battlefield permanents.
+2. In the right-side Card Actions → Quick Actions, press `☠ Sacrifice`.
+3. A normal card should go to its owner's graveyard.
+4. A token should die and then cease to exist.
+5. A card reading `Whenever you sacrifice a permanent...` should queue its trigger.
+6. If a pending effect says to sacrifice exactly one legal permanent, using the button on that permanent should complete the pending sacrifice instruction.

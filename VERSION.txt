@@ -1,1 +1,1 @@
-6.10.3-bot-real-activated-abilities-fetchlands
+6.10.4-activation-metadata-sacrifice-action

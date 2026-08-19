@@ -1,0 +1,20 @@
+Commander Forge 6.10.4 validation
+
+PASS — activationMetadata exported from utils
+PASS — activationMetadata imported by game
+PASS — manual sacrifice primitive exists
+PASS — shared in-draft sacrifice primitive exists
+PASS — sacrifice emits a real game event
+PASS — sacrifice trigger matching exists
+PASS — you/opponent sacrifice perspective supported
+PASS — sacrificed card can be LKI trigger source
+PASS — activated ability sacrifice costs use shared primitive
+PASS — smart sacrifice effects use shared primitive
+PASS — token sacrifice can cease instead of living in graveyard
+PASS — right-side Sacrifice button exists
+PASS — Sacrifice action click handler exists
+PASS — 6.10.4 protocol
+PASS — 6.10.4 bundle loaded
+PASS — all JavaScript bundles pass node --check
+PASS — Terramorphic activation metadata regression check
+PASS — sacrifice-trigger parser regression check
