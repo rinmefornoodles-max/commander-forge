@@ -1,4 +1,4 @@
-COMMANDER FORGE 6.0 ALPHA 6.1 — D20 STARTUP HOTFIX
+COMMANDER FORGE 6.0 ALPHA 6.2 — GITHUB UPLOAD
 
 Upload EVERY file in this folder to the ROOT of:
 rinmefornoodles-max/commander-forge
@@ -7,6 +7,8 @@ Replace index.html.
 
 After GitHub Pages deploys:
 1. Hard refresh with Ctrl + Shift + R.
-2. Confirm the title says Version 6.0 Alpha 6.1.
-3. Open Solo and Online Multiplayer once to confirm normal startup.
-4. In multiplayer, confirm the Ready-up and D20 flow still appears.
+2. Confirm the title says Version 6.0 Alpha 6.2.
+3. Start Solo Practice with Autoplay Bot.
+4. Throw the D20; the bot should roll after you.
+5. Confirm the highest roll goes first and mulligans start afterward.
+6. Let the bot advance turns and confirm `nextTurnPlayerId is not defined` no longer appears.

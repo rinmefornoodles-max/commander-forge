@@ -1,0 +1,11 @@
+Commander Forge 6.0 Alpha 6.2 validation
+
+PASS — game.js nextTurnPlayerId helper
+PASS — turn order helper uses state.turnOrder
+PASS — solo D20 player selector
+PASS — solo bot auto roll
+PASS — solo start keeps mulligan closed until roll
+PASS — solo start opens startingRoll
+PASS — bot roll timer exists
+PASS — Alpha 6.2 index asset
+PASS — all JavaScript bundles pass node --check

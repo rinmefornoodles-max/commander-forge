@@ -1,1 +1,1 @@
-6.0.0-alpha.6.1-d20-startup-hotfix
+6.0.0-alpha.6.2-bot-turn-fix-solo-d20
