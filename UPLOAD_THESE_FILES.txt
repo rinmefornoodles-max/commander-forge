@@ -1,37 +1,29 @@
-COMMANDER FORGE 6.12.0 — GITHUB UPLOAD
+COMMANDER FORGE 6.12.1 — DECLARE ATTACKERS HOTFIX
 
-1. Extract this ZIP.
-2. Upload EVERY file to:
-   rinmefornoodles-max/commander-forge
-3. Replace index.html.
-4. Upload the updated:
-   commander-forge-oracle-compiler-v7.js
-5. Wait for GitHub Pages.
-6. Hard refresh with Ctrl + Shift + R.
+Upload/replace these files in:
+rinmefornoodles-max/commander-forge
 
-YOU SHOULD SEE:
-Version 6.12.0
+REPLACE:
+- index.html
+- VERSION.txt
+- sw.js
+- UPLOAD_THESE_FILES.txt
 
-VOID WINNOWER CAST TEST
-1. Put Void Winnower under Player 1's control.
-2. On Player 2/the bot, try to cast a spell with mana value 2, 4, or 6.
-3. Forge should reject it before payment/casting.
-4. Try an odd-mana-value spell. It should remain legal if no other rule forbids it.
-5. Test a zero-mana-value spell: it should also be prohibited.
+ADD:
+- commander-forge-6.12.1.js
+- commander-forge-6.12.1.css
+- CHANGED_FILES_6_12_1.md
+- VALIDATION_6_12_1.txt
 
-VOID WINNOWER BLOCK TEST
-1. Attack the player who controls an opponent's Void Winnower.
-2. Try to block with a creature whose mana value is even.
-3. Forge should refuse the block.
-4. Try an odd-mana-value creature that otherwise blocks legally.
-5. It should be allowed.
+You do not need to delete the old 6.12.0 files immediately. index.html now loads 6.12.1.
 
-BOT TEST
-1. Put Void Winnower under your control.
-2. Give the bot a mix of even- and odd-mana-value spells.
-3. It should stop trying to cast the even ones.
-4. Attack the bot while it controls even- and odd-mana-value creatures.
-5. It should only consider legal odd-mana-value blockers.
+After GitHub Pages updates, hard refresh with Ctrl + Shift + R.
+The title screen should show Version 6.12.1.
 
-Select Void Winnower in Card Actions and look at Oracle Compiler status.
-It should list both the static casting and static blocking restriction.
+REGRESSION TEST
+1. Start Solo Autoplay.
+2. Reach combat on Player 1's turn.
+3. Declare any legal creature as an attacker.
+4. The attack should be marked normally and the bot should choose blockers without a ReferenceError.
+5. With Player 1 controlling Void Winnower, attack the bot while the bot has both even- and odd-mana-value blockers.
+6. The bot should not use the even-mana-value creature as a blocker.

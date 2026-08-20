@@ -1,0 +1,15 @@
+Commander Forge 6.12.1 validation
+
+PASS — JavaScript syntax check
+PASS — coach imports compiledBlockLegality from rules.js
+PASS — ordinary 2-player attack declaration
+PASS — multiplayer attack target selection
+PASS — Void Winnower does not prevent attacking
+PASS — Propaganda attack tax still rejects an unpaid attack
+PASS — Propaganda attack tax still allows a paid attack
+PASS — attack triggers still queue normally
+PASS — bot defenseAdvice runs after a human declares an attacker
+PASS — bot defenseAdvice respects Void Winnower static blocking restriction
+PASS — 6.12.1 bundle filename referenced by index.html
+PASS — 6.12.1 app/build version
+PASS — 6.12.1 service-worker cache name
