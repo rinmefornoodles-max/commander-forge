@@ -1,31 +1,26 @@
-COMMANDER FORGE 6.13.0 — MULTIPLAYER RECONNECT
+COMMANDER FORGE 6.14.0 — STABILITY & QUALITY
 
-Upload/replace these files in:
-rinmefornoodles-max/commander-forge
+This release is being applied directly to GitHub on a feature branch.
 
 REPLACE:
-- index.html
-- VERSION.txt
 - sw.js
+- VERSION.txt
+- package.json
+- feedback-config.js
+- .github/workflows/main.yml
 - UPLOAD_THESE_FILES.txt
 
 ADD:
-- commander-forge-6.13.0.js
-- commander-forge-6.13.0.css
-- CHANGED_FILES_6_13_0.md
-- VALIDATION_6_13_0.txt
+- commander-forge-stability-6.14.0.js
+- commander-forge-diagnostics-6.14.0.js
+- CHANGED_FILES_6_14_0.md
+- VALIDATION_6_14_0.txt
+- PRODUCTION_SOURCE.md
+- tests/combat-regression.test.mjs
+- tests/multiplayer-reconnect.test.mjs
+- tests/release-integrity.test.mjs
 
-You can leave the old 6.12.1 files in the repository. index.html now loads 6.13.0.
+IMPORTANT:
+6.14.0 intentionally reuses the tested commander-forge-6.13.0.js/.css gameplay bundle. No multiplayer wire-protocol change is required.
 
-After GitHub Pages updates, every multiplayer player should hard refresh with Ctrl + Shift + R before joining.
-The title screen should show Version 6.13.0.
-
-RECONNECT TEST
-1. Host a 3-player or 4-player room.
-2. Join from a second browser/device and note its Player number.
-3. Close that guest tab or temporarily disconnect its network.
-4. The host should show that player as “Disconnected · seat reserved”.
-5. On the same guest browser, open Commander Forge and join using the SAME room code.
-6. The guest should say “Reconnected as Player N” using the SAME Player number.
-7. Public board state should match the host; the reconnecting browser should retain its own private hand/library if its local save is still present.
-8. Before a game starts, the host may press “Free seat” if that player is not returning.
+Before deployment, GitHub Actions now runs `npm test`. A failing test stops the live deploy.
