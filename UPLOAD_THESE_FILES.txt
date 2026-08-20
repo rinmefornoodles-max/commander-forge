@@ -1,37 +1,31 @@
-COMMANDER FORGE 6.11.1 — GITHUB UPLOAD
+COMMANDER FORGE 6.11.2 — GITHUB UPLOAD
 
 1. Extract this ZIP.
 2. Upload EVERY file to the ROOT of:
    rinmefornoodles-max/commander-forge
 3. Replace index.html.
-4. Also upload:
+4. Upload the updated:
    commander-forge-oracle-compiler-v7.js
-5. Wait for GitHub Pages.
-6. Hard refresh every browser with Ctrl + Shift + R.
+5. Hard refresh with Ctrl + Shift + R.
 
-YOU MUST SEE:
-Version 6.11.1
+You should see:
+Version 6.11.2
 
-If the HTML and JavaScript versions do not match, 6.11.1 now displays a red cache-mismatch warning.
+PROPAGANDA TEST — HUMAN
+1. Put Propaganda under Player 1's control.
+2. Give the opponent at least one creature.
+3. Try to attack Player 1.
+4. Forge should require {2} for that attacker.
+5. With no available mana, the attack should be refused.
+6. With mana available, Forge should pay/tap the mana and declare the attacker.
 
-TEST 1 — VAMPIRIC TUTOR
-1. Cast Vampiric Tutor onto the stack.
-2. Press Resolve top.
-3. The library-search picker should open automatically.
-4. Pick a card.
-5. Confirm.
-6. The remaining library should shuffle.
-7. The chosen card should be on top.
-8. Your life should automatically drop by 2.
-9. Vampiric Tutor itself should be in the graveyard.
+PROPAGANDA TEST — BOT
+1. Put Propaganda under your control.
+2. Let the bot reach combat.
+3. If it cannot afford {2} per attacker, it should not declare those attackers.
+4. If it can afford the tax and the attack is strategically worthwhile, it may pay and attack.
+5. Check the log for the attack-tax payment.
 
-TEST 2 — DEMONIC / ENTOMB STYLE
-- A search-to-hand card should be selectable without Test Override.
-- A search-to-graveyard card should be selectable without Test Override.
-
-TEST 3 — GRAVEYARD RETURN
-Resolve a spell saying to return a card from your graveyard to your hand.
-Select the matching graveyard card; the inspector should show a `Use for ...` button and the move should not be illegal.
-
-TEST 4 — BOT
-Play several bot turns. `Maximum call stack size exceeded` should no longer permanently pause the bot. If tactical analysis ever overflows, Forge uses a safe deterministic fallback and continues.
+MULTIPLAYER TEST
+Use a 3-player game where only one opponent controls Propaganda.
+The attack-target picker should show the tax only on that protected player.

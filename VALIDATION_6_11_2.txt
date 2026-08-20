@@ -1,0 +1,23 @@
+Commander Forge 6.11.2 validation
+
+PASS — compiler attack-cost parser
+PASS — compiler static ability export
+PASS — rules discover battlefield attack taxes
+PASS — rules create attack tax payment plan
+PASS — dynamic Sphere of Safety support
+PASS — untapped-source condition support
+PASS — human toggleAttack checks tax
+PASS — human attack applies tax payment
+PASS — attack target picker displays tax
+PASS — bot attack value penalizes tax
+PASS — bot plans reject unaffordable taxed attack
+PASS — tactical simulation actually pays attack tax
+PASS — Propaganda recognized effect label
+PASS — compiler inspector static combat rule
+PASS — 6.11.2 protocol
+PASS — 6.11.2 bundle loaded
+PASS — all JavaScript files pass node --check
+Attack-tax compiler tests: PASS
+PASS — Propaganda fixed {2} parse
+PASS — Sphere of Safety dynamic X parse
+PASS — untapped attack-tax condition parse

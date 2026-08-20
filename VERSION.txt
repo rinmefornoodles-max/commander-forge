@@ -1,1 +1,1 @@
-6.11.1-effect-routing-bot-stack-safety
+6.11.2-static-attack-costs-propaganda
