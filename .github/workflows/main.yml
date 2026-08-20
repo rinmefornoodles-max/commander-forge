@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  validate-and-deploy:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -27,6 +27,14 @@ jobs:
     steps:
       - name: Download repository
         uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run Commander Forge regression tests
+        run: npm test
 
       - name: Set up Python
         uses: actions/setup-python@v5
