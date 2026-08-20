@@ -1,0 +1,25 @@
+Commander Forge 6.14.0 validation
+
+PASS — 21 local automated tests
+PASS — normal attack declaration
+PASS — multiplayer attack target selection
+PASS — Void Winnower does not prevent attacking
+PASS — Propaganda unpaid attack tax rejected
+PASS — Propaganda paid attack tax accepted
+PASS — attack trigger queued
+PASS — bot defense after human attack
+PASS — Void Winnower even-MV blocking restriction
+PASS — first guest receives reconnect token
+PASS — disconnect preserves seat/draft/ready state
+PASS — correct reconnect token restores same seat
+PASS — wrong token cannot hijack reserved seat
+PASS — duplicate reconnect rejected while seat is connected
+PASS — pregame reservation expiry behavior
+PASS — active-game reservation persistence
+PASS — host pregame seat release / active-game protection
+PASS — product/bundle/cache version metadata checks
+PASS — scoped service worker/offline shell checks
+PASS — privacy-safe error-report hooks
+PASS — production JavaScript syntax checks
+
+GitHub Actions is configured to run `npm test` before GitHub Pages deployment. A failing test prevents deployment.
