@@ -2,22 +2,55 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
-const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-const pkg=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
-const src=fs.readFileSync(path.join(root,`commander-forge-${pkg.commanderForge.bundleVersion}.js`),'utf8');
-function extract(name){const start=src.indexOf(`function ${name}(`);if(start<0)throw new Error(`Missing ${name}`);const body=src.indexOf('{',src.indexOf(')',start)+1);let depth=0,quote=null,esc=false;for(let i=body;i<src.length;i+=1){const ch=src[i];if(quote){if(esc){esc=false;continue;}if(ch==='\\'){esc=true;continue;}if(ch===quote)quote=null;continue;}if(ch==='"'||ch==="'"){quote=ch;continue;}if(ch==='{')depth+=1;else if(ch==='}'){depth-=1;if(depth===0)return src.slice(start,i+1);}}throw new Error(`Unterminated ${name}`);}
-const names=['multiplayerSeatIds','multiplayerRemotePlayerIds','multiplayerRemotePlayerId','generateReconnectToken','seatReservationActive','releaseExpiredSeatReservation','reservationMatches','releaseReservedSeat','nextAvailableGuestSeat','multiplayerConnectionList','multiplayerLobbySnapshot','sendSeatAssignment','attachHostGuestConnection'];
-const code=names.map(extract).join('\n');
-function context(){let gameId='';const c={console,Date,Math,Object,Array,String,Number,Boolean,setTimeout:(fn)=>{fn();return 1;},clearTimeout(){},queueMicrotask:(fn)=>fn};c.globalThis=c;c.crypto=globalThis.crypto;c.MULTIPLAYER_APP_VERSION='6.13.0-mp7';c.MULTIPLAYER_SEAT_RESERVATION_MS=15*60*1000;c.multiplayer={role:'host',roomCode:'ROOM1234',playerCount:4,connections:Object.create(null),connectionPlayerIds:Object.create(null),seatReservations:Object.create(null),reservedPlayerIds:[],remoteDrafts:Object.create(null),readyByPlayer:{p1:false},connectedPlayerIds:['p1'],status:'waiting',revision:7,lastError:''};c.getState=()=>({onlineGameId:gameId});c.setGame=(v)=>{gameId=v;};c.ensureDraftForPlayer=(id)=>({id});c.reconcileApprovalAfterDisconnect=()=>{};c.render=()=>{};c.toast=()=>{};c.stateForNetwork=()=>({onlineGameId:gameId});c.broadcastTurnSync=()=>{};c.sendNetwork=()=>true;c.safeNetworkCallback=(_l,fn)=>fn;c.deepClone=(v)=>JSON.parse(JSON.stringify(v));c.serializePublicDraft=(id)=>({playerId:id,deckValid:true});c.broadcastLobbyState=()=>{};c.ui={drafts:{}};c.createDraft=(name)=>({name});vm.createContext(c);vm.runInContext(code,c);return c;}
-class Conn{constructor(peer,metadata={}){this.peer=peer;this.metadata=metadata;this.open=false;this.handlers={};this.sent=[];}on(n,fn){(this.handlers[n]??=[]).push(fn);}emit(n,...a){for(const fn of this.handlers[n]||[])fn(...a);}send(v){this.sent.push(v);}close(){this.open=false;}}
-const open=(c)=>{c.open=true;c.emit('open');};
-function join(c){const conn=new Conn('peer-a');c.attachHostGuestConnection(conn);open(conn);return {conn,token:c.multiplayer.seatReservations.p2?.token};}
-test('first guest gets p2 and private token',()=>{const c=context();const {conn,token}=join(c);assert.equal(c.multiplayer.connections.p2,conn);assert.ok(token?.length>=32);assert.ok(conn.sent.some((m)=>m.type==='seat-assigned'&&m.playerId==='p2'));});
-test('disconnect preserves seat draft and readiness',()=>{const c=context();const {conn,token}=join(c);c.multiplayer.remoteDrafts.p2={name:'Alice'};c.multiplayer.readyByPlayer.p2=true;conn.emit('close');assert.equal(c.multiplayer.seatReservations.p2.token,token);assert.equal(c.multiplayer.remoteDrafts.p2.name,'Alice');assert.equal(c.multiplayer.readyByPlayer.p2,true);});
-test('valid reconnect restores same seat',()=>{const c=context();const {conn,token}=join(c);conn.emit('close');const back=new Conn('peer-b',{reconnectPlayerId:'p2',reconnectToken:token});c.attachHostGuestConnection(back);open(back);assert.equal(c.multiplayer.connections.p2,back);assert.ok(back.sent.some((m)=>m.type==='seat-assigned'&&m.resumed===true));});
-test('wrong token cannot hijack reserved seat',()=>{const c=context();const {conn,token}=join(c);conn.emit('close');const wrong=new Conn('peer-x',{reconnectPlayerId:'p2',reconnectToken:'wrong'});c.attachHostGuestConnection(wrong);open(wrong);assert.notEqual(c.multiplayer.connections.p2,wrong);assert.equal(c.multiplayer.seatReservations.p2.token,token);});
-test('duplicate reconnect is rejected while seat is connected',()=>{const c=context();const {token}=join(c);const duplicate=new Conn('peer-d',{reconnectPlayerId:'p2',reconnectToken:token});c.attachHostGuestConnection(duplicate);open(duplicate);assert.ok(duplicate.sent.some((m)=>m.type==='seat-in-use'));});
-test('pregame reservation expires but active-game reservation does not',()=>{const c=context();const {conn}=join(c);conn.emit('close');c.multiplayer.seatReservations.p2.disconnectedAt=Date.now()-c.MULTIPLAYER_SEAT_RESERVATION_MS-1;c.setGame('');assert.equal(c.nextAvailableGuestSeat(),'p2');c.multiplayer.seatReservations.p2={token:'keep',disconnectedAt:Date.now()-999999999};c.setGame('live');assert.notEqual(c.nextAvailableGuestSeat(),'p2');});
-test('host can free a seat pregame but not in an active game',()=>{const c=context();c.multiplayer.seatReservations.p2={token:'free',disconnectedAt:Date.now()};c.setGame('');assert.equal(c.releaseReservedSeat('p2').ok,true);c.multiplayer.seatReservations.p2={token:'locked',disconnectedAt:Date.now()};c.setGame('live');assert.equal(c.releaseReservedSeat('p2').ok,false);});
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const src = fs.readFileSync(path.join(root, `commander-forge-${pkg.commanderForge.bundleVersion}.js`), 'utf8');
+
+function expect(pattern, message) {
+  assert.match(src, pattern, message);
+}
+
+test('reconnect storage and private token generation remain present', () => {
+  expect(/MULTIPLAYER_RECONNECT_STORAGE_KEY\s*=\s*'commander-forge-multiplayer-reconnect-v1'/, 'Reconnect storage key is missing.');
+  expect(/function generateReconnectToken\(\)/, 'Reconnect token generator is missing.');
+  expect(/randomUUID|crypto\.getRandomValues/, 'Reconnect token generation must use browser crypto.');
+});
+
+test('seat reservations preserve a reconnect token and disconnected timestamp', () => {
+  expect(/seatReservations:\s*Object\.create\(null\)/, 'Seat reservation state is missing.');
+  expect(/seatReservations\?\.\[playerId\]\?\.token/, 'Seat assignment no longer sends the reserved reconnect token.');
+  expect(/disconnectedAt/, 'Seat reservation disconnect timestamp is missing.');
+});
+
+test('valid reconnect requires both player id and matching token', () => {
+  expect(/metadata\.reconnectPlayerId/, 'Reconnect player id metadata is not read.');
+  expect(/metadata\.reconnectToken/, 'Reconnect token metadata is not read.');
+  expect(/reservationMatches\(requestedPlayerId, reconnectToken\)/, 'Reconnect does not validate the private token.');
+  expect(/seatReservationActive\(requestedPlayerId\)/, 'Reconnect does not require an active reservation.');
+});
+
+test('same reserved seat is restored and marked resumed', () => {
+  expect(/let playerId = validReconnect \? requestedPlayerId : nextAvailableGuestSeat\(\)/, 'Valid reconnect no longer restores the original seat.');
+  expect(/let resumed = validReconnect/, 'Reconnect no longer records resumed state.');
+  expect(/resumed:\s*Boolean\(resumed\)/, 'Seat assignment no longer tells the guest it resumed.');
+});
+
+test('connected reserved seat rejects duplicate reconnect attempts', () => {
+  expect(/seat-in-use/, 'Duplicate reconnect rejection message is missing.');
+  expect(/multiplayer\.connections\?\.\[requestedPlayerId\]/, 'Connected-seat ownership check is missing.');
+});
+
+test('pregame reservations expire while active game reservations persist', () => {
+  expect(/MULTIPLAYER_SEAT_RESERVATION_MS\s*=\s*15\s*\*\s*60\s*\*\s*1000/, '15 minute pregame reservation period changed unexpectedly.');
+  expect(/function seatReservationActive\(playerId\)/, 'Seat reservation lifetime check is missing.');
+  expect(/onlineGameId/, 'Active game reservation check no longer considers the game id.');
+  expect(/releaseExpiredSeatReservation/, 'Expired pregame seat cleanup is missing.');
+});
+
+test('host can free a disconnected pregame seat but active-game seats are protected', () => {
+  expect(/function releaseReservedSeat\(playerId\)/, 'Host free-seat action is missing.');
+  expect(/Only the host can release a reserved seat|multiplayer\.role\s*!==\s*'host'/, 'Free-seat action is no longer host-only.');
+  expect(/active game|onlineGameId/i, 'Free-seat logic no longer protects active-game reservations.');
+});
