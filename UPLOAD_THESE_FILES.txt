@@ -1,31 +1,37 @@
-COMMANDER FORGE 6.11.2 — GITHUB UPLOAD
+COMMANDER FORGE 6.12.0 — GITHUB UPLOAD
 
 1. Extract this ZIP.
-2. Upload EVERY file to the ROOT of:
+2. Upload EVERY file to:
    rinmefornoodles-max/commander-forge
 3. Replace index.html.
 4. Upload the updated:
    commander-forge-oracle-compiler-v7.js
-5. Hard refresh with Ctrl + Shift + R.
+5. Wait for GitHub Pages.
+6. Hard refresh with Ctrl + Shift + R.
 
-You should see:
-Version 6.11.2
+YOU SHOULD SEE:
+Version 6.12.0
 
-PROPAGANDA TEST — HUMAN
-1. Put Propaganda under Player 1's control.
-2. Give the opponent at least one creature.
-3. Try to attack Player 1.
-4. Forge should require {2} for that attacker.
-5. With no available mana, the attack should be refused.
-6. With mana available, Forge should pay/tap the mana and declare the attacker.
+VOID WINNOWER CAST TEST
+1. Put Void Winnower under Player 1's control.
+2. On Player 2/the bot, try to cast a spell with mana value 2, 4, or 6.
+3. Forge should reject it before payment/casting.
+4. Try an odd-mana-value spell. It should remain legal if no other rule forbids it.
+5. Test a zero-mana-value spell: it should also be prohibited.
 
-PROPAGANDA TEST — BOT
-1. Put Propaganda under your control.
-2. Let the bot reach combat.
-3. If it cannot afford {2} per attacker, it should not declare those attackers.
-4. If it can afford the tax and the attack is strategically worthwhile, it may pay and attack.
-5. Check the log for the attack-tax payment.
+VOID WINNOWER BLOCK TEST
+1. Attack the player who controls an opponent's Void Winnower.
+2. Try to block with a creature whose mana value is even.
+3. Forge should refuse the block.
+4. Try an odd-mana-value creature that otherwise blocks legally.
+5. It should be allowed.
 
-MULTIPLAYER TEST
-Use a 3-player game where only one opponent controls Propaganda.
-The attack-target picker should show the tax only on that protected player.
+BOT TEST
+1. Put Void Winnower under your control.
+2. Give the bot a mix of even- and odd-mana-value spells.
+3. It should stop trying to cast the even ones.
+4. Attack the bot while it controls even- and odd-mana-value creatures.
+5. It should only consider legal odd-mana-value blockers.
+
+Select Void Winnower in Card Actions and look at Oracle Compiler status.
+It should list both the static casting and static blocking restriction.

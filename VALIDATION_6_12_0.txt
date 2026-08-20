@@ -1,0 +1,27 @@
+Commander Forge 6.12.0 validation
+
+PASS — compiler static restriction parser exists
+PASS — Void cast prohibition primitive
+PASS — Void block prohibition primitive
+PASS — generic odd/even support
+PASS — generic mana-value comparison support
+PASS — compiled battlefield static engine
+PASS — compiled cast restriction engine
+PASS — compiled block restriction engine
+PASS — spellCastLegality checks compiled restrictions
+PASS — X spell mana value considered
+PASS — zero is treated as even
+PASS — actual manual block declaration checks static restriction
+PASS — actual block declaration also checks normal canBlock rules
+PASS — bot tactical blocking checks compiled restriction
+PASS — bot casting uses spellCastLegality
+PASS — recognized effect exposes static casting restriction
+PASS — recognized effect exposes static blocking restriction
+PASS — compiler inspector shows static prohibitions
+PASS — 6.12.0 protocol
+PASS — 6.12.0 bundle loaded
+PASS — all JavaScript files pass node --check
+Static Rules V7.2 tests: PASS
+PASS — mana value 0 is even
+PASS — mana values 2/4/6 are even
+PASS — mana values 1/3/7 are not even

@@ -9,7 +9,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  const VERSION = '7.0.1-foundation';
+  const VERSION = '7.2.0-static-restrictions';
   const WORD_NUMBERS = Object.freeze({
     a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5,
     six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
@@ -160,6 +160,195 @@
     return { type: 'UNSUPPORTED', text: clean, reason: 'No safe Oracle primitive matched this sentence.' };
   }
 
+  function parseAttackCostStatics(input = '') {
+    const oracleText = typeof input === 'string'
+      ? input
+      : String(input?.oracle_text ?? input?.oracleText ?? '');
+
+    const clean = normalizeOracle(oracleText);
+    const results = [];
+
+    // Generic family:
+    // "Creatures can't attack you [or planeswalkers you control] unless their
+    // controller pays {N} for each ... attacking you / each of those creatures."
+    //
+    // This covers the Propaganda / Ghostly Prison / Windborn Muse wording,
+    // plus "as long as this is untapped" variants and Sphere of Safety's {X}.
+    const pattern = /(?:(as long as [^.]+?,)\s*)?creatures can't attack you(?: or planeswalkers you control)? unless their controller pays\s+((?:\{[^}]+\})+)\s+for each\s+(?:creature they control that's attacking you|of those creatures)(?:,\s*where x is the number of enchantments you control)?/ig;
+
+    let match;
+    while ((match = pattern.exec(clean))) {
+      const conditionText = String(match[1] || '').trim();
+      const costTemplate = String(match[2] || '').trim();
+      const dynamicEnchantments = /\{X\}/i.test(costTemplate)
+        && /where x is the number of enchantments you control/i.test(match[0]);
+
+      results.push({
+        type: 'ATTACK_COST',
+        appliesTo: 'YOU',
+        alsoPlaneswalkers: /or planeswalkers you control/i.test(match[0]),
+        perAttackerCost: costTemplate,
+        dynamicAmount: dynamicEnchantments ? 'ENCHANTMENTS_YOU_CONTROL' : null,
+        sourceMustBeUntapped: /\bas long as\b.*\bis untapped\b/i.test(conditionText),
+        conditionText,
+        text: match[0],
+      });
+    }
+
+    return results;
+  }
+
+  function parseStaticRestrictions(input = '') {
+    const oracleText = typeof input === 'string'
+      ? input
+      : String(input?.oracle_text ?? input?.oracleText ?? '');
+
+    const clean = normalizeOracle(oracleText);
+    const results = [];
+
+    function subjectFromPrefix(prefix) {
+      const value = String(prefix || '').toLocaleLowerCase().trim();
+      if (value.startsWith('your opponents')) return 'OPPONENTS';
+      if (value.startsWith('opponents')) return 'OPPONENTS';
+      if (value.startsWith('players')) return 'ALL_PLAYERS';
+      return null;
+    }
+
+    // Void Winnower family:
+    // "Your opponents can't cast spells with even mana values."
+    // "Your opponents can't block with creatures with even mana values."
+    //
+    // The parser deliberately supports odd as well so the rule primitive is
+    // about parity, not about one card name.
+    const castParity = /\b(your opponents|opponents|players) can't cast spells with (even|odd) mana values?\b/ig;
+    let match;
+    while ((match = castParity.exec(clean))) {
+      results.push({
+        type: 'CAST_PROHIBITION',
+        appliesTo: subjectFromPrefix(match[1]),
+        predicate: {
+          property: 'MANA_VALUE_PARITY',
+          parity: String(match[2]).toLocaleUpperCase(),
+        },
+        text: match[0],
+      });
+    }
+
+    const blockParity = /\b(your opponents|opponents|players) can't block with creatures with (even|odd) mana values?\b/ig;
+    while ((match = blockParity.exec(clean))) {
+      results.push({
+        type: 'BLOCK_PROHIBITION',
+        appliesTo: subjectFromPrefix(match[1]),
+        predicate: {
+          property: 'MANA_VALUE_PARITY',
+          parity: String(match[2]).toLocaleUpperCase(),
+        },
+        text: match[0],
+      });
+    }
+
+    // Generic fixed/comparative mana-value prohibitions.
+    const castCompare = /\b(your opponents|opponents|players) can't cast (creature |noncreature )?spells with mana value (greater than or equal to|less than or equal to|greater than|less than|equal to|exactly)\s+(\d+)\b/ig;
+    while ((match = castCompare.exec(clean))) {
+      const operatorMap = {
+        'greater than or equal to': 'GTE',
+        'less than or equal to': 'LTE',
+        'greater than': 'GT',
+        'less than': 'LT',
+        'equal to': 'EQ',
+        'exactly': 'EQ',
+      };
+      results.push({
+        type: 'CAST_PROHIBITION',
+        appliesTo: subjectFromPrefix(match[1]),
+        cardType: String(match[2] || '').trim().toLocaleUpperCase() || 'ANY',
+        predicate: {
+          property: 'MANA_VALUE_COMPARE',
+          operator: operatorMap[String(match[3]).toLocaleLowerCase()],
+          value: Number(match[4]),
+        },
+        text: match[0],
+      });
+    }
+
+    const blockCompare = /\b(your opponents|opponents|players) can't block with creatures with mana value (greater than or equal to|less than or equal to|greater than|less than|equal to|exactly)\s+(\d+)\b/ig;
+    while ((match = blockCompare.exec(clean))) {
+      const operatorMap = {
+        'greater than or equal to': 'GTE',
+        'less than or equal to': 'LTE',
+        'greater than': 'GT',
+        'less than': 'LT',
+        'equal to': 'EQ',
+        'exactly': 'EQ',
+      };
+      results.push({
+        type: 'BLOCK_PROHIBITION',
+        appliesTo: subjectFromPrefix(match[1]),
+        predicate: {
+          property: 'MANA_VALUE_COMPARE',
+          operator: operatorMap[String(match[2]).toLocaleLowerCase()],
+          value: Number(match[3]),
+        },
+        text: match[0],
+      });
+    }
+
+    // Common global casting restrictions already partly understood by legacy
+    // code, now exposed through the same descriptor model.
+    if (/\bplayers can't cast spells from graveyards\b/i.test(clean)) {
+      results.push({
+        type: 'CAST_PROHIBITION',
+        appliesTo: 'ALL_PLAYERS',
+        sourceZone: 'graveyard',
+        predicate: { property: 'ANY' },
+        text: 'Players can’t cast spells from graveyards.',
+      });
+    }
+
+    if (/\byour opponents can't cast spells during your turn\b/i.test(clean)) {
+      results.push({
+        type: 'CAST_PROHIBITION',
+        appliesTo: 'OPPONENTS',
+        timing: 'SOURCE_CONTROLLER_TURN',
+        predicate: { property: 'ANY' },
+        text: 'Your opponents can’t cast spells during your turn.',
+      });
+    }
+
+    // Rule-of-Law family.
+    const spellLimit = clean.match(/\b(?:each player|players) can't cast more than (one|1) spell each turn\b/i);
+    if (spellLimit) {
+      results.push({
+        type: 'CAST_LIMIT',
+        appliesTo: 'ALL_PLAYERS',
+        limitPerTurn: 1,
+        predicate: { property: 'ANY' },
+        text: spellLimit[0],
+      });
+    }
+
+    return results;
+  }
+
+  function compileStaticAbilities(input, options = {}) {
+    const oracleText = typeof input === 'string'
+      ? input
+      : String(input?.oracle_text ?? input?.oracleText ?? '');
+
+    const staticAbilities = [
+      ...parseAttackCostStatics(oracleText),
+      ...parseStaticRestrictions(oracleText),
+    ];
+
+    return {
+      compilerVersion: VERSION,
+      cardName: options.cardName || input?.name || '',
+      oracleText,
+      staticAbilities,
+      recognized: staticAbilities.length,
+    };
+  }
+
   function compileProgram(input, options = {}) {
     const oracleText = typeof input === 'string'
       ? input
@@ -209,6 +398,9 @@
     splitSentences,
     parseSearchLibrary,
     parseSimpleSentence,
+    parseAttackCostStatics,
+    parseStaticRestrictions,
+    compileStaticAbilities,
     compileProgram,
     diagnostics,
   };
