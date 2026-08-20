@@ -1,0 +1,24 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const pkg=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
+const productVersion=pkg.version;
+const bundleVersion=pkg.commanderForge.bundleVersion;
+const index=fs.readFileSync(path.join(root,'index.html'),'utf8');
+const bundle=fs.readFileSync(path.join(root,`commander-forge-${bundleVersion}.js`),'utf8');
+const stability=fs.readFileSync(path.join(root,`commander-forge-stability-${productVersion}.js`),'utf8');
+const diagnostics=fs.readFileSync(path.join(root,`commander-forge-diagnostics-${productVersion}.js`),'utf8');
+const feedback=fs.readFileSync(path.join(root,'feedback-config.js'),'utf8');
+const sw=fs.readFileSync(path.join(root,'sw.js'),'utf8');
+const versionText=fs.readFileSync(path.join(root,'VERSION.txt'),'utf8').trim();
+function syntax(file){const r=spawnSync(process.execPath,['--check',path.join(root,file)],{encoding:'utf8'});assert.equal(r.status,0,`${file} syntax failed:\n${r.stderr}`);}
+test('release metadata is explicit and consistent',()=>{assert.match(versionText,/^6\.14\.0/);assert.match(stability,/PRODUCT_VERSION = '6\.14\.0'/);assert.match(stability,/BUNDLE_VERSION = '6\.13\.0'/);assert.match(feedback,/commander-forge-stability-6\.14\.0\.js\?v=6\.14\.0/);assert.match(feedback,/commander-forge-diagnostics-6\.14\.0\.js\?v=6\.14\.0/);assert.match(index,/commander-forge-6\.13\.0\.js\?v=6\.13\.0/);assert.match(bundle,/CommanderForgeBuildVersion = '6\.13\.0'/);assert.match(sw,/CACHE='commander-forge-6\.14\.0'/);});
+test('PWA cache is scoped and version check is network-first',()=>{assert.match(stability,/serviceWorker\.register\('\.\/sw\.js'/);assert.match(stability,/Update & Reload/);assert.match(stability,/VERSION\.txt\?check=/);assert.match(sw,/CACHE_PREFIX='commander-forge-'/);assert.match(sw,/key\.startsWith\(CACHE_PREFIX\)&&key!==CACHE/);assert.match(sw,/request\.mode==='navigate'/);assert.match(sw,/cache:'no-store'/);});
+test('diagnostics deliberately exclude private zones',()=>{assert.match(diagnostics,/Report this error/);assert.match(diagnostics,/forge-feedback-tech/);assert.match(diagnostics,/Your hand and library are never included/);assert.match(diagnostics,/rulesMode/);assert.match(diagnostics,/manaMode/);assert.match(diagnostics,/viewport/);assert.doesNotMatch(diagnostics,/zones\.hand/);assert.doesNotMatch(diagnostics,/zones\.library/);});
+test('known stale 6.13 mismatch warning is neutralized without changing gameplay bundle',()=>{assert.match(stability,/index expects 6\\\.12\\\.1, but JavaScript 6\\\.13\\\.0 loaded/);assert.match(index,/const expected = '6\.12\.1'/);assert.match(bundle,/CommanderForgeBuildVersion = '6\.13\.0'/);});
+test('declare attacker hotfix remains in production gameplay bundle',()=>{assert.match(bundle,/attackLegality, compiledBlockLegality, landEntryPlan/);assert.match(bundle,/compiledBlockLegality\(state, blocker\.controller \|\| defender\.id, blocker\)\.legal/);});
+test('release JavaScript parses',()=>{syntax(`commander-forge-${bundleVersion}.js`);syntax(`commander-forge-stability-${productVersion}.js`);syntax(`commander-forge-diagnostics-${productVersion}.js`);syntax('feedback-config.js');syntax('commander-forge-oracle-compiler-v7.js');syntax('commander-forge-engine-client-v6.js');syntax('commander-forge-engine-v6.js');syntax('commander-forge-engine-worker-v6.js');syntax('sw.js');});
