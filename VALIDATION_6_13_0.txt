@@ -1,0 +1,24 @@
+Commander Forge 6.13.0 validation
+
+PASS — JavaScript syntax check
+PASS — same-browser reconnect claim persists per room code
+PASS — reconnect metadata restores the remembered player ID
+PASS — first guest receives a private reconnect token
+PASS — unexpected disconnect preserves seat reservation
+PASS — unexpected disconnect preserves remote draft / ready state
+PASS — valid reconnect token restores the original seat
+PASS — new guest cannot steal a reserved seat
+PASS — wrong reconnect token cannot hijack another player
+PASS — duplicate reconnect is rejected when the original seat is already connected
+PASS — expired pregame reservation becomes reusable
+PASS — active-game seat remains reserved beyond pregame timeout
+PASS — host can free a disconnected seat before the game starts
+PASS — host cannot replace/free a seat after the game has started
+PASS — existing normal attack declaration regression test
+PASS — multiplayer attack target selection regression test
+PASS — Propaganda attack-tax regression test
+PASS — attack-trigger regression test
+PASS — bot defense advice regression test
+PASS — Void Winnower blocking-restriction regression test
+PASS — index.html references 6.13.0 JS/CSS
+PASS — service-worker cache name updated to 6.13.0
