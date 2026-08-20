@@ -1,8 +1,12 @@
 {
   "name": "the-commander-forge",
-  "version": "5.0.0",
+  "version": "6.14.0",
   "private": true,
   "type": "module",
+  "commanderForge": {
+    "bundleVersion": "6.13.0",
+    "multiplayerProtocol": "6.13.0-mp7"
+  },
   "scripts": {
     "test": "node --test tests/*.test.mjs"
   }
