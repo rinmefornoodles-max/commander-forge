@@ -10,6 +10,7 @@ const CORE_ASSETS=[
   './manifest.webmanifest',
   './feedback-config.js',
   './commander-forge-stability-6.14.0.js?v=6.14.0',
+  './commander-forge-diagnostics-6.14.0.js?v=6.14.0',
   './forge-mark.svg',
   './card-back.svg',
   './token.svg',
