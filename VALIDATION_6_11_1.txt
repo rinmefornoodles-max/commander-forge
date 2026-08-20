@@ -1,0 +1,24 @@
+Commander Forge 6.11.1 validation
+
+PASS — build version identity
+PASS — safe UI library label
+PASS — pending library move uses smart current effect
+PASS — pending graveyard move uses smart current effect
+PASS — manual library move delegates to effect resolver
+PASS — manual graveyard move delegates to effect resolver
+PASS — auto-open interactive effect after stack resolution
+PASS — direct pending-effect card button
+PASS — graveyard into-hand wording broadened
+PASS — bot loop reentrancy guard
+PASS — bot per-phase safety counter
+PASS — bot stack-overflow deterministic fallback
+PASS — old turn-wide 18 action safety removed
+PASS — stack help explains automatic graveyard/effect
+PASS — stale build warning
+PASS — 6.11.1 protocol
+PASS — 6.11.1 bundle loaded
+PASS — all JavaScript files pass node --check
+Oracle compiler tutor regressions: PASS
+PASS — manual library movement routes to pending tutor resolver
+PASS — manual graveyard movement routes to pending graveyard resolver
+PASS — bot call-stack failure has deterministic fallback

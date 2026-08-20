@@ -8,7 +8,7 @@
   <title>The Commander Forge</title>
   <link rel="icon" href="./forge-mark.svg" type="image/svg+xml" />
   <link rel="manifest" href="./manifest.webmanifest" />
-  <link rel="stylesheet" href="./commander-forge-6.10.4.css?v=6.10.4" />
+  <link rel="stylesheet" href="./commander-forge-6.11.1.css?v=6.11.1" />
   <script src="./feedback-config.js"></script>
 </head>
 <body>
@@ -62,7 +62,7 @@
           </div>
         </div>
         <div class="forge-title-footer">
-          <div class="forge-title-version">Version 6.10.4 · Cards and rules data provided by Scryfall</div>
+          <div class="forge-title-version">Version 6.11.1 · Cards and rules data provided by Scryfall</div>
           <div class="forge-title-legal">The Commander Forge is not affiliated with Wizards of the Coast.<br/>Magic: The Gathering is a trademark of Wizards of the Coast LLC.</div>
         </div>
       </section>
@@ -128,7 +128,7 @@
   <div id="toast-root" aria-live="assertive"></div>
   <script>
     (() => {
-      const APP_VERSION='6.10.4';
+      const APP_VERSION='6.11.1';
       const STORAGE_KEY='commander-forge-state-v2';
       const app=document.getElementById('app');
       const title=document.getElementById('title-screen');
@@ -842,6 +842,23 @@
   </script>
   <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js" integrity="sha512-XEKeWX+mI3Ov+tg2evDlVQFzVOIp4T8J3cNcCEPaEUGpxJV3eZaN8rHuvnFPvQpGJBHPmrozJDMpm2xcDvtmyQ==" crossorigin="anonymous"></script>
   <script src="./commander-forge-engine-client-v6.js"></script>
-  <script defer src="./commander-forge-6.10.4.js?v=6.10.4" onerror="window.__forgeBootError('HTTP error while loading commander-forge-6.10.4.js?v=6.10.4')"></script>
+  <script src="./commander-forge-oracle-compiler-v7.js?v=7.0.1-foundation"></script>
+  <script defer src="./commander-forge-6.11.1.js?v=6.11.1" onerror="window.__forgeBootError('HTTP error while loading commander-forge-6.11.1.js?v=6.11.1')"></script>
+
+  <script>
+    window.addEventListener('load', () => {
+      setTimeout(() => {
+        const expected = '6.11.1';
+        const loaded = window.CommanderForgeBuildVersion || '';
+        if (loaded && loaded !== expected) {
+          const node = document.createElement('div');
+          node.style.cssText = 'position:fixed;z-index:99999;left:12px;right:12px;bottom:12px;padding:12px 14px;border-radius:10px;background:#2b1616;border:1px solid #d56565;color:#ffd8d8;font:600 13px/1.4 system-ui';
+          node.textContent = `Commander Forge cache mismatch: index expects ${expected}, but JavaScript ${loaded} loaded. Hard refresh or upload every file from the same release.`;
+          document.body.appendChild(node);
+        }
+      }, 500);
+    });
+  </script>
+
 </body>
 </html>
