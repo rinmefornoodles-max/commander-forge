@@ -3,6 +3,8 @@ name: Deploy The Commander Forge
 on:
   push:
     branches: [main, abilities-6.15.0]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
   schedule:
     - cron: '23 10 * * *'
