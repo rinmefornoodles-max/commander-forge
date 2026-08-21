@@ -1,16 +1,17 @@
-const CACHE='commander-forge-6.14.0';
+const CACHE='commander-forge-6.15.0';
 const CACHE_PREFIX='commander-forge-';
 const CORE_ASSETS=[
   './',
   './index.html',
   './commander-forge-6.13.0.css?v=6.13.0',
-  './commander-forge-6.13.0.js?v=6.13.0',
+  './commander-forge-6.15.0.js?v=6.15.0',
   './commander-forge-engine-client-v6.js',
   './commander-forge-oracle-compiler-v7.js?v=7.2.0-static-restrictions',
+  './commander-forge-oracle-compiler-v8.js?v=8.0.0-ability-inventory',
   './manifest.webmanifest',
   './feedback-config.js',
-  './commander-forge-stability-6.14.0.js?v=6.14.0',
-  './commander-forge-diagnostics-6.14.0.js?v=6.14.0',
+  './commander-forge-stability-6.15.0.js?v=6.15.0',
+  './commander-forge-diagnostics-6.15.0.js?v=6.15.0',
   './forge-mark.svg',
   './card-back.svg',
   './token.svg',
