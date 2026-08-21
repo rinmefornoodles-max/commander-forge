@@ -2,7 +2,7 @@ name: Deploy The Commander Forge
 
 on:
   push:
-    branches: [main]
+    branches: [main, abilities-6.15.0]
   workflow_dispatch:
   schedule:
     - cron: '23 10 * * *'
@@ -13,16 +13,14 @@ permissions:
   id-token: write
 
 concurrency:
-  group: github-pages
+  group: github-pages-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   validate-and-deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment: ${{ github.ref == 'refs/heads/main' && 'github-pages' || '' }}
 
     steps:
       - name: Download repository
@@ -33,25 +31,31 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Run Commander Forge regression tests
-        run: npm test
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
+      - name: Build Commander Forge 6.15 gameplay bundle
+        run: python build_release_6_15.py
+
+      - name: Run Commander Forge regression tests
+        run: npm test
+
       - name: Build same-origin official precon catalog
         run: python build_precons.py
 
       - name: Configure GitHub Pages
+        if: github.ref == 'refs/heads/main'
         uses: actions/configure-pages@v5
 
       - name: Upload website files
+        if: github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3
         with:
           path: .
 
       - name: Deploy website
+        if: github.ref == 'refs/heads/main'
         id: deployment
         uses: actions/deploy-pages@v4
