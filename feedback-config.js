@@ -20,4 +20,12 @@ window.CommanderForgeFeedback = Object.freeze({
   diagnostics.src = './commander-forge-diagnostics-6.14.0.js?v=6.14.0';
   diagnostics.defer = true;
   document.head.appendChild(diagnostics);
+
+  // 6.14.1: bridge the missing canBlock import in the 6.13 gameplay bundle.
+  // This is intentionally a tiny isolated compatibility layer; 6.15 removes
+  // the need for it by importing canBlock directly inside game.js.
+  const blockingHotfix = document.createElement('script');
+  blockingHotfix.src = './commander-forge-blocking-hotfix-6.14.1.js?v=6.14.1';
+  blockingHotfix.defer = true;
+  document.head.appendChild(blockingHotfix);
 })();
