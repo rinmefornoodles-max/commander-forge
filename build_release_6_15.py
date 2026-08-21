@@ -17,6 +17,7 @@ PATCHES = [
     ROOT / 'ability_patch_combat.py',
     ROOT / 'ability_patch_ui.py',
     ROOT / 'ability_patch_mana.py',
+    ROOT / 'ability_patch_blocking.py',
 ]
 
 source = BASE.read_text(encoding='utf-8')
@@ -48,6 +49,7 @@ required_markers = [
     "kind: 'roll-die-draw-no-max'",
     "const directManaLines = lines",
     "colon >= 0 && addIndex > colon",
+    'const { canBlock, cardTraits } = __modules["./card-evaluation.js"];',
 ]
 for marker in required_markers:
     if marker not in source:
