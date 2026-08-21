@@ -129,53 +129,91 @@ function dedupeChoices(choices) {
 }
 
 /**
- * Returns each distinct way a permanent can produce mana as one choice.
- * A dual land such as “Add {U} or {B}” returns U and B choices.
- * A bounce land such as “Add {G}{U}” returns one GU bundle.
+ * Removes Oracle fragments that describe an ability belonging to another
+ * object, such as a created Treasure/Spawn token or an ability granted to
+ * other permanents. Those nested abilities must not make the source card look
+ * like an activatable mana source.
+ */
+export function directManaOracleLines(card) {
+  const text = String(card?.oracleText || card?.oracle_text || '').replace(/[−–—]/g, '-');
+  return text
+    .split(/\n+/)
+    .map((rawLine) => {
+      let line = String(rawLine || '');
+      // Quoted rules text normally belongs to another object: “It has ...”,
+      // “Creatures you control have ...”, token reminder text, etc.
+      line = line.replace(/["“][^"”]*["”]/g, ' ');
+      // Reminder text can contain complete Treasure/Clue/etc. mana abilities.
+      let previous = '';
+      while (line !== previous) {
+        previous = line;
+        line = line.replace(/\([^()]*\)/g, ' ');
+      }
+      return line.replace(/\s+/g, ' ').trim();
+    })
+    .filter((line) => {
+      const colon = line.indexOf(':');
+      const addIndex = line.search(/\badd\b/i);
+      // Direct activatable mana abilities use the Magic activated-ability
+      // template “cost: effect”. Triggered mana generation is not a mana source
+      // the payment planner may simply tap/use on demand.
+      return colon >= 0 && addIndex > colon;
+    });
+}
+
+/**
+ * Returns each distinct way a permanent itself can directly produce mana as
+ * one choice. Mana printed only inside token/reminder/granted-ability text is
+ * deliberately ignored here and belongs to the created/granted object instead.
  */
 export function manaProductionChoices(card) {
   if (!card) return [];
-  const text = String(card.oracleText || card.oracle_text || '').replace(/\u2212/g, '-');
   const type = String(card.typeLine || card.type_line || '');
   const choices = [];
+  const lines = directManaOracleLines(card);
 
-  // “Any color” sources should present a color choice, not fake hybrid mana.
-  const anyColor = text.match(/add\s+(?:(one|two|three|four|five|six)\s+)?mana\s+of\s+any(?:\s+one)?\s+color/i);
-  if (anyColor) {
-    const amount = WORD_NUMBERS[(anyColor[1] || 'one').toLowerCase()] || 1;
-    for (const color of ['W', 'U', 'B', 'R', 'G']) {
-      const mana = emptyManaBundle();
-      mana[color] = amount;
-      choices.push({ mana, label: amount > 1 ? `${amount}${color}` : color });
-    }
-  }
+  for (const line of lines) {
+    const colon = line.indexOf(':');
+    const instruction = line.slice(colon + 1);
 
-  // Parse each Oracle “Add …” instruction. This handles most lands and rocks.
-  const clauses = [...text.matchAll(/add\s+([^.;\n]+)/gi)].map((match) => match[1].trim());
-  for (const clause of clauses) {
-    if (/mana\s+of\s+any/i.test(clause)) continue;
-    const symbols = manaSymbols(clause).filter((symbol) => MANA_COLORS.includes(symbol));
-    if (!symbols.length) continue;
-
-    if (/\bor\b/i.test(clause)) {
-      const groups = clause
-        .replace(/,/g, ' ')
-        .split(/\s+or\s+/i)
-        .map((group) => manaSymbols(group).filter((symbol) => MANA_COLORS.includes(symbol)))
-        .filter((group) => group.length);
-      if (groups.length > 1) {
-        groups.forEach((group) => choices.push({ mana: bundleFromSymbols(group) }));
-        continue;
+    // “Any color” sources should present a color choice, not fake hybrid mana.
+    const anyColor = instruction.match(/add\s+(?:(one|two|three|four|five|six|\d+)\s+)?mana\s+of\s+any(?:\s+one)?\s+color/i);
+    if (anyColor) {
+      const amount = /^\d+$/.test(anyColor[1] || '')
+        ? Number(anyColor[1])
+        : (WORD_NUMBERS[(anyColor[1] || 'one').toLowerCase()] || 1);
+      for (const color of ['W', 'U', 'B', 'R', 'G']) {
+        const mana = emptyManaBundle();
+        mana[color] = amount;
+        choices.push({ mana, label: amount > 1 ? `${amount}${color}` : color });
       }
-    }
-
-    // A comma-separated list such as “{W}, {U}, or {B}” may lose “or” after templating.
-    if (symbols.length > 1 && /,/.test(clause) && !/\}\s*\{/i.test(clause.replace(/\s/g, ''))) {
-      symbols.forEach((symbol) => choices.push({ mana: bundleFromSymbols([symbol]) }));
       continue;
     }
 
-    choices.push({ mana: bundleFromSymbols(symbols) });
+    const clauses = [...instruction.matchAll(/add\s+([^.;\n]+)/gi)].map((match) => match[1].trim());
+    for (const clause of clauses) {
+      const symbols = manaSymbols(clause).filter((symbol) => MANA_COLORS.includes(symbol));
+      if (!symbols.length) continue;
+
+      if (/\bor\b/i.test(clause)) {
+        const groups = clause
+          .replace(/,/g, ' ')
+          .split(/\s+or\s+/i)
+          .map((group) => manaSymbols(group).filter((symbol) => MANA_COLORS.includes(symbol)))
+          .filter((group) => group.length);
+        if (groups.length > 1) {
+          groups.forEach((group) => choices.push({ mana: bundleFromSymbols(group) }));
+          continue;
+        }
+      }
+
+      if (symbols.length > 1 && /,/.test(clause) && !/\}\s*\{/i.test(clause.replace(/\s/g, ''))) {
+        symbols.forEach((symbol) => choices.push({ mana: bundleFromSymbols([symbol]) }));
+        continue;
+      }
+
+      choices.push({ mana: bundleFromSymbols(symbols) });
+    }
   }
 
   // Basic land types work even when Oracle text is omitted by Scryfall.
@@ -192,8 +230,10 @@ export function manaProductionChoices(card) {
     }
   }
 
-  // Scryfall’s produced_mana is a reliable fallback for unusual wording.
-  if (!choices.length) {
+  // produced_mana is useful for unusual lands, but must not turn a creature or
+  // enchantment into a tap-for-mana source merely because its text creates or
+  // grants a mana-producing object.
+  if (!choices.length && (/\bLand\b/i.test(type) || lines.length > 0)) {
     const colors = [...new Set((card.producedMana || card.produced_mana || []).filter((color) => MANA_COLORS.includes(color)))];
     for (const color of colors) {
       const mana = emptyManaBundle();
